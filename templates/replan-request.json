@@ -1,0 +1,14 @@
+{
+  "plan_id": null,
+  "previous_plan_state": "unknown",
+  "change_request": null,
+  "changed_fields": [],
+  "affected_dependencies": [],
+  "retained_items": [],
+  "replaced_items": [],
+  "new_budget_estimate": null,
+  "hard_constraint_recheck": [],
+  "verification_required": [],
+  "user_approval_needed": [],
+  "replan_status": "not_started"
+}

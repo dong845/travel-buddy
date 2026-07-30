@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Travel Buddy · 旅行档案填写</title>
+  <style>
+    :root { --ink:#162235; --muted:#5d6b7c; --paper:#f7f9fc; --card:#fff; --accent:#0b6e69; --soft:#e4f4f1; --line:#d9e2ec; --warn:#8a4b08; --warn-bg:#fff5df; --radius:16px; }
+    * { box-sizing:border-box; } body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:980px; margin:auto; padding:28px 18px 54px; } h1 { margin:0 0 8px; font-size:clamp(2rem,5vw,3.3rem); letter-spacing:-.04em; line-height:1.06; } h2 { margin:0 0 12px; font-size:1.25rem; } h3 { margin:0 0 8px; font-size:1rem; } p { margin:0 0 10px; }
+    .hero,.section,.output { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:0 8px 24px rgb(20 40 65 / .05); } .hero { padding:26px; background:linear-gradient(135deg,#fff,var(--soft)); margin-bottom:18px; } .section,.output { padding:20px; margin:16px 0; }
+    .eyebrow,.hint { color:var(--muted); font-size:.92rem; } .eyebrow { color:var(--accent); font-weight:800; letter-spacing:.08em; text-transform:uppercase; } .grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+    label { display:block; font-weight:750; margin:0 0 5px; } label span { color:var(--muted); font-weight:400; } input,select,textarea { width:100%; border:1px solid #b9c7d6; border-radius:10px; padding:10px 11px; color:var(--ink); background:#fff; font:inherit; } textarea { min-height:88px; resize:vertical; }
+    fieldset { margin:12px 0 0; border:1px solid var(--line); border-radius:11px; padding:12px; } legend { padding:0 6px; font-weight:750; } .checks { display:flex; flex-wrap:wrap; gap:9px 14px; } .checks label,.consent { display:flex; align-items:flex-start; gap:7px; font-weight:500; } .checks input,.consent input { width:auto; margin-top:5px; }
+    .example,.notice { padding:13px; border-radius:10px; background:#f0f5fa; } .notice { border-left:4px solid var(--warn); background:var(--warn-bg); } button { border:0; border-radius:10px; background:var(--accent); color:#fff; padding:10px 14px; font:inherit; font-weight:800; cursor:pointer; } button.secondary { background:var(--ink); } button.ghost { background:#e8eef4; color:var(--ink); } button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:3px solid #79c8c2; outline-offset:2px; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:16px; } .status { min-height:24px; color:#075952; font-weight:700; margin-top:10px; } .error { color:#a72525; } pre { max-height:380px; overflow:auto; margin:0; padding:14px; border-radius:10px; background:#101b2a; color:#e9f2ff; font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-word; }
+    @media (max-width:600px) { main { padding:18px 12px 36px; } .hero,.section,.output { padding:17px; } }
+    @media print { body { background:#fff; } main { max-width:none; padding:0; } .hero,.section,.output { box-shadow:none; break-inside:avoid; } button,.status { display:none; } }
+  </style>
+  <style>
+    :root { --ink:#132238; --muted:#627086; --paper:#f6f1e9; --card:#fffdfa; --accent:#0f766e; --accent-deep:#075c58; --accent-soft:#dff3ee; --sky:#dbe9ef; --line:#d9d9d1; --warm:#ee8d4a; --warm-soft:#fff0e3; --shadow:0 20px 54px rgb(26 42 57 / .10); --radius:22px; }
+    body { background:radial-gradient(circle at 8% -8%,#d5ede8 0 13%,transparent 32%),radial-gradient(circle at 100% 5%,#f9dfc3 0 12%,transparent 29%),var(--paper); }
+    main { max-width:1080px; padding:36px 22px 72px; }
+    .hero { position:relative; isolation:isolate; overflow:hidden; margin:0; padding:clamp(30px,5vw,54px); border:0; border-radius:30px; color:#f8fffd; background:linear-gradient(135deg,#102c43 0%,#105f63 57%,#0d776e 100%); box-shadow:0 24px 60px rgb(10 41 55 / .22); }
+    .hero::before { content:""; position:absolute; z-index:-1; width:420px; height:420px; right:-150px; top:-245px; border:1px solid rgb(255 255 255 / .22); border-radius:50%; box-shadow:0 0 0 36px rgb(255 255 255 / .06),0 0 0 98px rgb(255 255 255 / .04); }
+    .hero::after { content:"01"; position:absolute; z-index:-1; right:30px; bottom:-52px; color:rgb(255 255 255 / .10); font:800 clamp(9rem,24vw,17rem)/1 ui-serif,Georgia,serif; letter-spacing:-.1em; }
+    .hero h1 { max-width:720px; margin-bottom:14px; color:#fff; }
+    .hero p { max-width:700px; color:#e3f5f1; font-size:1.03rem; }
+    .hero .eyebrow { color:#b6e9df; } .hero .hint { color:#c7e7e2; }
+    .journey-rail { display:flex; align-items:center; gap:10px; margin:16px 0 20px; padding:10px 12px; border:1px solid rgb(19 34 56 / .09); border-radius:16px; background:rgb(255 253 250 / .72); backdrop-filter:blur(12px); }
+    .journey-step { display:flex; align-items:center; gap:8px; min-width:0; color:var(--muted); font-size:.87rem; font-weight:750; }
+    .journey-step b { display:grid; width:28px; height:28px; place-items:center; border-radius:50%; background:#e6e9e8; color:#647077; font-size:.72rem; }
+    .journey-step.active { color:var(--ink); } .journey-step.active b { background:var(--accent); color:#fff; box-shadow:0 5px 12px rgb(15 118 110 / .25); }
+    .journey-line { flex:1; min-width:22px; height:1px; background:linear-gradient(90deg,var(--accent),#d4d9d6); }
+    .notice { margin:0 0 18px; border:1px solid #f1c99f; border-left:0; border-radius:18px; padding:15px 17px 15px 19px; color:#744016; background:linear-gradient(100deg,#fff7ed,#fff0e2); box-shadow:0 10px 22px rgb(99 67 32 / .06); }
+    .notice strong { color:#9b4a14; }
+    .profile-flow { counter-reset:profile-section; }
+    .section,.output { border:1px solid rgb(19 34 56 / .10); border-radius:var(--radius); background:rgb(255 253 250 / .92); box-shadow:var(--shadow); }
+    .section { position:relative; padding:clamp(22px,3vw,30px); margin:18px 0; }
+    .profile-flow > .section > h2 { display:flex; align-items:center; gap:11px; }
+    .profile-flow > .section > h2::before { counter-increment:profile-section; content:"0" counter(profile-section); display:grid; width:30px; height:30px; place-items:center; border-radius:10px; color:var(--accent-deep); background:var(--accent-soft); font-size:.75rem; letter-spacing:.04em; }
+    h2 { color:var(--ink); letter-spacing:-.02em; } label { color:#25364b; margin-bottom:7px; } label span,.hint { color:var(--muted); }
+    .grid { gap:18px; } input,select,textarea { min-height:48px; border:1px solid #cbd5d4; border-radius:13px; padding:11px 13px; background:#fff; box-shadow:inset 0 1px 0 rgb(19 34 56 / .03); transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
+    textarea { min-height:106px; } input:hover,select:hover,textarea:hover { border-color:#9fbab7; }
+    input:focus,select:focus,textarea:focus { border-color:var(--accent); box-shadow:0 0 0 4px rgb(15 118 110 / .13); outline:0; }
+    fieldset { margin-top:16px; padding:15px; border:1px solid #d9e4e2; border-radius:16px; background:#f8fbfa; } legend { color:var(--ink); font-size:.94rem; } .checks { gap:9px; }
+    .checks label { margin:0; padding:8px 11px; border:1px solid #d6e2e0; border-radius:999px; background:#fff; transition:background .18s ease,border-color .18s ease; }
+    .checks label:has(input:checked) { border-color:#74bdb4; background:var(--accent-soft); color:var(--accent-deep); } .checks input,.consent input { accent-color:var(--accent); }
+    .consent { margin-top:18px; padding:13px 14px; border:1px dashed #a8c9c4; border-radius:15px; background:#f2faf8; }
+    .actions { gap:11px; margin-top:20px; } button { min-height:46px; border-radius:13px; padding:11px 17px; background:linear-gradient(135deg,var(--accent),#138b80); box-shadow:0 10px 18px rgb(15 118 110 / .20); transition:transform .18s ease,box-shadow .18s ease,filter .18s ease; }
+    button:hover { filter:brightness(1.03); transform:translateY(-1px); box-shadow:0 14px 23px rgb(15 118 110 / .25); } button.ghost { background:#edf1ef; box-shadow:none; } button.ghost:hover { background:#e1e8e5; }
+    .status { padding:4px 0 0; } .output { margin-top:24px; overflow:hidden; } .output h2 { padding-bottom:12px; border-bottom:1px solid #e1e6e3; } pre { border-radius:14px; background:#132238; box-shadow:inset 0 1px 0 rgb(255 255 255 / .06); }
+    @media (max-width:600px) { main { padding:20px 13px 46px; } .hero { border-radius:24px; padding:29px 23px 38px; } .journey-rail { overflow:auto; } .journey-step { white-space:nowrap; } .section,.output { padding:19px; } .checks label { width:100%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <p class="eyebrow">Travel Buddy · Local profile</p>
+      <h1>建立你的旅行档案</h1>
+      <p>这是首次使用时建立一次的稳定旅行偏好档案。此页面只会把资料提交给同一台电脑上的 Travel Buddy 本地服务；不会联网、登录或付款。</p>
+      <p class="hint">后续旅行会自动复用这份档案并预填稳定信息；短期日期、这次预算和同行人仍会在每次具体行程中单独确认。</p>
+    </header>
+    <nav class="journey-rail" aria-label="首次使用流程"><span class="journey-step active"><b>01</b>旅行档案</span><span class="journey-line" aria-hidden="true"></span><span class="journey-step"><b>02</b>本次行程</span></nav>
+
+    <div class="notice"><strong>隐私边界：</strong>请不要填写护照号/照片、签证照片、银行卡或账号密码、精确住址。国籍和法定居住地可以填写，用于后续判断签证可行性。</div>
+
+    <form id="profile-form" class="profile-flow" novalidate>
+      <section class="section">
+        <h2>开始前</h2>
+        <div class="grid">
+          <div><label for="profile-id">档案名称 <span>例如：my-travel-profile</span></label><input id="profile-id" required maxlength="80" autocomplete="off"></div>
+          <div><label for="response-language">希望输出语言</label><select id="response-language"><option value="">未指定</option><option value="中文">中文</option><option value="English">English</option><option value="中文和 English">中文和 English</option><option value="其他">其他</option></select></div>
+        </div>
+        <label class="consent"><input id="consent" type="checkbox" required>我同意将下列旅行相关信息保存为本地 JSON，用于未来的旅行建议；我知道可以随时要求删除。</label>
+        <div class="actions"><button class="ghost" type="button" id="fill-example">填入示例</button><button class="ghost" type="reset">清空</button></div>
+      </section>
+
+      <section class="section">
+        <h2>身份、语言与出发条件</h2>
+        <div class="grid">
+          <div><label for="nationality">国籍</label><input id="nationality" placeholder="例如：中国"></div>
+          <div><label for="residence">法定居住地</label><input id="residence" placeholder="例如：中国上海"></div>
+          <div><label for="languages">会使用的语言 <span>逗号分隔</span></label><input id="languages" placeholder="中文, English"></div>
+          <div><label for="language-comfort">当地语言适应度</label><select id="language-comfort"><option value="">未指定</option><option>需要中文/英文支持</option><option>可用翻译工具</option><option>愿意沉浸当地语言</option></select></div>
+          <div><label for="home-city">常住城市</label><input id="home-city" placeholder="例如：上海"></div>
+          <div><label for="home-country">常住国家/地区</label><input id="home-country" placeholder="例如：中国"></div>
+          <div><label for="airports">可接受出发机场 <span>逗号分隔</span></label><input id="airports" placeholder="PVG, SHA"></div>
+          <div><label for="currency">常用预算币种</label><input id="currency" placeholder="例如：CNY"></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>去过、想去与不推荐</h2>
+        <p class="hint">每行一条，字段用 <code>|</code> 分隔；不确定的字段可以留空。示例按钮会填入可参考的格式。</p>
+        <label for="visited">去过的地方 <span>地点 | 范围 | 时间 | 是否想重游（yes/no/maybe） | 简短备注</span></label><textarea id="visited" placeholder="东京 | city | 2024-04 | yes | 喜欢美食和步行"></textarea>
+        <label for="wishlist">想去的地方 <span>地点 | 范围 | 优先级 1–5 | 为什么</span></label><textarea id="wishlist" placeholder="冰岛 | country | 5 | 想看极光和火山"></textarea>
+        <label for="excluded">不推荐的地方 <span>地点 | 范围 | 原因（可简短） | never_recommend 或 avoid_for_now</span></label><textarea id="excluded" placeholder="某地 | country | 不想去 | never_recommend"></textarea>
+      </section>
+
+      <section class="section">
+        <h2>常用旅行服务</h2>
+        <p class="hint">可选。只记录帮助你正常打开链接的偏好，不记录账号、密码、支付方式或设备信息。目的地的本地服务仍会优先于品牌习惯。</p>
+        <div class="grid">
+          <div><label for="map-apps">常用地图/导航应用 <span>逗号分隔</span></label><input id="map-apps" placeholder="例如：高德地图, Google Maps"></div>
+          <div><label for="booking-platforms">常用订票/酒店比较平台 <span>逗号分隔</span></label><input id="booking-platforms" placeholder="例如：携程, Trip.com, Booking.com"></div>
+          <div><label for="google-access">Google 服务的正常可用性</label><select id="google-access"><option value="unknown">不确定/按目的地判断</option><option value="available">可正常使用（不使用 VPN 或代理）</option><option value="unavailable">不要使用 Google 服务</option></select></div>
+          <div><label for="services-to-avoid">不想使用的服务 <span>逗号分隔</span></label><input id="services-to-avoid" placeholder="例如：仅限英文的平台"></div>
+        </div>
+        <label for="booking-access-notes">预订可访问性说明</label><input id="booking-access-notes" placeholder="例如：避免必须本地手机号或当地支付方式的渠道；不填卡号或账号信息">
+        <label for="service-notes">其他可访问性说明</label><input id="service-notes" placeholder="例如：中国大陆路线优先高德；无需为了链接使用 VPN">
+      </section>
+
+      <section class="section">
+        <h2>旅行偏好</h2>
+        <div class="grid">
+          <div><label for="direction">景色方向</label><select id="direction"><option value="">未指定</option><option value="natural">自然</option><option value="human_cultural">人文/文化</option><option value="balance">平衡</option></select></div>
+          <div><label for="pace">偏好的节奏</label><select id="pace"><option value="">未指定</option><option>慢游/深度</option><option>适中</option><option>高密度多点</option></select></div>
+          <div><label for="lodging">住宿风格</label><select id="lodging"><option value="">未指定</option><option>经济实用</option><option>舒适中档</option><option>精品/特色</option><option>高端</option></select></div>
+          <div><label for="location-priority">住宿位置优先级</label><select id="location-priority"><option value="">未指定</option><option>交通枢纽</option><option>景点步行范围</option><option>安静安全</option><option>性价比</option></select></div>
+          <div><label for="self-drive">自驾偏好</label><select id="self-drive"><option value="">未指定</option><option>优先公共交通</option><option>可接受自驾</option><option>偏好自驾</option><option>不自驾</option></select></div>
+          <div><label for="cabin">常用舱位/座位偏好</label><input id="cabin" placeholder="例如：经济舱，可接受一次转机"></div>
+        </div>
+        <fieldset><legend>自然体验偏好</legend><div class="checks"><label><input type="checkbox" name="natural" value="海岸/海岛">海岸/海岛</label><label><input type="checkbox" name="natural" value="山地徒步">山地徒步</label><label><input type="checkbox" name="natural" value="湖泊/森林">湖泊/森林</label><label><input type="checkbox" name="natural" value="野生动物">野生动物</label><label><input type="checkbox" name="natural" value="雪景/极光">雪景/极光</label></div></fieldset>
+        <fieldset><legend>人文体验偏好</legend><div class="checks"><label><input type="checkbox" name="cultural" value="历史建筑">历史建筑</label><label><input type="checkbox" name="cultural" value="博物馆/艺术">博物馆/艺术</label><label><input type="checkbox" name="cultural" value="当地美食">当地美食</label><label><input type="checkbox" name="cultural" value="街区漫步">街区漫步</label><label><input type="checkbox" name="cultural" value="节庆/夜生活">节庆/夜生活</label></div></fieldset>
+        <div class="grid"><div><label for="dietary">饮食偏好或限制 <span>逗号分隔</span></label><input id="dietary" placeholder="例如：无辣, 素食友好"></div><div><label for="accessibility">无障碍/舒适需要 <span>逗号分隔</span></label><input id="accessibility" placeholder="例如：避免长距离步行"></div><div><label for="avoid-list">其他避免项 <span>逗号分隔</span></label><input id="avoid-list" placeholder="例如：高温, 红眼航班"></div></div>
+      </section>
+
+      <section class="section">
+        <h2>提交并保存</h2>
+        <p>点击提交后，资料会先在本地校验，再自动写入 Travel Buddy 的 <code>profiles</code> 目录；在首次工作流中，终端会随即自动进入本次行程信息填写。</p>
+        <div class="actions"><button type="submit">提交并保存旅行档案</button></div>
+        <p id="status" class="status" aria-live="polite"></p>
+      </section>
+    </form>
+
+    <section class="output" aria-labelledby="preview-title"><h2 id="preview-title">JSON 预览</h2><pre id="preview">填写后点击“提交并保存旅行档案”。</pre></section>
+  </main>
+  <script>
+    (() => {
+      const $ = (id) => document.getElementById(id);
+      const form = $("profile-form"); const preview = $("preview"); const status = $("status"); const intakeConfig = window.TRAVEL_BUDDY_PROFILE_INTAKE || {}; const submitEndpoint = intakeConfig.submit_url || window.TRAVEL_BUDDY_SUBMIT_URL || "";
+      let profile = null;
+      const text = (id) => $(id).value.trim();
+      const list = (id) => text(id).split(",").map((value) => value.trim()).filter(Boolean);
+      const checked = (name) => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
+      const lines = (id, mapper) => text(id).split("\n").map((line) => line.trim()).filter(Boolean).map((line) => mapper(line.split("|").map((part) => part.trim())));
+      const today = () => new Date().toISOString().slice(0, 10);
+      const safeId = (value) => value.replace(/[^\w-]+/gu, "-").replace(/^-+|-+$/g, "") || "travel-profile";
+      function buildProfile() {
+        const profileId = text("profile-id");
+        if (!profileId || !$("consent").checked) throw new Error("请填写档案名称并确认本地保存同意。\n");
+        return {
+          profile_version: "1.0", profile_id: profileId,
+          storage_consent: { personal_profile: true, confirmed_at: today(), purpose: "Reuse travel preferences and constraints across future planning requests." },
+          identity_and_language: { nationality: text("nationality") || null, legal_residence: text("residence") || null, preferred_response_language: text("response-language") || null, languages_spoken: list("languages"), local_language_comfort: text("language-comfort") || null },
+          home_and_logistics: { home_city: text("home-city") || null, home_country: text("home-country") || null, acceptable_departure_airports: list("airports"), default_currency: text("currency") || null, typical_cabin_or_seat_preference: text("cabin") || null, self_drive_preference: text("self-drive") || null },
+          digital_travel_access: { preferred_map_apps: list("map-apps"), preferred_booking_platforms: list("booking-platforms"), services_to_avoid: list("services-to-avoid"), google_services_access: text("google-access") || "unknown", booking_access_notes: text("booking-access-notes") || null, notes: text("service-notes") || null },
+          travel_history: {
+            visited_places: lines("visited", ([place, scope, visit_period, revisit_interest, notes]) => ({ place: place || null, scope: scope || "city_or_region", visit_period: visit_period || null, revisit_interest: revisit_interest || "unknown", notes: notes || null })),
+            wish_list: lines("wishlist", ([place, scope, priority, why]) => ({ place: place || null, scope: scope || "city_or_region", priority: priority ? Number(priority) : null, why: why || null })),
+            excluded_places: lines("excluded", ([place, scope, reason, exclusion_strength]) => ({ place: place || null, scope: scope || "city_or_region", reason: reason || null, exclusion_strength: exclusion_strength || "never_recommend", confirmed_at: today() }))
+          },
+          recurring_preferences: { experience_direction: text("direction") || null, natural_subtypes: checked("natural"), human_cultural_subtypes: checked("cultural"), pace: text("pace") || null, lodging_style: text("lodging") || null, location_priority: text("location-priority") || null, food_and_dietary_preferences: list("dietary"), accessibility_needs: list("accessibility"), comfort_and_safety_preferences: [], avoid_list: list("avoid-list") },
+          data_controls: { last_reviewed_at: today(), sensitive_data_not_stored: ["passport number", "passport or visa image", "payment card or bank details", "exact home address", "account credentials"], forget_on_explicit_request: true }
+        };
+      }
+      function renderProfile() { preview.textContent = JSON.stringify(profile, null, 2); }
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          profile = buildProfile();
+          renderProfile();
+          if (!submitEndpoint) throw new Error("此表单必须由 Travel Buddy 本地服务打开；请返回终端使用显示的链接。\n");
+          status.className = "status";
+          status.textContent = "正在本地校验并保存…";
+          const response = await fetch(submitEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(profile) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || "本地保存失败。");
+          if (result.next_trip && result.next_url) {
+            status.textContent = "档案已保存，正在打开本次行程信息填写页…";
+            window.setTimeout(() => window.location.assign(result.next_url), 250);
+            return;
+          }
+          status.textContent = result.next_trip ? "档案已保存；请查看终端中的下一步链接。" : "已保存。终端已收到并读取档案，可返回 Codex 继续规划。";
+        } catch (error) {
+          status.className = "status error";
+          status.textContent = error.message;
+        }
+      });
+      form.addEventListener("reset", () => { profile = null; preview.textContent = "填写后点击“提交并保存旅行档案”。"; status.textContent = ""; });
+      $("fill-example").addEventListener("click", () => { $("profile-id").value = "example-traveler"; $("consent").checked = true; $("response-language").value = "中文"; $("nationality").value = "示例国籍"; $("residence").value = "示例居住地"; $("languages").value = "中文, English"; $("home-city").value = "示例城市"; $("home-country").value = "示例国家"; $("airports").value = "AAA, BBB"; $("currency").value = "CNY"; $("map-apps").value = "高德地图, Google Maps"; $("booking-platforms").value = "携程, Trip.com"; $("google-access").value = "unavailable"; $("services-to-avoid").value = "需要 VPN 的服务"; $("booking-access-notes").value = "避免必须本地手机号或当地支付方式的渠道"; $("service-notes").value = "中国大陆路线优先高德地图"; $("visited").value = "东京 | city | 2024-04 | yes | 喜欢美食和步行"; $("wishlist").value = "冰岛 | country | 5 | 想看极光和火山"; $("excluded").value = "示例地点 | country | 目前不想去 | avoid_for_now"; $("direction").value = "balance"; $("pace").value = "适中"; $("lodging").value = "舒适中档"; $("location-priority").value = "景点步行范围"; $("self-drive").value = "可接受自驾"; $("cabin").value = "经济舱，可接受一次转机"; $("dietary").value = "无辣"; $("accessibility").value = "避免长距离步行"; $("avoid-list").value = "红眼航班"; document.querySelector('input[name="natural"][value="雪景/极光"]').checked = true; document.querySelector('input[name="cultural"][value="当地美食"]').checked = true; status.className = "status"; status.textContent = "已填入虚构示例；请替换为自己的信息后再生成。"; });
+    })();
+  </script>
+</body>
+</html>

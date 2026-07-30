@@ -1,0 +1,40 @@
+{
+  "destination": {
+    "name": null,
+    "country_or_region": null,
+    "arrival_airports": []
+  },
+  "eligibility": {
+    "hard_filter_status": "unknown",
+    "confirmed_constraints": [],
+    "failed_constraints": [],
+    "unresolved_constraints": [],
+    "assumptions": []
+  },
+  "trip_context": {
+    "origin": null,
+    "date_range": null,
+    "party_size": null,
+    "currency": null,
+    "budget_scope": []
+  },
+  "cost_estimate": {
+    "total_low": null,
+    "total_high": null,
+    "included_categories": [],
+    "budget_fit": "unknown",
+    "price_confidence": "unknown",
+    "as_of": null
+  },
+  "fit": {
+    "experience_matches": [],
+    "tradeoffs": [],
+    "ranking_sensitivity": null,
+    "score": null,
+    "score_dimensions": {},
+    "confidence": "unknown"
+  },
+  "evidence": [],
+  "research_status": "not_started",
+  "recommendation_state": "idea"
+}

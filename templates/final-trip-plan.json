@@ -1,0 +1,365 @@
+{
+  "plan_status": "researched",
+  "generated_at": null,
+  "ui_labels": null,
+  "trip": {
+    "title": null,
+    "language": null,
+    "currency": null,
+    "origin": null,
+    "destination": null,
+    "destination_type": null,
+    "start_date": null,
+    "end_date": null,
+    "traveler_count": null,
+    "pace": null,
+    "budget_basis": null,
+    "arrival_transport_mode": null
+  },
+  "profile_context": {
+    "profile_id": null,
+    "profile_last_reviewed_at": null,
+    "applied_saved_fields": [],
+    "excluded_places_checked": []
+  },
+  "regional_service_context": {
+    "destination_service_market": null,
+    "selection_basis": null,
+    "google_services_access": "unknown",
+    "primary_map_provider": null,
+    "primary_map_exception_reason": null,
+    "alternative_map_providers": [],
+    "local_transport_sources": [],
+    "booking_platform_selection_note": null,
+    "booking_access_checks": [
+      {
+        "category": "accommodation",
+        "access_status": "unknown",
+        "provider_or_channel": null,
+        "requirements_note": null,
+        "source_url": null,
+        "checked_at": null
+      }
+    ]
+  },
+  "budget": {
+    "calculation_basis": "per_person",
+    "estimated_per_person_low": null,
+    "estimated_per_person_high": null,
+    "included_categories": [],
+    "unverified_categories": [],
+    "breakdown": [
+      {
+        "category": null,
+        "description": null,
+        "per_person_low": null,
+        "per_person_high": null,
+        "currency": null,
+        "price_status": null,
+        "checked_at": null,
+        "note": null
+      }
+    ]
+  },
+  "transport_preference": {
+    "mode": null,
+    "self_drive_selected": null,
+    "public_transit_selected": null
+  },
+  "booking_options": {
+    "flights": [
+      {
+        "id": null,
+        "provider": null,
+        "comparison_platform": null,
+        "comparison_checked_at": null,
+        "direct_provider": null,
+        "direct_review_url": null,
+        "source_type": null,
+        "checked_at": null,
+        "review_url": null,
+        "round_trip_search_provider": null,
+        "round_trip_search_checked_at": null,
+        "round_trip_search_url": null,
+        "round_trip_prefilled_fields": [
+          "origin",
+          "destination",
+          "outbound_date",
+          "return_date",
+          "travellers"
+        ],
+        "origin_airport": null,
+        "destination_airport": null,
+        "outbound_date": null,
+        "return_date": null,
+        "outbound_itinerary": {
+          "service_identifier": null,
+          "departure_local": null,
+          "arrival_local": null,
+          "duration_minutes": null,
+          "stops": null,
+          "connection_or_terminal_note": null
+        },
+        "return_itinerary": {
+          "service_identifier": null,
+          "departure_local": null,
+          "arrival_local": null,
+          "duration_minutes": null,
+          "stops": null,
+          "connection_or_terminal_note": null
+        },
+        "cabin": null,
+        "baggage_assumption": null,
+        "connection_summary": null,
+        "fare_currency": null,
+        "fare_low": null,
+        "fare_high": null,
+        "price_basis": "per_person_round_trip",
+        "price_status": null,
+        "material_conditions": null,
+        "availability_status": null,
+        "price_checked_at": null,
+        "airport_transfer_note": null,
+        "single_option_reason": null
+      }
+    ],
+    "accommodations": [
+      {
+        "id": null,
+        "stay_group_id": null,
+        "stay_location": null,
+        "neighborhood": null,
+        "address_or_location_reference": null,
+        "property_name": null,
+        "provider": null,
+        "comparison_platform": null,
+        "comparison_checked_at": null,
+        "direct_provider": null,
+        "direct_review_url": null,
+        "source_type": null,
+        "checked_at": null,
+        "review_url": null,
+        "check_in": null,
+        "check_out": null,
+        "guest_count": null,
+        "room_count": null,
+        "comparison_searches": [
+          {
+            "platform": null,
+            "search_url": null,
+            "checked_at": null,
+            "prefilled_fields": [
+              "destination",
+              "check_in",
+              "check_out",
+              "guests",
+              "rooms"
+            ]
+          }
+        ],
+        "room_basis": null,
+        "nightly_cost_low": null,
+        "nightly_cost_high": null,
+        "price_basis": "per_room_per_night",
+        "price_status": null,
+        "trip_cost_low": null,
+        "trip_cost_high": null,
+        "currency": null,
+        "price_checked_at": null,
+        "availability_status": null,
+        "taxes_and_fees_status": null,
+        "cancellation_terms": null,
+        "accessibility_or_location_note": null,
+        "arrival_access_note": null,
+        "key_area_access_note": null,
+        "selection_rationale": null,
+        "single_option_reason": null
+      }
+    ],
+    "attraction_tickets": [
+      {
+        "id": null,
+        "day_number": null,
+        "attraction_name": null,
+        "official_or_authorised_provider": null,
+        "comparison_platform": null,
+        "comparison_checked_at": null,
+        "source_type": null,
+        "checked_at": null,
+        "review_url": null,
+        "timed_entry_or_reservation": null,
+        "price_low": null,
+        "price_high": null,
+        "currency": null,
+        "ticket_status": null,
+        "price_basis": "per_person_ticket",
+        "price_status": null,
+        "price_checked_at": null,
+        "availability_status": null
+      }
+    ],
+    "rental_cars": [
+      {
+        "id": null,
+        "provider": null,
+        "comparison_platform": null,
+        "comparison_checked_at": null,
+        "direct_provider": null,
+        "direct_review_url": null,
+        "source_type": null,
+        "checked_at": null,
+        "review_url": null,
+        "pickup_location": null,
+        "dropoff_location": null,
+        "pickup_time": null,
+        "dropoff_time": null,
+        "vehicle_class": null,
+        "transmission": null,
+        "capacity_note": null,
+        "price_low": null,
+        "price_high": null,
+        "currency": null,
+        "price_basis": "per_vehicle_per_day",
+        "price_status": null,
+        "price_checked_at": null,
+        "availability_status": null,
+        "rental_search_prefilled_fields": [
+          "pickup_location",
+          "dropoff_location",
+          "pickup_time",
+          "dropoff_time"
+        ],
+        "insurance_excess": null,
+        "fuel_policy": null,
+        "mileage_policy": null,
+        "cross_border_or_restriction_note": null
+      }
+    ]
+  },
+  "transport_overview": {
+    "map_link_kind": "directions",
+    "overall_map_scope": "primary_leg",
+    "overall_route_map_url": null,
+    "overall_map_checked_at": null,
+    "overall_map_provider": null,
+    "overall_alternative_map_links": [],
+    "overall_duration_minutes": null,
+    "overall_distance_km": null,
+    "cost_low": null,
+    "cost_high": null,
+    "notes": []
+  },
+  "days": [
+    {
+      "number": null,
+      "date": null,
+      "day_type": null,
+      "title": null,
+      "focus": null,
+      "base_location": null,
+      "accommodation_option_id": null,
+      "activities": [
+        {
+          "time": null,
+          "name": null,
+          "detail": null,
+          "ticket_option_id": null,
+          "meal_or_rest_buffer": null
+        }
+      ],
+      "dining": [
+        {
+          "meal": null,
+          "time_window": null,
+          "venue_name": null,
+          "cuisine_or_style": null,
+          "neighborhood": null,
+          "why_this_stop": null,
+          "price_per_person_low": null,
+          "price_per_person_high": null,
+          "currency": null,
+          "reservation_or_queue_note": null,
+          "venue_url": null,
+          "map_provider": null,
+          "checked_at": null,
+          "reservation_provider": null,
+          "reservation_url": null,
+          "backup_venue_name": null,
+          "backup_note": null
+        }
+      ],
+      "route": {
+        "start": null,
+        "stops_in_order": [],
+        "end": null,
+        "mode": null,
+        "route_logic": null,
+        "fallback_plan": null,
+        "duration_minutes": null,
+        "distance_km": null,
+        "transfer_count": null,
+        "walking_burden": null,
+        "cost_low": null,
+        "cost_high": null,
+        "currency": null,
+        "fare_basis_or_fuel_toll_parking_note": null,
+        "service_or_driving_caveat": null,
+        "verified_map_url": null,
+        "map_checked_at": null,
+        "map_provider": null,
+        "map_link_kind": "directions",
+        "route_map_scope": "primary_leg",
+        "alternative_map_links": [],
+        "segments": [
+          {
+            "from": null,
+            "to": null,
+            "mode": null,
+            "service_or_line": null,
+            "duration_minutes": null,
+            "distance_km": null,
+            "walking_minutes": null,
+            "transfer_count": null,
+            "cost_low": null,
+            "cost_high": null,
+            "currency": null,
+            "journey_instruction": null,
+            "arrival_instruction": null,
+            "fare_basis": null,
+            "fallback_note": null,
+            "verified_map_url": null,
+            "map_checked_at": null,
+            "map_provider": null,
+            "map_link_kind": "directions",
+            "alternative_map_links": []
+          }
+        ],
+        "schematic_svg": null
+      },
+      "contingency": null
+    }
+  ],
+  "destination_experience_anchors": [
+    {
+      "name": null,
+      "category": null,
+      "neighborhood_or_area": null,
+      "planned_day": null,
+      "why_it_matters": null,
+      "source_url": null,
+      "checked_at": null
+    }
+  ],
+  "sources": [
+    {
+      "name": null,
+      "url": null,
+      "source_type": null,
+      "accessed_at": null,
+      "claim_or_decision_supported": null,
+      "confidence": null
+    }
+  ],
+  "assumptions": [],
+  "recheck_before_purchase": []
+}
