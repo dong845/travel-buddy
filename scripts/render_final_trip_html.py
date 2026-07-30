@@ -52,14 +52,14 @@ body{background:radial-gradient(circle at 8% -8%,#d5ede8 0 13%,transparent 32%),
 main{max-width:1180px;padding:42px 22px 74px}h1,h2,h3,h4{color:var(--ink)}h1{max-width:780px;color:#fff}h2{letter-spacing:-.025em}
 .hero{position:relative;isolation:isolate;overflow:hidden;padding:clamp(30px,5vw,54px);border:0;border-radius:30px;color:#e3f5f1;background:linear-gradient(135deg,#102c43 0%,#105f63 57%,#0d776e 100%);box-shadow:0 24px 60px rgb(10 41 55/.22)}
 .hero::before{content:"";position:absolute;z-index:-1;width:440px;height:440px;right:-150px;top:-250px;border:1px solid rgb(255 255 255/.22);border-radius:50%;box-shadow:0 0 0 36px rgb(255 255 255/.06),0 0 0 98px rgb(255 255 255/.04)}
-.hero::after{content:"TRIP";position:absolute;z-index:-1;right:28px;bottom:-22px;color:rgb(255 255 255/.09);font:800 clamp(5rem,16vw,12rem)/1 ui-serif,Georgia,serif;letter-spacing:-.1em}
+.hero::after{content:"✦";position:absolute;z-index:-1;right:28px;bottom:-22px;color:rgb(255 255 255/.09);font:800 clamp(5rem,16vw,12rem)/1 ui-serif,Georgia,serif;letter-spacing:-.1em}
 .hero p{max-width:760px;color:#e3f5f1}.hero .meta{color:#c7e7e2}.hero .eyebrow{color:#b6e9df}
 .panel,.day-card{border:1px solid rgb(19 34 56/.10);border-radius:var(--radius);background:rgb(255 253 250/.94);box-shadow:var(--shadow)}.panel{padding:clamp(22px,3vw,30px)}.grid{gap:16px}.fact,.option{border:1px solid #dce4e0;border-radius:16px;background:linear-gradient(145deg,#fff,#fbfaf5)}
 .fact{position:relative;overflow:hidden;min-height:116px;padding:17px}.fact::after{content:"";position:absolute;width:54px;height:54px;right:-19px;top:-19px;border-radius:50%;background:var(--accent-soft)}.fact strong{position:relative;z-index:1;font-size:1.22rem}
 .option{padding:18px;transition:transform .18s ease,box-shadow .18s ease}.option:hover{transform:translateY(-3px);box-shadow:0 16px 28px rgb(26 42 57/.12)}.pill{padding:5px 9px;background:var(--accent-soft);color:var(--accent-deep);letter-spacing:.04em}
 .day-card{position:relative;overflow:hidden;padding:clamp(22px,3vw,30px)}.day-card::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:linear-gradient(var(--warm),#f6c06e)}.day-top{align-items:flex-start;padding-bottom:18px;border-bottom:1px solid #e2e5e0}.day-number{min-width:54px;height:54px;border:1px solid rgb(255 255 255/.2);border-radius:16px;background:linear-gradient(135deg,#102c43,#17676b);box-shadow:0 10px 20px rgb(15 78 83/.20)}
 .day-card section{padding:18px 0 0}.day-card h3{display:flex;align-items:center;gap:8px}.day-card h3::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--warm);box-shadow:0 0 0 4px var(--warm-soft)}.timeline li{padding:15px 0}.timeline time{color:var(--accent-deep)}
-.route-map{border:1px solid #d8e6e3;border-radius:17px;background:linear-gradient(135deg,#edf7f5,#f7fbfa)}.route-map figcaption{color:var(--muted)}.route-segment{padding:14px 0}
+.route-map{overflow-x:auto;border:1px solid #d8e6e3;border-radius:17px;background:linear-gradient(135deg,#edf7f5,#f7fbfa)}.route-map svg{display:block;width:auto;min-width:720px;height:auto}.route-map figcaption{color:var(--muted)}.route-segment{padding:14px 0}
 .booking-link,.map-link{border-radius:12px;padding:10px 14px;background:linear-gradient(135deg,var(--accent),#138b80);box-shadow:0 8px 15px rgb(15 118 110/.18);transition:transform .18s ease,filter .18s ease}.map-link{background:linear-gradient(135deg,#17324a,#254e69);box-shadow:0 8px 15px rgb(23 50 74/.18)}.booking-link:hover,.map-link:hover{color:#fff;filter:brightness(1.04);transform:translateY(-1px)}
 .warning{border:1px solid #f2cf9d;border-left:4px solid var(--warm);border-radius:14px;background:linear-gradient(100deg,#fff7ed,#fff0e2);color:#744016}details{padding:14px 0 0}summary{color:var(--accent-deep)}.source-item{margin:10px 0}
 @media(max-width:600px){main{padding:22px 13px 48px}.hero{border-radius:24px;padding:30px 23px 38px}.panel,.day-card{padding:20px}.day-number{min-width:46px;height:46px}}
@@ -73,6 +73,13 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
     if normalized.startswith("zh") or "chinese" in normalized or "中文" in normalized:
         return {
             "review_option": "查看选项",
+            "review_option_provider": "在 {provider} 查看选项",
+            "direct_provider": "在 {provider} 查看官方直订页面",
+            "review_reservation": "查看预订",
+            "view_source": "查看来源",
+            "no_meal_recommendation": "未调研到用餐推荐。",
+            "opening_hours_recheck": "切换前请核验当前营业时间。",
+            "per_person_suffix": "/ 人",
             "round_trip": "搜索往返行程",
             "compare_booking": "在 Booking.com 比较（已带入日期和住客）",
             "compare_platform_prefix": "在 ",
@@ -213,6 +220,8 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         'aria-label="Schematic route in visit order"': 'aria-label="按游览顺序的路线示意图"',
         '>Start</text>': '>起点</text>',
         '>End</text>': '>终点</text>',
+        '>Start</tspan>': '>起点</tspan>',
+        '>End</tspan>': '>终点</tspan>',
         "Price not currently verified": labels["price_unverified"],
         "Time not currently verified": labels["time_unverified"],
         "Up to ": labels["up_to"] + " ",
@@ -242,6 +251,9 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         "Recheck price, availability, entry requirements, and operating conditions before purchase.": labels["default_recheck"],
         "Prices and availability require recheck before purchase.": labels["price_recheck"],
         "Current researched options only. Opening a link never creates a reservation.": labels["no_reservation"],
+        "No meal recommendation was researched.": labels["no_meal_recommendation"],
+        "Check current opening hours before switching.": labels["opening_hours_recheck"],
+        " per person · ": f" {labels['per_person_suffix']} · ",
         "Researched itinerary · ": labels["researched_itinerary"],
         "Arrival: ": labels["arrival"],
         " · Pace: ": f" · {labels['pace']}",
@@ -257,6 +269,16 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
     for source, target in replacements.items():
         page = page.replace(source, target)
 
+    page = re.sub(
+        r'(data-booking-purpose="(?:review-option|rental-search)"[^>]*>)Review option in ([^<]+)(</a>)',
+        lambda match: f"{match.group(1)}{labels['review_option_provider'].replace('{provider}', match.group(2))}{match.group(3)}",
+        page,
+    )
+    page = re.sub(
+        r'(data-booking-purpose="direct-provider"[^>]*>)Review direct provider in ([^<]+)(</a>)',
+        lambda match: f"{match.group(1)}{labels['direct_provider'].replace('{provider}', match.group(2))}{match.group(3)}",
+        page,
+    )
     page = re.sub(
         r'(data-booking-purpose="round-trip-search"[^>]*>)Search round trip — ([^<]+)(</a>)',
         lambda match: f"{match.group(1)}{labels['round_trip']} — {match.group(2)}{match.group(3)}",
@@ -282,11 +304,11 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         lambda match: f"{match.group(1)}{labels['hour']}{match.group(2)}{labels['minute']}",
         page,
     )
-    page = re.sub(
-        r'(\d+) min',
-        lambda match: f"{match.group(1)}{labels['minute']}",
-        page,
-    )
+    page = re.sub(r'(\d+) minutes?\b', lambda match: f"{match.group(1)}{labels['minute']}", page)
+    page = re.sub(r'(\d+) min\b', lambda match: f"{match.group(1)}{labels['minute']}", page)
+    page = re.sub(r'\b0 stop\(s\)', '直飞', page)
+    page = re.sub(r'\b(\d+) stop\(s\)', lambda match: f"{match.group(1)}次中转", page)
+    page = re.sub(r'(\d+(?:\.\d+)?) km\b', lambda match: f"{match.group(1)}公里", page)
     page = re.sub(
         r'<p class="eyebrow">Day ([^<]+) · ([^<]+)</p>',
         lambda match: f'<p class="eyebrow">{labels["day"]}{match.group(1)}{labels["day_suffix"]} · {match.group(2)}</p>',
@@ -361,9 +383,21 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         lambda match: f"{match.group(1)}{access_categories[match.group(2)]} · {access_statuses[match.group(3)]}{match.group(4)}",
         page,
     )
+    page = re.sub(
+        rf'(<strong>{re.escape(labels["availability"])}</strong>)(available|limited|unknown)',
+        lambda match: f"{match.group(1)}{access_statuses[match.group(2)]}",
+        page,
+    )
     page = page.replace('<h4>Route by segment</h4>', f'<h4>{labels["route_by_segment"]}</h4>')
     page = page.replace('<h3>Tickets and recheck</h3>', f'<h3>{labels["tickets"]}</h3>')
     page = page.replace('<time>Flexible</time><div><strong>Free time</strong>', f'<time>灵活安排</time><div><strong>{labels["free_time"]}</strong>')
+    page = page.replace('>Review reservation<', f'>{labels["review_reservation"]}<')
+    page = page.replace('>View source<', f'>{labels["view_source"]}<')
+    page = re.sub(
+        r'<span class="pill">Day ([^<]+)<',
+        lambda match: f'<span class="pill">{labels["day"]}{match.group(1)}{labels["day_suffix"]}<',
+        page,
+    )
     # Price provenance is decision-critical: do not leave machine enum values in an
     # otherwise localized checkout-facing page. These replacements only affect
     # renderer-owned visible text, never URLs or data attributes.
@@ -745,16 +779,17 @@ def option_card(kind: str, item: dict) -> str:
     stay_total = ""
     if kind == "hotel":
         stay_total = f'<p class="meta"><strong>Trip total for stay: </strong>{esc(money(item.get("trip_cost_low"), item.get("trip_cost_high"), item.get("currency")))}</p>'
-    actions = [booking_link(kind, provider, checked_at, url, "Review option")]
+    actions = [booking_link(kind, provider, checked_at, url, f"Review option in {provider}", "review-option")]
     direct_url = item.get("direct_review_url")
     if direct_url and direct_url != url:
-        actions.append(booking_link(kind, item.get("direct_provider") or "Direct provider", item.get("comparison_checked_at") or checked_at, direct_url, "Review direct provider", "direct-provider"))
+        direct_provider = as_text(item.get("direct_provider"), "Direct provider")
+        actions.append(booking_link(kind, direct_provider, item.get("comparison_checked_at") or checked_at, direct_url, f"Review direct provider in {direct_provider}", "direct-provider"))
     if kind == "flight":
         actions.insert(0, booking_link("flight", item.get("round_trip_search_provider") or comparison_platform or provider, item.get("round_trip_search_checked_at") or checked_at, item.get("round_trip_search_url"), f"Search round trip — {as_text(item.get('outbound_date'))} to {as_text(item.get('return_date'))}", "round-trip-search", item.get("round_trip_prefilled_fields") if isinstance(item.get("round_trip_prefilled_fields"), list) else None))
     if kind == "hotel":
         actions.extend(hotel_comparison_links(item))
     if kind == "car":
-        actions[0] = booking_link("car", provider, checked_at, url, "Review option", "rental-search", item.get("rental_search_prefilled_fields") if isinstance(item.get("rental_search_prefilled_fields"), list) else None)
+        actions[0] = booking_link("car", provider, checked_at, url, f"Review option in {provider}", "rental-search", item.get("rental_search_prefilled_fields") if isinstance(item.get("rental_search_prefilled_fields"), list) else None)
     return f'''<article class="option"><span class="pill">{attr(kind)}</span><h3>{esc(booking_title(kind, item))}</h3><p><strong>{price_label}</strong>{esc(price)}</p>{stay_total}<p>{esc(booking_details(kind, item), "Conditions require recheck")}</p>{option_detail_list(kind, item)}<p class="meta">Provider: {esc(provider)} · Compared via: {esc(comparison_platform)} · Checked: {esc(checked_at)} · Source: {esc(item.get("source_type"))}</p>{"".join(actions)}</article>'''
 
 
@@ -776,18 +811,48 @@ def booking_access_details(value: object) -> str:
     return f'<details class="booking-access" open><summary>Booking access checks</summary><ul>{"".join(rows)}</ul></details>'
 
 
+def wrap_route_label(value: str, max_characters: int) -> list[str]:
+    """Wrap map labels by characters so CJK names and long venue names never collide."""
+    normalized = " ".join(value.split())
+    if not normalized:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for character in normalized:
+        if len(current) >= max_characters:
+            lines.append(current.strip())
+            current = ""
+        current += character
+    if current:
+        lines.append(current.strip())
+    return [line for line in lines if line] or [""]
+
+
 def route_svg(stops: list[object]) -> str:
     labels = [as_text(stop) for stop in stops if stop not in (None, "")]
     if len(labels) < 2:
         labels = ["Start", "End"]
-    width, height = 720, 126
-    step = (width - 80) / (len(labels) - 1)
-    points = " ".join(f"{40 + step * i:.0f},56" for i in range(len(labels)))
+    label_limit = 10 if len(labels) <= 3 else 8
+    wrapped_labels = [wrap_route_label(label, label_limit) for label in labels]
+    maximum_lines = max(len(lines) for lines in wrapped_labels)
+    side_padding = 60
+    width = max(720, side_padding * 2 + 220 * (len(labels) - 1))
+    height = 108 + max(0, maximum_lines - 1) * 18
+    step = (width - side_padding * 2) / (len(labels) - 1)
+    points = " ".join(f"{side_padding + step * i:.0f},52" for i in range(len(labels)))
     nodes = []
-    for index, label in enumerate(labels):
-        x = 40 + step * index
-        nodes.append(f'<circle cx="{x:.0f}" cy="56" r="8" fill="#0b6e69"/><text x="{x:.0f}" y="94" text-anchor="middle" font-size="12" fill="#162235">{html.escape(label)}</text>')
-    return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Schematic route in visit order"><polyline points="{points}" fill="none" stroke="#0b6e69" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>{"".join(nodes)}</svg>'
+    for index, lines in enumerate(wrapped_labels):
+        x = side_padding + step * index
+        text_anchor = "start" if index == 0 else "end" if index == len(wrapped_labels) - 1 else "middle"
+        tspans = "".join(
+            f'<tspan x="{x:.0f}" dy="{0 if line_number == 0 else 17}">{html.escape(line)}</tspan>'
+            for line_number, line in enumerate(lines)
+        )
+        nodes.append(
+            f'<circle cx="{x:.0f}" cy="52" r="8" fill="#0b6e69"/>'
+            f'<text x="{x:.0f}" y="88" text-anchor="{text_anchor}" font-size="12" fill="#162235">{tspans}</text>'
+        )
+    return f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="Schematic route in visit order"><polyline points="{points}" fill="none" stroke="#0b6e69" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>{"".join(nodes)}</svg>'
 
 
 def map_link(

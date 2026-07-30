@@ -1,5 +1,12 @@
 {
   "review_option": "Review option",
+  "review_option_provider": "Review option in {provider}",
+  "direct_provider": "Review direct provider in {provider}",
+  "review_reservation": "Review reservation",
+  "view_source": "View source",
+  "no_meal_recommendation": "No meal recommendation was researched.",
+  "opening_hours_recheck": "Check current opening hours before switching.",
+  "per_person_suffix": "/ person",
   "round_trip": "Search round trip",
   "compare_booking": "Compare on Booking.com — dates and guests included",
   "compare_platform_prefix": "Compare on ",
