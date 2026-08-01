@@ -178,7 +178,7 @@ Before delivering a recommendation or plan, verify:
 - human/cultural and natural preferences have been decomposed into useful subtypes rather than treated as vague labels;
 - hard constraints were checked before scoring;
 - a no-feasible-result outcome was handled as a constraint conflict, not forced into a ranking;
-- entry eligibility and passport validity were verified before describing a trip as bookable;
+- for cross-border candidates, every traveller’s entry eligibility and passport validity were verified before describing a trip as bookable; for a domestic-only trip, entry information was neither requested nor treated as a blocker;
 - volatile facts are researched and dated, or honestly marked unverified;
 - costs use the same scope and currency, with uncertainty explained;
 - every outbound booking link is HTTPS, source-labeled, date-checked, opens only for the user to review, and identifies whether it came from a direct provider or an appropriate comparison platform;

@@ -24,7 +24,7 @@ from run_destination_discovery import resolve_assistant
 FORM = Path(__file__).resolve().parents[1] / "assets" / "trip-intake-form.html"
 MAX_BODY_BYTES = 256 * 1024
 DISCOVERY_RUNNER = Path(__file__).resolve().with_name("run_destination_discovery.py")
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def safe_name(value: object) -> str:

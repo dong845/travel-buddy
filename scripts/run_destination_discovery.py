@@ -106,7 +106,7 @@ def main() -> int:
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--intake", required=True)
     parser.add_argument("--profile", default=None)
-    parser.add_argument("--project-root", default=str(Path(__file__).resolve().parents[2]))
+    parser.add_argument("--project-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--result-path", required=True)
     parser.add_argument("--log-path", required=True)
     args = parser.parse_args()
