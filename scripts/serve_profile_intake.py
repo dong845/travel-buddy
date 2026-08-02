@@ -71,10 +71,10 @@ class IntakeHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length < 1 or length > MAX_BODY_BYTES:
-                raise ValueError("Submission size is invalid.")
+                raise ValueError("提交内容大小无效。")
             profile = json.loads(self.rfile.read(length).decode("utf-8"))
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid profile submission: {exc}"})
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": f"档案内容无法解析：{exc}"})
             return
         errors = validate_profile(profile)
         if errors:
@@ -86,7 +86,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             destination = self.server.workspace / "profiles" / profile_filename(str(profile["profile_id"]))
             destination.parent.mkdir(parents=True, exist_ok=True)
             if destination.exists() and not self.server.overwrite:
-                self.send_json(HTTPStatus.CONFLICT, {"error": "A profile with this name already exists. Choose a new name or restart with --overwrite."})
+                self.send_json(HTTPStatus.CONFLICT, {"error": "已存在同名的旅行档案。请换一个档案名称后重新提交；如需覆盖，请在终端用 --overwrite 重新启动。"})
                 return
             if self.server.next_trip:
                 defaults = profile_defaults_from_profile(profile)
@@ -101,12 +101,12 @@ class IntakeHandler(BaseHTTPRequestHandler):
         except OSError as exc:
             if next_server:
                 next_server.server_close()
-            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Could not save local profile: {exc}"})
+            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"无法在本机保存旅行档案：{exc}"})
             return
         except ValueError as exc:
             if next_server:
                 next_server.server_close()
-            self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": f"Could not prepare current-trip intake: {exc}"})
+            self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": f"无法准备本次行程填写页：{exc}"})
             return
         self.server.saved_profile_path = destination
         if next_server:

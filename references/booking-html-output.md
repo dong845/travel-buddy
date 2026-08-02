@@ -109,8 +109,35 @@ Public social signals can help identify recurring crowd, scam, closure, or acces
 
 Generate one self-contained file: semantic HTML, inline CSS, minimal inline JavaScript only for local expand/collapse behavior, no trackers, no third-party scripts, no secret keys, and no embedded credentials. Use the user’s requested language and currency. The safe renderer has complete built-in UI copy for Chinese and English. For another interface language, provide a complete `ui_labels` object in the plan covering every renderer-owned label; copy [templates/renderer-ui-labels.example.json](../templates/renderer-ui-labels.example.json) and translate every value. The renderer rejects partial mappings so that buttons and headings cannot silently fall back to English. Make it responsive, printable, and accessible: one `h1`, ordered headings, keyboard-visible links, sufficient contrast, descriptive labels, and `aria-label` where link text is ambiguous.
 
+### Closed enums, because an enum that leaks cannot be translated
+
+`validate_trip_html.py` fails any page whose `<html lang>` is not English while renderer-owned English survives in it. That check covers machine values printed as visible text, so these fields are enums rather than free strings:
+
+| Field | Allowed values |
+| --- | --- |
+| `plan_status`, `attraction_tickets[].ticket_status` | `idea`, `researched`, `held`, `booked` |
+| `budget.breakdown[].category`, `budget.included_categories`, `budget.unverified_categories` | `flight`, `rail`, `intercity_bus`, `ferry`, `rental_car`, `fuel_tolls_parking`, `accommodation`, `food`, `local_transport`, `attractions`, `tours_and_activities`, `insurance`, `visa_and_entry`, `shopping_and_misc`, `contingency` |
+| `days[].dining[].meal` | `breakfast`, `lunch`, `dinner`, `snack` |
+| `trip.arrival_transport_mode` | `flight`, `rail`, `road`, `other` |
+| `transport_preference.mode` | `self-drive`, `public-transit` |
+
+If a real cost does not fit a category, put it in the nearest one and explain it in that breakdown row’s `description`/`note`. Never invent a category name: the page cannot translate it and the gate will reject the file.
+
+### Render what the plan collects
+
+A field that is required, researched, and never displayed is work the traveller paid for and cannot see. The page must show:
+
+- each day’s `route.fallback_plan` and `route.walking_burden` — the fallback especially, since `route.mode` must name one primary mode and the alternative is only recorded in the fallback;
+- each flight option’s `material_conditions` (change/refund terms);
+- any `single_option_reason`, so a category with only one option reads as a researched decision rather than an omission;
+- `budget.unverified_categories`, so the per-person total does not silently read as all-inclusive;
+- `plan.assumptions` and `regional_service_context.booking_platform_selection_note`.
+
+Group option cards by booking type. Give the page a sticky in-page navigation with one link per day plus the standing sections: a multi-day itinerary is tens of thousands of pixels tall, and without jumps the third morning is only reachable by scrolling past the first two. Render the visit-order schematic as a vertical ordered list rather than a wide SVG — a horizontal diagram needs a ~720px minimum width to stay legible, which on a phone silently shows only the first two stops of the day.
+
 Include these regions:
 
+0. **In-page navigation:** one link per travel day plus budget, options, transport, and sources.
 1. **Trip summary:** dates, travelers, origin, selected destination, pace, budget, plan state, currency, and last research timestamp.
 2. **Budget and purchase choices:** comparable per-person range, assumptions, and non-transactional flight/hotel/ticket/car cards. A party total, if useful, must be visibly labeled as derived from the per-person range and traveler count.
    Include a compact booking-access check for every shown booking category, clearly marking `limited` and `unknown` cases.

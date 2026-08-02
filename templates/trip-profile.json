@@ -2,6 +2,7 @@
   "profile_version": "1.0",
   "mode": "discovery",
   "intake_status": "partial",
+  "trip_purpose": null,
   "origin": {
     "home_city": null,
     "country": null,
@@ -16,7 +17,8 @@
     "month_or_season": null,
     "duration_days": null,
     "duration_nights": null,
-    "date_flexibility": null
+    "date_flexibility": null,
+    "fixed_commitments": null
   },
   "trip_geography": {
     "scope": null,
@@ -87,7 +89,7 @@
     "traveler_entry_profiles": [],
     "passport_nationality": null,
     "legal_residence": null,
-    "passport_valid_through": null,
+    "passport_validity_status": null,
     "entry_status": "unknown",
     "visa_tolerance": null,
     "climate_preferences": [],

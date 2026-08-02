@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
@@ -48,9 +49,145 @@ REQUIRED_DAY_CLASSES = {
     "route-map",
 }
 
+# Renderer-owned English that must never survive on a non-English page.
+#
+# SKILL.md requires every renderer-owned heading, action label, status, unit, and
+# fallback to be rendered in the trip language, but that rule had no automated check:
+# a page could render, validate, and save with half its interface still in English.
+# These two lists are that check.  Both are deliberately narrow — anchored markup or
+# distinctive phrases — so a genuine proper noun (Booking.com, JR, Google Maps) or
+# author-supplied English never trips them.
+RENDERER_ENGLISH_MARKUP = (
+    r"<h2>Budget at a glance</h2>",
+    r"<h2>Budget breakdown</h2>",
+    r"<h2>Destination essentials</h2>",
+    r"<h2>Browse options — no purchase made</h2>",
+    r"<h2>Overall transport</h2>",
+    r"<h2>Sources, confidence, and recheck list</h2>",
+    r"<h3>Stay</h3>",
+    r"<h3>Plan</h3>",
+    r"<h3>Dining suggestions</h3>",
+    r"<h3>Route and mobility</h3>",
+    r"<h3>Tickets and recheck</h3>",
+    r"<h4>Route by segment</h4>",
+    r"<h3>Flight options</h3>",
+    r"<h3>Accommodation options</h3>",
+    r"<h3>Ticket options</h3>",
+    r"<h3>Rental-car options</h3>",
+    r"<summary>Sources used</summary>",
+    r"<summary>Recheck before purchase</summary>",
+    r"<summary>Booking access checks</summary>",
+    r"<summary>Planning assumptions</summary>",
+    r'<span class="day-nav-day">Day \d+</span>',
+    r'<p class="eyebrow">Day \d+ · ',
+    r'<p class="eyebrow">Researched itinerary · ',
+    r'data-meal="[a-z]+"><p class="eyebrow">(?:breakfast|lunch|dinner|snack) · ',
+    r'data-budget-category="[a-z_]+"><strong>[a-z_]+: ',
+    r'<li class="unpriced-category">[a-z_]+</li>',
+    r"<strong>(?:flight|accommodation|attraction_ticket|rental_car|rail_or_ground) · ",
+    r"<strong>(?:self-drive|public-transit)</strong>",
+    r"<h2>[^<]*</h2><p>(?:self-drive|public-transit)",
+)
+RENDERER_ENGLISH_TEXT = (
+    r"Not supplied",
+    r"Direct provider",
+    r"Map provider",
+    r"Comparison platform",
+    r"\bWalk \d+ min\b",
+    r"\d+ transfer\(s\)",
+    r"\d+ stop\(s\)",
+    r"guest\(s\)",
+    r"room\(s\)",
+    r"traveller\(s\)",
+    r"\bUp to\b",
+    r"Price not currently verified",
+    r"Time not currently verified",
+    r"Conditions require recheck",
+    r"Price per person, round trip:",
+    r"Price per room/night:",
+    r"Trip total for stay:",
+    r"Ticket price per person:",
+    r"Vehicle price per day:",
+    r"Availability:",
+    r"Price status:",
+    r"Price checked:",
+    r"Provider:",
+    r"Compared via:",
+    r"Fare conditions:",
+    r"Ticket status:",
+    r"Only one option shown:",
+    r"Fallback:",
+    r"Walking across the day:",
+    r"Platform selection:",
+    r"Location and access:",
+    r"Why it fits:",
+    r"Backup:",
+    r"Outbound:",
+    r"Return:",
+    r"Arrival:",
+    r"Pace:",
+    r"Research last checked:",
+    r"Schematic — not for navigation",
+    r"Open full-day route",
+    r"Open route overview",
+    r"Open this segment in",
+    r"Open overall route",
+    r"Open transport overview",
+    r"Open alternative route",
+    r"View restaurant in",
+    r"Review option",
+    r"Review direct provider",
+    r"Review reservation",
+    r"Review ticket:",
+    r"View source",
+    r"Search round trip",
+    r"Compare on ",
+    r"Arranged independently",
+    r"Checkout / no overnight stay",
+    r"Free time",
+    r"\bFlexible\b",
+    r"No purchase options were requested",
+    r"No meal recommendation was researched",
+    r"No verified ticket is required",
+    r"Keep a flexible alternative",
+    r"Recheck operating conditions",
+    r"Current researched options only",
+    r"Prices and availability require recheck",
+    r"\b(?:researched_current|user_confirmed|per_person_round_trip|per_room_per_night"
+    r"|per_person_ticket|per_vehicle_per_day|multi_stop|primary_leg|local_transport"
+    r"|fuel_tolls_parking|visa_and_entry|tours_and_activities|shopping_and_misc"
+    r"|intercity_bus|rental_car|attraction_ticket|rail_or_ground)\b",
+)
+
 
 def classes(attrs: dict[str, str]) -> set[str]:
     return set(attrs.get("class", "").split())
+
+
+def visible_text(content: str) -> str:
+    """Approximate the text a reader sees: no CSS, no scripts, no attribute values."""
+    stripped = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", content, flags=re.IGNORECASE | re.DOTALL)
+    stripped = re.sub(r"<!--.*?-->", " ", stripped, flags=re.DOTALL)
+    stripped = re.sub(r"<[^>]+>", " ", stripped)
+    return unescape(stripped)
+
+
+def untranslated_renderer_text(content: str) -> list[str]:
+    """Return renderer-owned English still present on a page declared non-English."""
+    language = re.search(r"<html[^>]*\blang=[\"']([^\"']+)[\"']", content, re.IGNORECASE)
+    if not language or language.group(1).casefold().startswith("en"):
+        return []
+    readable = visible_text(content)
+    found: list[str] = []
+    for pattern in RENDERER_ENGLISH_MARKUP:
+        match = re.search(pattern, content)
+        if match:
+            found.append(match.group(0)[:60])
+    for pattern in RENDERER_ENGLISH_TEXT:
+        match = re.search(pattern, readable)
+        if match:
+            found.append(match.group(0)[:60])
+    return found
 
 
 def is_safe_https(value: str) -> bool:
@@ -122,6 +259,8 @@ class TripHTMLParser(HTMLParser):
         self.booking_access_source_links: list[dict[str, str]] = []
         self.source_items: list[dict[str, str]] = []
         self.trip_plan_attrs: dict[str, str] | None = None
+        self.has_page_nav = False
+        self.day_nav_targets: set[str] = set()
 
     def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
         attrs = {key: value or "" for key, value in attrs_list}
@@ -157,8 +296,12 @@ class TripHTMLParser(HTMLParser):
             self.source_items.append(attrs)
         if "booking-access-item" in class_set:
             self.booking_access_items.append(attrs)
+        if tag == "nav" and attrs.get("id") == "page-nav":
+            self.has_page_nav = True
         if tag == "a":
             href = attrs.get("href", "")
+            if href.startswith("#day-"):
+                self.day_nav_targets.add(href)
             if href.lower().startswith("javascript:"):
                 self.errors.append("Links must not use javascript: URLs.")
             if "booking-access-source-link" in class_set:
@@ -258,7 +401,7 @@ def validate(
         errors.append("Final HTML must not load a third-party script or map iframe.")
     if re.search(r"\b(?:api[_-]?key|authorization\s*:\s*bearer|secret)\s*=", content, re.IGNORECASE):
         errors.append("Final HTML appears to contain a secret or API credential.")
-    if re.search(r"https?://(?:www\.)?example\.(?:com|org)|href\s*=\s*[\"']#", content, re.IGNORECASE):
+    if re.search(r"https?://(?:www\.)?example\.(?:com|org)|href\s*=\s*([\"'])#\1", content, re.IGNORECASE):
         errors.append("Final HTML still contains a placeholder URL.")
     for required_id in {"trip-plan", "trip-summary", "budget-breakdown", "destination-essentials", "booking-panel", "transport-overview", "source-register"}:
         if required_id not in parser.ids:
@@ -269,6 +412,14 @@ def validate(
         for key in ("data-service-market", "data-google-services-access", "data-primary-map-provider", "data-transport-mode"):
             if not parser.trip_plan_attrs.get(key):
                 errors.append(f"#trip-plan needs {key}.")
+    leaked = untranslated_renderer_text(content)
+    if leaked:
+        errors.append(
+            "Renderer-owned text is still English on a non-English page: "
+            + "; ".join(sorted(set(leaked))[:8])
+            + ("; …" if len(set(leaked)) > 8 else "")
+            + "."
+        )
     if not parser.days:
         errors.append("Final HTML must contain at least one .day-card.")
     numbers = [int(day["number"]) for day in parser.days if day["number"].isdigit()]
@@ -276,10 +427,21 @@ def validate(
         errors.append("Day numbers must be contiguous and start at 1.")
     if expected_days is not None and len(parser.days) != expected_days:
         errors.append(f"Expected {expected_days} day cards but found {len(parser.days)}.")
+    # These two checks are what keep the fixes from silently regressing: the plan already
+    # requires a per-day fallback and the page is unusable on a phone without day jumps,
+    # but neither was verifiable before.
+    if not parser.has_page_nav:
+        errors.append("Final HTML needs a #page-nav in-page navigation so each day is reachable without scrolling.")
+    else:
+        missing_nav = {f"#day-{day['number']}" for day in parser.days if day["number"].isdigit()} - parser.day_nav_targets
+        if missing_nav:
+            errors.append("#page-nav is missing links for: " + ", ".join(sorted(missing_nav)) + ".")
     for day in parser.days:
         missing = REQUIRED_DAY_CLASSES - day["classes"]
         if missing:
             errors.append(f"Day {day['number'] or '?'} is missing sections: {', '.join(sorted(missing))}.")
+        if "route-fallback" not in day["classes"]:
+            errors.append(f"Day {day['number'] or '?'} must render its route fallback plan, not only record it in the plan JSON.")
         if not day["map_links"]:
             errors.append(f"Day {day['number'] or '?'} needs a live map link.")
         segment_ids = day["route_segments"]

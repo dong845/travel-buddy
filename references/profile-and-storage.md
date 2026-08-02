@@ -18,6 +18,7 @@ Use the current-trip form to decide what is applicable now; use the profile only
 | Home city/country, airports, usual currency, pace, stable interests, accessibility, avoid-list, service preferences | Prefill only when the current-trip field is blank. The traveler can overwrite it. |
 | Nationality and legal residence | Use only when the current trip includes cross-border options; omit from a domestic-only intake. |
 | Profile exclusions and revisit settings | Apply as hard filters/diversity rules unless the current trip explicitly overrides them. |
+| Dietary/religious food needs and `never_recommend` places | Carried into the current-trip intake as prefilled values, so they arrive as structured trip data rather than only living in the profile file. A hard rule that depends on someone remembering to open a second file is not a hard rule. |
 | Maps, booking platforms and local transport operators | Select by the actual destination/route market and normal declared access; profile apps are a preference, not a mandate. |
 
 Never infer that a trip is domestic or cross-border merely from nationality, residence, language, currency, or a saved map app. If a current-trip scope and named destination conflict, ask a short clarification before ranking.

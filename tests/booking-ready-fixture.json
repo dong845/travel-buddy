@@ -48,7 +48,7 @@
     "estimated_per_person_low": 600,
     "estimated_per_person_high": 900,
     "included_categories": ["accommodation", "food", "local_transport"],
-    "unverified_categories": [],
+    "unverified_categories": ["insurance", "shopping_and_misc"],
     "breakdown": [
       {"category": "accommodation", "description": "Shared room cost", "per_person_low": 350, "per_person_high": 460, "currency": "CNY", "price_status": "estimate", "checked_at": "2026-07-30T10:00:00+08:00", "note": "Two travellers sharing one room."},
       {"category": "food", "description": "Meals including researched dining stops", "per_person_low": 180, "per_person_high": 280, "currency": "CNY", "price_status": "estimate", "checked_at": "2026-07-30T10:00:00+08:00", "note": "Includes the daily meal recommendations."},
@@ -209,6 +209,6 @@
   "sources": [
     {"name": "Amap URI documentation", "url": "https://lbs.amap.com/api/uri-api/guide/travel/route", "source_type": "official mapping documentation", "accessed_at": "2026-07-30T10:00:00+08:00", "claim_or_decision_supported": "Directions-link format", "confidence": "high"}
   ],
-  "assumptions": ["Fixture content is only for automated renderer verification."],
+  "assumptions": ["Fixture content is only for automated renderer verification.", "Prices assume two travellers sharing one room."],
   "recheck_before_purchase": ["Recheck price, availability, entry requirements, and operating conditions before purchase."]
 }

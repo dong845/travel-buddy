@@ -12,7 +12,7 @@ import re
 import subprocess
 import sys
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,6 +25,15 @@ FORM = Path(__file__).resolve().parents[1] / "assets" / "trip-intake-form.html"
 MAX_BODY_BYTES = 256 * 1024
 DISCOVERY_RUNNER = Path(__file__).resolve().with_name("run_destination_discovery.py")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def parse_date(value: object) -> date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def safe_name(value: object) -> str:
@@ -62,6 +71,17 @@ def profile_defaults_from_profile(profile: object) -> dict[str, object]:
         "location_priority": preferences.get("location_priority"),
         "accessibility_needs": preferences.get("accessibility_needs", []),
         "avoid_list": preferences.get("avoid_list", []),
+        # Dietary needs, hard place exclusions, and the requested output language were
+        # collected in the profile and then dropped here, so the trip intake asserted
+        # "no dietary restrictions" and lost every `never_recommend` filter.
+        "dietary_preferences": preferences.get("food_and_dietary_preferences", []),
+        "never_recommend_places": never_recommend_places(profile),
+        "avoid_for_now_places": excluded_places(profile, "avoid_for_now"),
+        "do_not_revisit_places": do_not_revisit_places(profile),
+        "wish_list_places": wish_list_places(profile),
+        "preferred_response_language": identity.get("preferred_response_language"),
+        "languages_spoken": identity.get("languages_spoken", []),
+        "local_language_comfort": identity.get("local_language_comfort"),
         "preferred_map_apps": digital_access.get("preferred_map_apps", []),
         "preferred_booking_platforms": digital_access.get("preferred_booking_platforms", []),
         "services_to_avoid": digital_access.get("services_to_avoid", []),
@@ -69,6 +89,36 @@ def profile_defaults_from_profile(profile: object) -> dict[str, object]:
         "booking_access_notes": digital_access.get("booking_access_notes"),
         "regional_service_notes": digital_access.get("notes"),
     }
+
+
+def excluded_places(profile: dict, strength: str) -> list[str]:
+    history = profile.get("travel_history") if isinstance(profile.get("travel_history"), dict) else {}
+    entries = history.get("excluded_places") if isinstance(history.get("excluded_places"), list) else []
+    return [
+        str(entry.get("place")).strip()
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("place") and entry.get("exclusion_strength") == strength
+    ]
+
+
+def never_recommend_places(profile: dict) -> list[str]:
+    return excluded_places(profile, "never_recommend")
+
+
+def do_not_revisit_places(profile: dict) -> list[str]:
+    history = profile.get("travel_history") if isinstance(profile.get("travel_history"), dict) else {}
+    entries = history.get("visited_places") if isinstance(history.get("visited_places"), list) else []
+    return [
+        str(entry.get("place")).strip()
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("place") and entry.get("revisit_interest") == "no"
+    ]
+
+
+def wish_list_places(profile: dict) -> list[str]:
+    history = profile.get("travel_history") if isinstance(profile.get("travel_history"), dict) else {}
+    entries = history.get("wish_list") if isinstance(history.get("wish_list"), list) else []
+    return [str(entry.get("place")).strip() for entry in entries if isinstance(entry, dict) and entry.get("place")]
 
 
 def load_profile_defaults(path: Path) -> dict[str, object]:
@@ -130,17 +180,22 @@ def launch_destination_discovery(
 
 
 def validate_intake(value: object) -> list[str]:
+    """Validate one submitted trip intake.
+
+    Messages are Chinese because the form is Chinese: a server-side rejection is shown
+    verbatim in the page's status line, and an English wall of text there is unusable.
+    """
     if not isinstance(value, dict):
-        return ["Trip intake must be a JSON object."]
+        return ["本次旅行需求必须是一个 JSON 对象。"]
     errors: list[str] = []
     sensitive = find_sensitive_keys(value)
     if sensitive:
-        errors.append("Trip intake contains prohibited sensitive fields: " + ", ".join(sensitive) + ".")
+        errors.append("提交内容包含不应保存的敏感字段：" + "、".join(sensitive) + "。")
     sensitive_values = find_sensitive_values(value)
     if sensitive_values:
-        errors.append("Trip intake appears to contain prohibited sensitive values at: " + ", ".join(sensitive_values) + ".")
+        errors.append("提交内容疑似包含证件/支付/密码等敏感值，位置：" + "、".join(sensitive_values) + "。")
     if value.get("profile_version") != "1.0" or value.get("mode") != "discovery":
-        errors.append("Unsupported trip intake format.")
+        errors.append("不支持的本次旅行需求格式。")
     origin = value.get("origin") if isinstance(value.get("origin"), dict) else {}
     window = value.get("travel_window") if isinstance(value.get("travel_window"), dict) else {}
     party = value.get("party") if isinstance(value.get("party"), dict) else {}
@@ -152,19 +207,37 @@ def validate_intake(value: object) -> list[str]:
     feasibility = value.get("feasibility") if isinstance(value.get("feasibility"), dict) else {}
     regional_access = value.get("regional_service_access") if isinstance(value.get("regional_service_access"), dict) else {}
     if not origin.get("home_city") or not origin.get("country"):
-        errors.append("Origin city and country are required.")
-    if not window.get("month_or_season") or not isinstance(window.get("duration_days"), int) or window["duration_days"] < 1:
-        errors.append("Travel month/season and a positive duration are required.")
-    if not isinstance(party.get("traveler_count"), int) or party["traveler_count"] < 1:
-        errors.append("A positive traveler count is required.")
+        errors.append("需要填写出发城市和出发国家/地区。")
+    duration = window.get("duration_days")
+    if not isinstance(duration, int) or isinstance(duration, bool) or not 1 <= duration <= 60:
+        errors.append("行程天数必须是 1–60 之间的整数。")
+    start_date = parse_date(window.get("start_date"))
+    end_date = parse_date(window.get("end_date"))
+    if (window.get("start_date") is None) != (window.get("end_date") is None):
+        errors.append("确定的出发日期和返回日期必须成对填写。")
+    elif window.get("start_date") is not None and (start_date is None or end_date is None):
+        errors.append("出发日期和返回日期必须是 YYYY-MM-DD 格式。")
+    elif start_date and end_date:
+        if end_date < start_date:
+            errors.append("返回日期不能早于出发日期。")
+        elif isinstance(duration, int) and (end_date - start_date).days + 1 != duration:
+            errors.append("确定日期与行程天数不一致，请修改其中一个。")
+    elif not window.get("month_or_season"):
+        errors.append("请填写确定的出发/返回日期，或填写大致的月份/季节。")
+    if not isinstance(party.get("traveler_count"), int) or isinstance(party.get("traveler_count"), bool) or party["traveler_count"] < 1:
+        errors.append("同行人数必须是大于 0 的整数。")
     if not budget.get("target_amount") or not budget.get("currency") or not budget.get("coverage"):
-        errors.append("Budget amount, currency, and coverage are required.")
+        errors.append("需要填写预算金额、币种和涵盖范围。")
+    if not re.fullmatch(r"[A-Z]{3}", str(budget.get("currency") or "")):
+        errors.append("预算币种必须是三位字母代码，例如 CNY。")
     if budget.get("calculation_basis") != "per_person":
-        errors.append("Budget must use the per_person calculation basis.")
-    for field in ("range_low_amount", "range_high_amount", "hard_cap_amount"):
+        errors.append("预算必须使用人均（per_person）口径。")
+    if not isinstance(budget.get("included_categories"), list):
+        errors.append("budget.included_categories 必须是列表。")
+    for field, label in (("range_low_amount", "预算下限"), ("range_high_amount", "预算上限"), ("hard_cap_amount", "预算上限值")):
         amount = budget.get(field)
         if not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount <= 0:
-            errors.append(f"budget.{field} must be a positive number.")
+            errors.append(f"{label}必须是正数。")
     if (
         isinstance(budget.get("range_low_amount"), (int, float))
         and not isinstance(budget.get("range_low_amount"), bool)
@@ -172,70 +245,90 @@ def validate_intake(value: object) -> list[str]:
         and not isinstance(budget.get("range_high_amount"), bool)
         and budget["range_high_amount"] < budget["range_low_amount"]
     ):
-        errors.append("Budget range high amount cannot be below the low amount.")
-    if scope.get("state") not in {"fixed", "anchored", "continent", "open"}:
-        errors.append("Destination scope is required.")
+        errors.append("预算上限不能低于下限。")
+    scope_state = scope.get("state")
+    if scope_state not in {"fixed", "anchored", "continent", "open"}:
+        errors.append("需要选择目的地状态。")
+    named_places = scope.get("named_places")
+    if not isinstance(named_places, list):
+        errors.append("destination_scope.named_places 必须是列表。")
+    elif scope_state in {"fixed", "anchored"} and not [place for place in named_places if str(place).strip()]:
+        # Otherwise a "fixed" scope starts a Construction handoff for a destination that
+        # was never named.
+        errors.append("选择了已固定或有偏好的目的地时，必须填写具体地点。")
     trip_scope = geography.get("scope")
     if trip_scope not in {"domestic", "cross_border", "domestic_or_cross_border"}:
-        errors.append("Trip geography scope is required.")
+        errors.append("需要选择本次出行范围。")
     entry_assessment_required = trip_scope in {"cross_border", "domestic_or_cross_border"}
     if geography.get("entry_assessment_required") is not entry_assessment_required:
-        errors.append("trip_geography.entry_assessment_required must match the selected trip geography scope.")
+        errors.append("trip_geography.entry_assessment_required 与所选出行范围不一致。")
     if experience.get("direction") not in {"natural", "human_cultural", "balance"}:
-        errors.append("Experience direction is required.")
+        errors.append("需要选择自然/人文/平衡的景色方向。")
+    if not isinstance(experience.get("ranked_must_haves"), list):
+        errors.append("experience.ranked_must_haves 必须是列表。")
     if not origin.get("max_one_way_travel_time"):
-        errors.append("Maximum one-way travel time is required.")
+        errors.append("需要填写可接受的最长单程总时长。")
+    if value.get("trip_purpose") is not None and not isinstance(value.get("trip_purpose"), str):
+        errors.append("trip_purpose 必须是字符串或 null。")
+    if window.get("fixed_commitments") is not None and not isinstance(window.get("fixed_commitments"), str):
+        errors.append("travel_window.fixed_commitments 必须是字符串或 null。")
     modes = transport.get("preferred_modes")
     allowed_modes = {
         "direct_flight", "connecting_flight", "high_speed_rail", "conventional_rail_or_overnight",
         "intercity_bus", "ferry", "self_drive", "train",
     }
     if not isinstance(modes, list) or not modes or not set(modes).issubset(allowed_modes):
-        errors.append("At least one valid transport mode is required.")
+        errors.append("请至少选择一种可接受的出行方式。")
     stay = value.get("stay_preferences") if isinstance(value.get("stay_preferences"), dict) else {}
     room_count = stay.get("room_count")
     if room_count is not None and (not isinstance(room_count, int) or isinstance(room_count, bool) or room_count < 1):
-        errors.append("stay_preferences.room_count must be a positive integer or null.")
+        errors.append("房间数必须是大于 0 的整数或留空。")
     entries = feasibility.get("traveler_entry_profiles")
     if feasibility.get("entry_assessment_required") is not entry_assessment_required:
-        errors.append("feasibility.entry_assessment_required must match the selected trip geography scope.")
+        errors.append("feasibility.entry_assessment_required 与所选出行范围不一致。")
     if entry_assessment_required:
         if not isinstance(entries, list) or not entries:
-            errors.append("Entry nationality and legal residence are required for every traveler when cross-border travel is considered.")
+            errors.append("考虑跨境时，需要每位同行人的国籍与合法居留地。")
         elif isinstance(party.get("traveler_count"), int) and len(entries) != party["traveler_count"]:
-            errors.append("Entry details must contain one line for every traveler.")
+            errors.append("入境信息的行数必须与同行人数一致。")
         else:
             for entry in entries:
                 if not isinstance(entry, dict) or not all(isinstance(entry.get(key), str) and entry[key].strip() for key in ("traveler_label", "passport_nationality", "legal_residence")):
-                    errors.append("Each entry profile needs traveler label, nationality, and legal residence.")
+                    errors.append("每行入境信息都需要旅客称呼、护照国籍和合法居留地。")
                     break
         if feasibility.get("visa_tolerance") not in {"visa_free_only", "evisa_acceptable", "visa_process_acceptable"}:
-            errors.append("Visa tolerance is required for cross-border travel.")
+            errors.append("跨境旅行需要选择可接受的入境方式。")
+        # Passport validity is a hard entry filter in SKILL.md; asking for the status
+        # (never the number or the date) is what makes that filter checkable.
+        if feasibility.get("passport_validity_status") not in {"valid_through_trip", "not_sure", "needs_renewal"}:
+            errors.append("跨境旅行需要确认护照在行程结束后是否仍然有效。")
     else:
         if entries not in ([], None):
-            errors.append("Domestic-only intake must not collect traveler entry profiles.")
-        if feasibility.get("visa_tolerance") != "not_applicable_domestic" or feasibility.get("entry_status") != "not_applicable_domestic":
-            errors.append("Domestic-only intake must mark entry assessment as not_applicable_domestic.")
+            errors.append("仅国内旅行不应收集同行人的入境信息。")
+        if (
+            feasibility.get("visa_tolerance") != "not_applicable_domestic"
+            or feasibility.get("entry_status") != "not_applicable_domestic"
+            or feasibility.get("passport_validity_status") != "not_applicable_domestic"
+        ):
+            errors.append("仅国内旅行必须把入境相关字段标记为 not_applicable_domestic。")
     climate = feasibility.get("climate_preferences")
     if not isinstance(climate, list):
-        errors.append("Climate preferences must be a list.")
+        errors.append("气候偏好必须是列表。")
     elif "无特别气候限制" in climate and len(climate) > 1:
-        errors.append("No climate restriction cannot be combined with another climate preference.")
+        errors.append("“无特别气候限制”不能与其他气候偏好同时选择。")
+    if not isinstance(feasibility.get("dietary_or_religious_needs"), list):
+        errors.append("饮食/宗教限制必须是列表。")
     if regional_access and regional_access.get("selection_preference") not in {
         "auto_by_destination", "mainland_china_local", "avoid_google", "google_available", "confirm_later"
     }:
-        errors.append("Regional service selection preference is invalid.")
+        errors.append("地图/服务选择方式的取值无效。")
     if regional_access and regional_access.get("google_services_access") not in {"available", "unavailable", "unknown"}:
-        errors.append("Google service access must be available, unavailable, or unknown.")
-    if regional_access.get("selection_preference") == "avoid_google" and regional_access.get("google_services_access") != "unavailable":
-        errors.append("A request to avoid Google services must set Google service access to unavailable.")
-    if regional_access.get("selection_preference") == "google_available" and regional_access.get("google_services_access") != "available":
-        errors.append("A request to use normally available Google services must set Google service access to available.")
+        errors.append("Google 服务可用性必须是 available、unavailable 或 unknown。")
     for field in ("preferred_map_apps", "preferred_booking_platforms", "services_to_avoid"):
         if regional_access and not isinstance(regional_access.get(field), list):
-            errors.append(f"regional_service_access.{field} must be a list.")
+            errors.append(f"regional_service_access.{field} 必须是列表。")
     if regional_access and regional_access.get("notes") is not None and not isinstance(regional_access.get("notes"), str):
-        errors.append("regional_service_access.notes must be a string or null.")
+        errors.append("regional_service_access.notes 必须是字符串或 null。")
     return errors
 
 
@@ -285,10 +378,10 @@ class TripIntakeHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length < 1 or length > MAX_BODY_BYTES:
-                raise ValueError("Submission size is invalid.")
+                raise ValueError("提交内容大小无效。")
             intake = json.loads(self.rfile.read(length).decode("utf-8"))
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid trip submission: {exc}"})
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": f"提交内容无法解析：{exc}"})
             return
         errors = validate_intake(intake)
         if errors:
@@ -317,10 +410,10 @@ class TripIntakeHandler(BaseHTTPRequestHandler):
                 json.dump(event, file, ensure_ascii=False, indent=2)
                 file.write("\n")
         except FileExistsError:
-            self.send_json(HTTPStatus.CONFLICT, {"error": "A matching intake file already exists. Restart the form to create a fresh intake."})
+            self.send_json(HTTPStatus.CONFLICT, {"error": "已存在同名的本次旅行记录。请重新打开表单以创建新的一份。"})
             return
         except OSError as exc:
-            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Could not save local trip intake: {exc}"})
+            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"无法在本机保存本次旅行需求：{exc}"})
             return
         continuation = launch_destination_discovery(
             self.server.workspace,
