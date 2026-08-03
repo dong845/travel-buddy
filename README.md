@@ -13,6 +13,11 @@
   <img alt="Data" src="https://img.shields.io/badge/data-100%25_local-16a34a">
 </p>
 
+<p align="center">
+  <a href="#install"><img alt="Install with npx skills" src="https://img.shields.io/badge/npx_skills-add_dong845%2Ftravel--buddy-000000"></a>
+  <a href="#install"><img alt="Install as a Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-install_as_plugin-5b5bd6"></a>
+</p>
+
 > **A travel agent that refuses to invent a price, refuses to call a trip "bookable" before it has checked the last train home, and won't hand you a day-by-day plan until it has proven the destination is even reachable.**
 
 Most AI trip planners answer "I have 7 days and €1,500" with a confident day-by-day itinerary for a city you never chose. travel-buddy treats that as two different jobs. First it decides **where** — generating candidates, applying hard filters, and explaining what it threw away and why. Only once a destination is genuinely settled does it build the plan, and then it delivers a **self-contained HTML page** with real routes, real booking links, and a per-person budget where every line has a source and a check time.
@@ -136,20 +141,37 @@ python scripts/validate_trip_html.py final.html \
 
 ### Install
 
-Requires **Python 3.10+** (developed on 3.13). There is nothing to `pip install` — every script is standard library only.
+Requires **Python 3.10+** (developed on 3.13). There is nothing to `pip install` — every script is standard library only. Pick whichever of the three paths suits you.
 
-The repository root *is* the skill, so installing means putting it where your agent looks for skills:
+**Option 1 — one line with [`npx skills`](https://github.com/vercel-labs/skills)** (simplest):
 
 ```bash
-# Claude Code — clone straight into your skills folder
-git clone --depth 1 https://github.com/dong845/travel-buddy.git ~/.claude/skills/travel-buddy
+npx skills add dong845/travel-buddy
 ```
 
-Prefer to keep it with your other projects and symlink it (this is what the author does, so edits take effect immediately):
+It prompts for the agent and scope. Add `-g` to install globally for all projects, `-a claude-code` (or `-a codex`) to skip the agent prompt, `-y` for a fully non-interactive run, and `-l` to just list what it found without installing. The repository root *is* the skill, so the whole directory is copied into your skills folder.
+
+**Option 2 — as a Claude Code plugin** (managed updates, and the only path that reaches cloud sessions):
+
+```text
+/plugin marketplace add dong845/travel-buddy
+/plugin install travel-buddy@travel-buddy
+/reload-plugins
+```
+
+Plugin skills are namespaced, so it is invoked as `/travel-buddy:travel-buddy`. Two things worth knowing: if you *also* have a manual copy in `~/.claude/skills/`, you will see the skill twice — there is no dedup, so remove the manual one. And third-party marketplaces do not auto-update, so run `/plugin marketplace update travel-buddy` to pick up new releases.
+
+**Option 3 — clone and symlink** (best if you intend to edit it; changes take effect immediately, which the plugin cache does not give you):
 
 ```bash
 git clone --depth 1 https://github.com/dong845/travel-buddy.git ~/code_project/travel-buddy
 ln -s ~/code_project/travel-buddy ~/.claude/skills/travel-buddy
+```
+
+Or clone straight into the skills folder if you don't need it elsewhere:
+
+```bash
+git clone --depth 1 https://github.com/dong845/travel-buddy.git ~/.claude/skills/travel-buddy
 ```
 
 Then create the workspace once:

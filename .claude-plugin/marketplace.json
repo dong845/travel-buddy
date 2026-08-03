@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "travel-buddy",
+  "owner": {
+    "name": "Leo-Lyu",
+    "url": "https://github.com/dong845"
+  },
+  "metadata": {
+    "description": "travel-buddy skill — destination discovery and booking-ready itinerary generation for Claude Code and Codex",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "travel-buddy",
+      "source": "./",
+      "description": "Decide where to go before building the itinerary: hard-filter destinations before scoring them, verify every fare, timetable and entry rule against a live source, and ship a self-contained booking-ready HTML plan.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Leo-Lyu",
+        "url": "https://github.com/dong845"
+      },
+      "homepage": "https://github.com/dong845/travel-buddy",
+      "repository": "https://github.com/dong845/travel-buddy",
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": [
+        "travel",
+        "travel-planner",
+        "itinerary",
+        "trip-planning",
+        "destination-discovery",
+        "agent-skill",
+        "booking-ready-html",
+        "local-first",
+        "python"
+      ]
+    }
+  ]
+}

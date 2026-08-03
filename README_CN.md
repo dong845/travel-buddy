@@ -13,6 +13,11 @@
   <img alt="数据" src="https://img.shields.io/badge/%E6%95%B0%E6%8D%AE-100%25_%E6%9C%AC%E5%9C%B0-16a34a">
 </p>
 
+<p align="center">
+  <a href="#安装"><img alt="用 npx skills 安装" src="https://img.shields.io/badge/npx_skills-add_dong845%2Ftravel--buddy-000000"></a>
+  <a href="#安装"><img alt="作为 Claude Code 插件安装" src="https://img.shields.io/badge/Claude_Code-%E4%BD%9C%E4%B8%BA%E6%8F%92%E4%BB%B6%E5%AE%89%E8%A3%85-5b5bd6"></a>
+</p>
+
 > **一个不肯编价格、不肯在没确认末班车之前说「可以订了」、也不肯在证明目的地根本到得了之前就给你排逐日行程的旅行助手。**
 
 大多数 AI 行程工具，面对「我有 7 天、1500 欧」会直接给你一份信心十足的逐日行程 —— 而那座城市你从没选过。travel-buddy 把这当成两件事：先决定**去哪儿**（生成候选、做硬过滤、并说明淘汰了什么、为什么），只有目的地真正定下来之后才开始建行程，然后交付一个**自包含的 HTML 页面**：真实路线、真实预订链接、以及每一行都带来源和查询时间的人均预算。
@@ -136,20 +141,37 @@ python scripts/validate_trip_html.py final.html \
 
 ### 安装
 
-需要 **Python 3.10+**（开发环境为 3.13）。**不需要 pip 装任何东西** —— 所有脚本只用标准库。
+需要 **Python 3.10+**（开发环境为 3.13）。**不需要 pip 装任何东西** —— 所有脚本只用标准库。三条路任选其一。
 
-仓库根目录本身**就是**这个 skill，所以安装 = 放到你的 agent 会去找 skill 的位置：
+**方式一 —— 用 [`npx skills`](https://github.com/vercel-labs/skills) 一行装完**（最省事）：
 
 ```bash
-# Claude Code —— 直接克隆进 skills 目录
-git clone --depth 1 https://github.com/dong845/travel-buddy.git ~/.claude/skills/travel-buddy
+npx skills add dong845/travel-buddy
 ```
 
-想和其他项目放一起再软链（作者本人就是这么用的，改完立刻生效）：
+它会询问 agent 与安装范围。加 `-g` 全局安装（对所有项目生效），加 `-a claude-code`（或 `-a codex`）跳过 agent 选择，加 `-y` 全程非交互，加 `-l` 只列出发现的 skill 而不安装。仓库根目录本身**就是**这个 skill，所以整个目录会被复制进你的 skills 文件夹。
+
+**方式二 —— 作为 Claude Code 插件安装**（可管理更新，也是唯一能覆盖云端会话的方式）：
+
+```text
+/plugin marketplace add dong845/travel-buddy
+/plugin install travel-buddy@travel-buddy
+/reload-plugins
+```
+
+插件里的 skill 带命名空间，所以调用形式是 `/travel-buddy:travel-buddy`。两点要注意：如果你**同时**在 `~/.claude/skills/` 里还留着手动装的副本，这个 skill 会出现两次 —— 系统不做去重，请把手动那份删掉。另外第三方 marketplace **默认不自动更新**，要拿新版本得跑 `/plugin marketplace update travel-buddy`。
+
+**方式三 —— 克隆 + 软链**（打算改代码就选这个：改完立即生效，插件缓存做不到这一点）：
 
 ```bash
 git clone --depth 1 https://github.com/dong845/travel-buddy.git ~/code_project/travel-buddy
 ln -s ~/code_project/travel-buddy ~/.claude/skills/travel-buddy
+```
+
+不需要放在别处的话，也可以直接克隆进 skills 目录：
+
+```bash
+git clone --depth 1 https://github.com/dong845/travel-buddy.git ~/.claude/skills/travel-buddy
 ```
 
 然后初始化一次工作区：
