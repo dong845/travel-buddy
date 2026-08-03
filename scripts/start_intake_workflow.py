@@ -48,6 +48,7 @@ def main() -> int:
     parser.add_argument("--workspace", default=str(DEFAULT_WORKSPACE), help="Workspace containing reusable profiles and trip plans")
     parser.add_argument("--profile", default=None, help="Existing reusable profile ID; required only when more than one valid profile exists")
     parser.add_argument("--assistant", choices=("auto", "codex", "claude", "none"), default="auto", help="Assistant to start automatically after the current-trip form submits")
+    parser.add_argument("--edit-profile", action="store_true", help="Reopen the saved profile for review and editing before the current-trip form")
     args = parser.parse_args()
     workspace = Path(args.workspace).expanduser()
     profiles = valid_profiles(workspace)
@@ -74,6 +75,10 @@ def main() -> int:
         return 2
 
     print(f"USING REUSABLE PROFILE: {selected}", flush=True)
+    if args.edit_profile:
+        print("REOPENING THE SAVED PROFILE FOR EDITING; the current-trip form follows automatically.", flush=True)
+        return run([sys.executable, str(PROFILE_INTAKE_SERVER), "--workspace", str(workspace),
+                    "--next-trip", "--overwrite", "--edit", str(selected), "--assistant", args.assistant])
     print("STARTING CURRENT-TRIP INTAKE WITH SAVED STABLE DEFAULTS", flush=True)
     return run([sys.executable, str(TRIP_INTAKE_SERVER), "--workspace", str(workspace), "--profile", str(selected), "--assistant", args.assistant])
 

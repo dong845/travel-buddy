@@ -27,6 +27,24 @@ DISCOVERY_RUNNER = Path(__file__).resolve().with_name("run_destination_discovery
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+# The scope question now asks about visa burden rather than geography, because
+# "domestic vs cross-border" was standing in for "does this need a visa" and got it
+# wrong for anyone whose residence permit gives them free movement. Legacy values from
+# intakes saved before that change are still accepted and mapped forward.
+TRIP_SCOPES = ("home_country_only", "visa_free_only", "any_including_visa")
+LEGACY_TRIP_SCOPES = {
+    "domestic": "home_country_only",
+    "cross_border": "any_including_visa",
+    "domestic_or_cross_border": "any_including_visa",
+}
+
+
+def normalized_scope(value: object) -> str | None:
+    if value in TRIP_SCOPES:
+        return str(value)
+    return LEGACY_TRIP_SCOPES.get(str(value))
+
+
 def parse_date(value: object) -> date | None:
     if not isinstance(value, str):
         return None
@@ -63,6 +81,10 @@ def profile_defaults_from_profile(profile: object) -> dict[str, object]:
         "self_drive_preference": logistics.get("self_drive_preference"),
         "passport_nationality": identity.get("nationality"),
         "legal_residence": identity.get("legal_residence"),
+        # Residence status is what actually decides whether a destination needs a visa;
+        # nationality alone cannot answer that for a permit holder.
+        "residence_country": identity.get("residence_country"),
+        "residence_status": identity.get("residence_status"),
         "experience_direction": preferences.get("experience_direction"),
         "natural_subtypes": preferences.get("natural_subtypes", []),
         "human_cultural_subtypes": preferences.get("human_cultural_subtypes", []),
@@ -256,10 +278,10 @@ def validate_intake(value: object) -> list[str]:
         # Otherwise a "fixed" scope starts a Construction handoff for a destination that
         # was never named.
         errors.append("选择了已固定或有偏好的目的地时，必须填写具体地点。")
-    trip_scope = geography.get("scope")
-    if trip_scope not in {"domestic", "cross_border", "domestic_or_cross_border"}:
-        errors.append("需要选择本次出行范围。")
-    entry_assessment_required = trip_scope in {"cross_border", "domestic_or_cross_border"}
+    trip_scope = normalized_scope(geography.get("scope"))
+    if trip_scope is None:
+        errors.append("需要选择这次愿意跑多远。")
+    entry_assessment_required = trip_scope in {"visa_free_only", "any_including_visa"}
     if geography.get("entry_assessment_required") is not entry_assessment_required:
         errors.append("trip_geography.entry_assessment_required 与所选出行范围不一致。")
     if experience.get("direction") not in {"natural", "human_cultural", "balance"}:
@@ -294,17 +316,20 @@ def validate_intake(value: object) -> list[str]:
         else:
             for entry in entries:
                 if not isinstance(entry, dict) or not all(isinstance(entry.get(key), str) and entry[key].strip() for key in ("traveler_label", "passport_nationality", "legal_residence")):
-                    errors.append("每行入境信息都需要旅客称呼、护照国籍和合法居留地。")
+                    errors.append("每行身份信息都需要称呼、护照国籍和现居国。")
+                    break
+                if entry.get("residence_status") is not None and not isinstance(entry.get("residence_status"), str):
+                    errors.append("身份类别必须是文字或留空。")
                     break
         if feasibility.get("visa_tolerance") not in {"visa_free_only", "evisa_acceptable", "visa_process_acceptable"}:
-            errors.append("跨境旅行需要选择可接受的入境方式。")
+            errors.append("可接受的签证程度必须由「这次愿意跑多远」推导得出。")
         # Passport validity is a hard entry filter in SKILL.md; asking for the status
         # (never the number or the date) is what makes that filter checkable.
         if feasibility.get("passport_validity_status") not in {"valid_through_trip", "not_sure", "needs_renewal"}:
             errors.append("跨境旅行需要确认护照在行程结束后是否仍然有效。")
     else:
         if entries not in ([], None):
-            errors.append("仅国内旅行不应收集同行人的入境信息。")
+            errors.append("只在常住国内出行时不应收集同行人的身份信息。")
         if (
             feasibility.get("visa_tolerance") != "not_applicable_domestic"
             or feasibility.get("entry_status") != "not_applicable_domestic"

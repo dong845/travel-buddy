@@ -8,6 +8,8 @@
   },
   "identity_and_language": {
     "nationality": null,
+    "residence_country": null,
+    "residence_status": null,
     "legal_residence": null,
     "preferred_response_language": null,
     "languages_spoken": [],

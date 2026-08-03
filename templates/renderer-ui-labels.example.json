@@ -157,5 +157,10 @@
   "group_flight": "Flight options",
   "group_hotel": "Accommodation options",
   "group_ticket": "Ticket options",
-  "group_car": "Rental-car options"
+  "group_car": "Rental-car options",
+  "entry_heading": "Entry eligibility",
+  "entry_basis": "Basis: ",
+  "entry_no_visa_required": "no visa required",
+  "entry_visa_required": "visa required in advance",
+  "entry_unverified": "unverified"
 }

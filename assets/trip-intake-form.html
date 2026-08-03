@@ -88,7 +88,7 @@
           <div><label for="currency">预算币种 <span>必填</span></label><select id="currency" required><option value="">请选择</option><option value="CNY">CNY 人民币</option><option value="EUR">EUR 欧元</option><option value="USD">USD 美元</option><option value="GBP">GBP 英镑</option><option value="JPY">JPY 日元</option><option value="KRW">KRW 韩元</option><option value="HKD">HKD 港币</option><option value="TWD">TWD 新台币</option><option value="SGD">SGD 新加坡元</option><option value="AUD">AUD 澳元</option><option value="CAD">CAD 加元</option><option value="THB">THB 泰铢</option><option value="OTHER">其他币种（自定义）</option></select></div>
           <div id="custom-currency-wrap" hidden><label for="custom-currency">币种代码 <span>三位字母，例如 CHF</span></label><input id="custom-currency" maxlength="3" placeholder="例如：CHF"></div>
           <div><label for="budget-range">人均预算范围 <span>必填</span></label><select id="budget-range" required disabled><option value="">请先选择预算币种</option></select><p id="range-help" class="hint">范围为每位旅行者的人均预算；也可选择自定义。</p></div>
-          <div id="custom-budget-wrap" hidden><label for="custom-budget">自定义人均预算范围 <span>例如：600–750</span></label><input id="custom-budget" placeholder="例如：600–750"></div>
+          <div id="custom-budget-wrap" hidden><label for="custom-budget">↳ 填写具体数字 <span>承接上一栏的「自定义范围」</span></label><input id="custom-budget" placeholder="例如：600–750"></div>
           <div><label for="coverage">人均预算是否包含交通和住宿 <span>必填</span></label><select id="coverage" required><option value="">请选择</option><option value="all_in">交通、住宿和当地开销</option><option value="transport_and_stay">交通和住宿</option><option value="land_only">不含往返交通</option><option value="unknown">暂未确定</option></select></div>
           <div><label for="comfort">住宿舒适度</label><select id="comfort"><option value="">未指定</option><option>经济实用</option><option>舒适中档</option><option>精品/特色</option><option>高端</option></select></div>
         </div>
@@ -97,15 +97,16 @@
       <section class="section"><h2>4. 出行范围、交通与气候条件</h2>
         <p class="hint">国内旅行不需要填写入境信息；只有可能出境时才收集国籍、合法居留地和可接受签证方式。无论国内或海外，都会比较飞机、铁路、长途巴士、轮渡和自驾等实际可行的方式。</p>
         <div class="grid">
-          <div><label for="travel-scope">本次出行范围 <span>必填</span></label><select id="travel-scope" required><option value="">请选择</option><option value="domestic">仅国内旅行（无需入境信息）</option><option value="cross_border">跨境/海外旅行</option><option value="domestic_or_cross_border">国内和海外都可比较</option></select></div>
+          <div><label for="travel-scope">这次愿意跑多远 <span>必填</span></label><select id="travel-scope" required><option value="">请选择</option><option value="home_country_only">只在常住国内</option><option value="visa_free_only">可以出国，但只去不用提前办签证的地方</option><option value="any_including_visa">哪儿都行，需要提前办签证也接受</option></select></div>
+          <div id="visa-effort-wrap" hidden><label for="visa-tolerance">↳ 能接受到什么程度 <span>承接上一栏</span></label><select id="visa-tolerance"><option value="evisa_acceptable">只接受电子签/落地签</option><option value="visa_process_acceptable">可以提前去办正式签证</option></select></div>
           <div><label for="travel-time">可接受的最长单程总时长 <span>必填，含候车/转机/地面接驳</span></label><select id="travel-time" required><option value="">请选择</option><option value="不超过 3 小时">不超过 3 小时</option><option value="不超过 6 小时">不超过 6 小时</option><option value="不超过 10 小时">不超过 10 小时</option><option value="不超过 15 小时">不超过 15 小时</option><option value="不超过 24 小时">不超过 24 小时</option><option value="无明确上限，以舒适为准">无明确上限，以舒适为准</option></select></div>
           <div><label for="transport-priority">跨城交通优先级</label><select id="transport-priority"><option value="">综合比较</option><option value="shortest_total_time">总耗时最短</option><option value="lowest_reasonable_cost">合理价格优先</option><option value="fewest_transfers">少换乘优先</option><option value="comfort_and_scenery">舒适/沿途景观优先</option></select></div>
         </div>
         <div id="entry-requirements" hidden>
-          <p class="notice"><strong>仅跨境时需要：</strong>这些信息只用于判断入境可行性。请按每位同行人各写一行；只填写国籍和合法居留地，不要填写护照号、证件照片、签发/到期日或支付信息。</p>
-          <label for="traveler-entry">每位同行人的国籍与合法居留地 <span>格式：旅客称呼 | 护照国籍 | 合法居留地</span></label><textarea id="traveler-entry" placeholder="例如：&#10;旅客 1 | 中国 | 中国&#10;旅客 2 | 中国 | 中国"></textarea>
+          <p class="notice"><strong>出国时才需要：</strong>只用于判断哪些国家不用另办签证。每位同行人一行，只写国籍、现居国和在现居国的身份类别——<strong>不要</strong>填护照号、证件照片、签发/到期日或支付信息。有档案的话第一行会自动带入。</p>
+          <label for="traveler-entry">每位同行人的身份 <span>格式：称呼 | 护照国籍 | 现居国 | 身份类别</span></label><textarea id="traveler-entry" placeholder="例如：&#10;旅客 1 | 中国 | 荷兰 | 成员国居留卡&#10;旅客 2 | 荷兰 | 荷兰 | 欧盟公民"></textarea>
+          <p class="hint">身份类别可写：欧盟公民、成员国居留卡、欧盟长期居留、短期签证、其他。不确定就写「不确定」。</p>
           <div class="grid">
-            <div><label for="visa-tolerance">可接受的入境方式 <span>必填</span></label><select id="visa-tolerance"><option value="">请选择</option><option value="visa_free_only">仅免签/免办签证</option><option value="evisa_acceptable">可接受电子签/落地签</option><option value="visa_process_acceptable">可接受提前办理签证</option></select></div>
             <div><label for="passport-validity">护照在行程结束后是否仍有效 6 个月 <span>必填，不要填号码或日期</span></label><select id="passport-validity"><option value="">请选择</option><option value="valid_through_trip">是，所有同行人都满足</option><option value="not_sure">不确定，需要核对</option><option value="needs_renewal">否，有人需要换发</option></select></div>
           </div>
         </div>
@@ -221,7 +222,16 @@
       }
 
       function fieldError(id, message) { const error = new Error(message); error.fieldId = id; return error; }
-      function requiresEntryAssessment() { return ["cross_border", "domestic_or_cross_border"].includes(text("travel-scope")); }
+      // Geography no longer stands in for visa burden: entry is assessed whenever the
+      // trip may leave the country of residence, and how much visa effort is acceptable
+      // follows from the same answer instead of being a separate question.
+      function requiresEntryAssessment() { return ["visa_free_only", "any_including_visa"].includes(text("travel-scope")); }
+      function visaTolerance() {
+        const scope = text("travel-scope");
+        if (scope === "visa_free_only") return "visa_free_only";
+        if (scope === "any_including_visa") return text("visa-tolerance") || "visa_process_acceptable";
+        return "not_applicable_domestic";
+      }
 
       function entryProfiles(required) {
         if (!required) return [];
@@ -229,8 +239,8 @@
         if (!rows.length) throw fieldError("traveler-entry", "跨境或海外筛选需要每位同行人的国籍与合法居留地。");
         return rows.map((row, index) => {
           const parts = row.split(/[|｜]/).map((part) => part.trim());
-          if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) throw fieldError("traveler-entry", `第 ${index + 1} 位同行人的格式应为：旅客称呼 | 护照国籍 | 合法居留地。`);
-          return { traveler_label:parts[0], passport_nationality:parts[1], legal_residence:parts[2] };
+          if (parts.length < 3 || !parts[0] || !parts[1] || !parts[2]) throw fieldError("traveler-entry", `第 ${index + 1} 位同行人的格式应为：称呼 | 护照国籍 | 现居国 | 身份类别（身份类别可留空）。`);
+          return { traveler_label:parts[0], passport_nationality:parts[1], legal_residence:parts[2], residence_status:parts[3] || null };
         });
       }
 
@@ -244,6 +254,7 @@
       function updateConditionalPanels() {
         const entryNeeded = requiresEntryAssessment();
         $("entry-requirements").hidden = !entryNeeded;
+        $("visa-effort-wrap").hidden = text("travel-scope") !== "any_including_visa";
         const anchored = ["fixed", "anchored"].includes(text("scope"));
         $("places-hint").textContent = anchored ? "必填，逗号分隔" : "逗号分隔，可选";
         refreshRanking();
@@ -322,8 +333,11 @@
         selectIfBlank("google-services-access", profileDefaults.google_services_access);
         const savedServiceNotes = [profileDefaults.regional_service_notes, profileDefaults.booking_access_notes].filter((value) => typeof value === "string" && value.trim()).join("；");
         setIfBlank("service-access-notes", savedServiceNotes);
-        if (!text("traveler-entry") && typeof profileDefaults.passport_nationality === "string" && typeof profileDefaults.legal_residence === "string" && profileDefaults.passport_nationality.trim() && profileDefaults.legal_residence.trim()) {
-          $("traveler-entry").value = `旅客 1 | ${profileDefaults.passport_nationality.trim()} | ${profileDefaults.legal_residence.trim()}`;
+        const statusLabels = { eu_eea_ch_citizen:"欧盟公民", member_state_residence_permit:"成员国居留卡", eu_long_term_resident:"欧盟长期居留", short_stay_visa_or_visa_free:"短期签证", other_or_unspecified:"其他" };
+        const residenceCountry = profileDefaults.residence_country || profileDefaults.legal_residence;
+        if (!text("traveler-entry") && typeof profileDefaults.passport_nationality === "string" && profileDefaults.passport_nationality.trim() && typeof residenceCountry === "string" && residenceCountry.trim()) {
+          const label = statusLabels[profileDefaults.residence_status] || "不确定";
+          $("traveler-entry").value = `旅客 1 | ${profileDefaults.passport_nationality.trim()} | ${residenceCountry.trim()} | ${label}`;
         }
         if (typeof profileDefaults.profile_id === "string" && profileDefaults.profile_id) {
           const note = $("saved-profile-note");
@@ -341,7 +355,7 @@
         const tripScope = text("travel-scope");
         const entryNeeded = requiresEntryAssessment();
         const required = [["city", "出发城市"], ["country", "出发国家/地区"], ["count", "同行人数"], ["currency", "预算币种"], ["coverage", "人均预算涵盖范围"], ["travel-scope", "本次出行范围"], ["travel-time", "最长单程总时长"], ["scope", "目的地状态"], ["direction", "景色方向"]];
-        if (entryNeeded) required.push(["visa-tolerance", "可接受的入境方式"], ["passport-validity", "护照有效期确认"]);
+        if (entryNeeded) required.push(["passport-validity", "护照有效期确认"]);
         const missing = required.filter(([id]) => !text(id));
         if (missing.length) throw fieldError(missing[0][0], `请补充：${missing.map(([, label]) => label).join("、")}`);
         if (text("currency") === "OTHER" && !/^[A-Za-z]{3}$/.test(text("custom-currency"))) throw fieldError("custom-currency", "自定义币种请填写三位字母代码，例如 CHF。");
@@ -386,13 +400,17 @@
           transport_preferences:{ preferred_modes:modes, priority:text("transport-priority") || null, willing_to_self_drive:modes.includes("self_drive"), luggage_or_baggage_needs:text("baggage") || null, cabin_preference:text("cabin") || null, flight_time_preference:text("flight-time") || null, rail_preference:text("rail-preference") || null, bus_comfort_tolerance:text("bus-comfort") || null, ferry_acceptable:modes.includes("ferry") },
           regional_service_access:{ selection_preference:"auto_by_destination", preferred_map_apps:list("preferred-map-apps"), preferred_booking_platforms:list("preferred-booking-platforms"), services_to_avoid:list("services-to-avoid"), google_services_access:text("google-services-access") || "unknown", notes:text("service-access-notes") || null },
           stay_preferences:{ room_count:roomCount, lodging_style:text("comfort") || null, location_priority:text("stay-location") || null, breakfast_preference:text("breakfast") || null, cancellation_preference:text("cancellation") || null },
-          feasibility:{ entry_assessment_required:entryNeeded, traveler_entry_profiles:travelers, passport_nationality:primaryTraveler.passport_nationality || null, legal_residence:primaryTraveler.legal_residence || null, passport_validity_status:entryNeeded ? text("passport-validity") : "not_applicable_domestic", entry_status:entryNeeded ? "unknown" : "not_applicable_domestic", visa_tolerance:entryNeeded ? text("visa-tolerance") : "not_applicable_domestic", climate_preferences:climate, dietary_or_religious_needs:list("dietary"), safety_or_connectivity_needs:[] },
+          feasibility:{ entry_assessment_required:entryNeeded, traveler_entry_profiles:travelers, passport_nationality:primaryTraveler.passport_nationality || null, legal_residence:primaryTraveler.legal_residence || null, residence_status:primaryTraveler.residence_status || profileDefaults.residence_status || null, passport_validity_status:entryNeeded ? text("passport-validity") : "not_applicable_domestic", entry_status:entryNeeded ? "unknown" : "not_applicable_domestic", visa_tolerance:visaTolerance(), climate_preferences:climate, dietary_or_religious_needs:list("dietary"), safety_or_connectivity_needs:[] },
           constraint_registry:[], open_questions:[], assumptions:[]
         };
       }
 
       const FIELD_IDS = ["city","country","start-date","end-date","month","days","flexibility","fixed-commitments","airports","scope","places","excluded","purpose","count","composition","ages","mobility","dietary","currency","custom-currency","budget-range","custom-budget","coverage","comfort","travel-scope","travel-time","transport-priority","traveler-entry","visa-tolerance","passport-validity","climate-notes","direction","pace","intensity","rank-1","rank-2","avoid","room-count","stay-location","breakfast","cancellation","rail-preference","bus-comfort","cabin","baggage","flight-time","google-services-access","preferred-map-apps","preferred-booking-platforms","services-to-avoid","service-access-notes"];
 
+      let draftTimer = null;
+      // `change` alone only fires on blur, so anything typed and not yet left behind
+      // was missing from the draft. Debounced `input` keeps free-text fields safe.
+      function scheduleDraftSave() { window.clearTimeout(draftTimer); draftTimer = window.setTimeout(saveDraft, 400); }
       function saveDraft() {
         try {
           const values = Object.fromEntries(FIELD_IDS.map((id) => [id, $(id) ? $(id).value : ""]));
@@ -407,7 +425,10 @@
           if (!draft || !draft.values) return;
           for (const [id, value] of Object.entries(draft.values)) if ($(id) && value) $(id).value = value;
           updateCurrencyMode();
-          for (const [id, value] of Object.entries(draft.values)) if (id === "budget-range" && $(id) && value) $(id).value = value;
+          // Re-apply after the option list is rebuilt, then sync the dependent input.
+          if (draft.values["budget-range"]) $("budget-range").value = draft.values["budget-range"];
+          if (draft.values["custom-budget"]) $("custom-budget").value = draft.values["custom-budget"];
+          updateCustomBudget();
           for (const [name, values] of Object.entries(draft.boxes || {})) {
             document.querySelectorAll(`input[name="${name}"]`).forEach((input) => { input.checked = values.includes(input.value); });
           }
@@ -437,10 +458,15 @@
       $("travel-scope").addEventListener("change", updateConditionalPanels);
       $("scope").addEventListener("change", updateConditionalPanels);
       document.querySelectorAll('input[name="natural"],input[name="cultural"]').forEach((input) => input.addEventListener("change", refreshRanking));
-      document.querySelectorAll("input,select,textarea").forEach((input) => input.addEventListener("change", saveDraft));
+      document.querySelectorAll("input,select,textarea").forEach((input) => {
+        input.addEventListener("change", saveDraft);
+        input.addEventListener("input", scheduleDraftSave);
+      });
       applyProfileDefaults();
-      restoreDraft();
       updateCurrencyMode();
+      // restoreDraft must run last: updateCurrencyMode() rebuilds the budget-range
+      // options, which silently cleared a just-restored selection.
+      restoreDraft();
       updateConditionalPanels();
 
       $("trip-form").addEventListener("submit", async (event) => {
@@ -489,7 +515,7 @@
         $("count").value = "2"; $("composition").value = "情侣/两人"; $("ages").value = ""; $("mobility").value = ""; $("dietary").value = "不吃辣";
         $("currency").value = "CNY"; updateCurrencyMode(); rangeSelect.value = "6000|10000"; updateCustomBudget();
         $("coverage").value = "all_in"; $("comfort").value = "舒适中档";
-        $("travel-scope").value = "domestic"; $("travel-time").value = "不超过 10 小时"; $("transport-priority").value = "fewest_transfers";
+        $("travel-scope").value = "visa_free_only"; $("travel-time").value = "不超过 10 小时"; $("transport-priority").value = "fewest_transfers";
         $("direction").value = "balance"; $("pace").value = "适中"; $("intensity").value = "短距离步行"; $("avoid").value = "频繁换酒店";
         $("room-count").value = "1"; $("stay-location").value = "邻近地铁/车站"; $("breakfast").value = "最好含早"; $("cancellation").value = "优先可取消";
         $("rail-preference").value = "高铁/动车优先"; $("bus-comfort").value = "仅短途接驳（约 3 小时内）";

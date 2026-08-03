@@ -8,6 +8,10 @@ Treat the following as volatile: fares, routes, lodging prices, weather forecast
 
 If a tool or source is unavailable, say what is unverified. Substitute a range or a decision checklist; do not invent exact prices, availability, or legal eligibility.
 
+## Batch independent lookups
+
+Research calls that do not depend on each other must be issued together, not one after another. Climate normals, direct-route existence, operator timetables, opening hours, ticket prices, and venue checks are all independent of one another; running fifteen of them sequentially spends fifteen round trips to learn what three batches would have returned. Sequence only where a later query genuinely needs an earlier answer — for example, researching a city's restaurants after the shortlist has selected that city.
+
 ## Evaluation sequence
 
 1. Apply any consented profile’s explicit `never_recommend` place exclusions before candidate generation; do not treat past visits as exclusions unless the user said not to revisit.

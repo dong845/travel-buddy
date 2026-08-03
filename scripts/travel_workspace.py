@@ -141,6 +141,12 @@ def validate_profile(profile: object) -> list[str]:
             for field in ("booking_access_notes", "notes"):
                 if digital_access.get(field) is not None and not isinstance(digital_access.get(field), str):
                     errors.append(f"digital_travel_access.{field} must be a string or null.")
+    identity = profile.get("identity_and_language")
+    if isinstance(identity, dict) and identity.get("residence_status") not in (
+        None, "", "eu_eea_ch_citizen", "member_state_residence_permit",
+        "eu_long_term_resident", "short_stay_visa_or_visa_free", "other_or_unspecified",
+    ):
+        errors.append("identity_and_language.residence_status is invalid.")
     history = profile.get("travel_history", {})
     if isinstance(history, dict):
         for key in ("visited_places", "wish_list", "excluded_places"):

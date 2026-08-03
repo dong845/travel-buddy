@@ -23,8 +23,9 @@ MAX_BODY_BYTES = 256 * 1024
 
 
 class IntakeServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], workspace: Path, overwrite: bool, next_trip: bool, assistant_mode: str) -> None:
+    def __init__(self, address: tuple[str, int], workspace: Path, overwrite: bool, next_trip: bool, assistant_mode: str, existing_profile: dict | None = None) -> None:
         super().__init__(address, IntakeHandler)
+        self.existing_profile = existing_profile
         self.workspace = workspace
         self.overwrite = overwrite
         self.next_trip = next_trip
@@ -54,7 +55,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         page = FORM.read_text(encoding="utf-8")
-        startup = json.dumps({"submit_url": "/submit", "next_trip": self.server.next_trip}).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+        startup = json.dumps({"submit_url": "/submit", "next_trip": self.server.next_trip, "existing_profile": self.server.existing_profile}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
         page = page.replace("<head>", f'<head><script>window.TRAVEL_BUDDY_PROFILE_INTAKE={startup};</script>', 1)
         body = page.encode("utf-8")
         self.send_response(HTTPStatus.OK)
@@ -131,13 +132,21 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=0, help="Loopback port; 0 chooses an available port")
     parser.add_argument("--overwrite", action="store_true", help="Explicitly replace a profile with the same name")
     parser.add_argument("--next-trip", action="store_true", help="After a saved profile, automatically start the current-trip intake form")
+    parser.add_argument("--edit", default=None, help="Existing profile JSON to load into the form for review and editing")
     parser.add_argument("--assistant", choices=("auto", "codex", "claude", "none"), default="auto", help="Assistant to start automatically after the current-trip form submits")
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
     workspace = Path(args.workspace).expanduser()
+    existing: dict | None = None
+    if args.edit:
+        try:
+            existing = json.loads(Path(args.edit).expanduser().resolve(strict=True).read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"ERROR: Could not read the profile to edit: {exc}", file=sys.stderr)
+            return 2
     try:
-        server = IntakeServer(("127.0.0.1", args.port), workspace, args.overwrite, args.next_trip, args.assistant)
+        server = IntakeServer(("127.0.0.1", args.port), workspace, args.overwrite, args.next_trip, args.assistant, existing)
     except OSError as exc:
         print(f"ERROR: Could not start local intake server: {exc}", file=sys.stderr)
         return 2

@@ -64,7 +64,7 @@
     </header>
     <nav class="journey-rail" aria-label="首次使用流程"><span class="journey-step active"><b>01</b>旅行档案</span><span class="journey-line" aria-hidden="true"></span><span class="journey-step"><b>02</b>本次行程</span></nav>
 
-    <div class="notice"><strong>隐私边界：</strong>请不要填写护照号/照片、签证照片、银行卡或账号密码、精确住址。国籍和法定居住地可以填写，用于后续判断签证可行性。</div>
+    <div class="notice"><strong>隐私边界：</strong>请不要填写护照号/照片、签证照片、银行卡或账号密码、精确住址。国籍、现居国家和「在现居国的身份」可以填写——只记类别（例如「成员国居留卡」），不记证件号、签发日或有效期，用于判断去哪些国家不用另办签证。</div>
 
     <form id="profile-form" class="profile-flow" novalidate>
       <section class="section">
@@ -80,8 +80,10 @@
       <section class="section">
         <h2>身份、语言与出发条件</h2>
         <div class="grid">
-          <div><label for="nationality">国籍</label><input id="nationality" placeholder="例如：中国"></div>
-          <div><label for="residence">法定居住地</label><input id="residence" placeholder="例如：中国上海"></div>
+          <div><label for="nationality">护照国籍</label><input id="nationality" placeholder="例如：中国"></div>
+          <div><label for="residence-country">现居国家/地区 <span>你实际长期居住的国家</span></label><input id="residence-country" placeholder="例如：荷兰"></div>
+          <div><label for="residence-status">在现居国的身份 <span>决定去哪些国家不用另办签证</span></label><select id="residence-status"><option value="">未指定</option><option value="eu_eea_ch_citizen">欧盟/欧洲经济区/瑞士公民</option><option value="member_state_residence_permit">第三国国籍 + 成员国居留卡（如荷兰居留卡）</option><option value="eu_long_term_resident">第三国国籍 + 欧盟长期居留</option><option value="short_stay_visa_or_visa_free">短期签证或免签停留</option><option value="other_or_unspecified">其他/不便说明</option></select></div>
+          <div><label for="residence">法定居住地 <span>可选，与现居国不同时才填</span></label><input id="residence" placeholder="例如：户籍所在地"></div>
           <div><label for="languages">会使用的语言 <span>逗号分隔</span></label><input id="languages" placeholder="中文, English"></div>
           <div><label for="language-comfort">当地语言适应度</label><select id="language-comfort"><option value="">未指定</option><option>需要中文/英文支持</option><option>可用翻译工具</option><option>愿意沉浸当地语言</option></select></div>
           <div><label for="home-city">常住城市</label><input id="home-city" placeholder="例如：上海"></div>
@@ -154,7 +156,7 @@
         return {
           profile_version: "1.0", profile_id: profileId,
           storage_consent: { personal_profile: true, confirmed_at: today(), purpose: "Reuse travel preferences and constraints across future planning requests." },
-          identity_and_language: { nationality: text("nationality") || null, legal_residence: text("residence") || null, preferred_response_language: text("response-language") || null, languages_spoken: list("languages"), local_language_comfort: text("language-comfort") || null },
+          identity_and_language: { nationality: text("nationality") || null, residence_country: text("residence-country") || null, residence_status: text("residence-status") || null, legal_residence: text("residence") || text("residence-country") || null, preferred_response_language: text("response-language") || null, languages_spoken: list("languages"), local_language_comfort: text("language-comfort") || null },
           home_and_logistics: { home_city: text("home-city") || null, home_country: text("home-country") || null, acceptable_departure_airports: list("airports"), default_currency: text("currency") || null, typical_cabin_or_seat_preference: text("cabin") || null, self_drive_preference: text("self-drive") || null },
           digital_travel_access: { preferred_map_apps: list("map-apps"), preferred_booking_platforms: list("booking-platforms"), services_to_avoid: list("services-to-avoid"), google_services_access: text("google-access") || "unknown", booking_access_notes: text("booking-access-notes") || null, notes: text("service-notes") || null },
           travel_history: {
@@ -190,7 +192,45 @@
         }
       });
       form.addEventListener("reset", () => { profile = null; preview.textContent = "填写后点击“提交并保存旅行档案”。"; status.textContent = ""; });
-      $("fill-example").addEventListener("click", () => { $("profile-id").value = "example-traveler"; $("consent").checked = true; $("response-language").value = "中文"; $("nationality").value = "示例国籍"; $("residence").value = "示例居住地"; $("languages").value = "中文, English"; $("home-city").value = "示例城市"; $("home-country").value = "示例国家"; $("airports").value = "AAA, BBB"; $("currency").value = "CNY"; $("map-apps").value = "高德地图, Google Maps"; $("booking-platforms").value = "携程, Trip.com"; $("google-access").value = "unavailable"; $("services-to-avoid").value = "需要 VPN 的服务"; $("booking-access-notes").value = "避免必须本地手机号或当地支付方式的渠道"; $("service-notes").value = "中国大陆路线优先高德地图"; $("visited").value = "东京 | city | 2024-04 | yes | 喜欢美食和步行"; $("wishlist").value = "冰岛 | country | 5 | 想看极光和火山"; $("excluded").value = "示例地点 | country | 目前不想去 | avoid_for_now"; $("direction").value = "balance"; $("pace").value = "适中"; $("lodging").value = "舒适中档"; $("location-priority").value = "景点步行范围"; $("self-drive").value = "可接受自驾"; $("cabin").value = "经济舱，可接受一次转机"; $("dietary").value = "无辣"; $("accessibility").value = "避免长距离步行"; $("avoid-list").value = "红眼航班"; document.querySelector('input[name="natural"][value="雪景/极光"]').checked = true; document.querySelector('input[name="cultural"][value="当地美食"]').checked = true; status.className = "status"; status.textContent = "已填入虚构示例；请替换为自己的信息后再生成。"; });
+      // When the workflow reopens this form to edit a saved profile, load it in so the
+      // traveller reviews and adjusts rather than retyping twenty-nine fields.
+      function loadExisting(existing) {
+        if (!existing || typeof existing !== "object") return;
+        const ident = existing.identity_and_language || {}, home = existing.home_and_logistics || {};
+        const access = existing.digital_travel_access || {}, prefs = existing.recurring_preferences || {};
+        const history = existing.travel_history || {};
+        const put = (id, value) => { if ($(id) && typeof value === "string" && value) $(id).value = value; };
+        const putList = (id, value) => { if ($(id) && Array.isArray(value) && value.length) $(id).value = value.join(", "); };
+        put("profile-id", existing.profile_id);
+        put("response-language", ident.preferred_response_language); put("nationality", ident.nationality);
+        put("residence-country", ident.residence_country); put("residence-status", ident.residence_status);
+        put("residence", ident.legal_residence); putList("languages", ident.languages_spoken);
+        put("language-comfort", ident.local_language_comfort);
+        put("home-city", home.home_city); put("home-country", home.home_country);
+        putList("airports", home.acceptable_departure_airports); put("currency", home.default_currency);
+        put("cabin", home.typical_cabin_or_seat_preference); put("self-drive", home.self_drive_preference);
+        putList("map-apps", access.preferred_map_apps); putList("booking-platforms", access.preferred_booking_platforms);
+        put("google-access", access.google_services_access); putList("services-to-avoid", access.services_to_avoid);
+        put("booking-access-notes", access.booking_access_notes); put("service-notes", access.notes);
+        put("direction", prefs.experience_direction); put("pace", prefs.pace); put("lodging", prefs.lodging_style);
+        put("location-priority", prefs.location_priority);
+        putList("dietary", prefs.food_and_dietary_preferences); putList("accessibility", prefs.accessibility_needs);
+        putList("avoid-list", prefs.avoid_list);
+        for (const [name, values] of [["natural", prefs.natural_subtypes], ["cultural", prefs.human_cultural_subtypes]]) {
+          if (!Array.isArray(values)) continue;
+          document.querySelectorAll(`input[name="${name}"]`).forEach((input) => { input.checked = values.includes(input.value); });
+        }
+        const rows = (items, mapper) => Array.isArray(items) ? items.map(mapper).join("\n") : "";
+        $("visited").value = rows(history.visited_places, (v) => [v.place, v.scope, v.visit_period, v.revisit_interest, v.notes].map((x) => x || "").join(" | "));
+        $("wishlist").value = rows(history.wish_list, (v) => [v.place, v.scope, v.priority, v.why].map((x) => x || "").join(" | "));
+        $("excluded").value = rows(history.excluded_places, (v) => [v.place, v.scope, v.reason, v.exclusion_strength].map((x) => x || "").join(" | "));
+        $("consent").checked = true;
+        status.className = "status";
+        status.textContent = "已载入现有档案，请修改后重新提交；提交会覆盖同名档案。";
+      }
+      loadExisting(intakeConfig.existing_profile);
+
+      $("fill-example").addEventListener("click", () => { $("profile-id").value = "example-traveler"; $("consent").checked = true; $("response-language").value = "中文"; $("nationality").value = "示例国籍"; $("residence-country").value = "示例现居国"; $("residence-status").value = "member_state_residence_permit"; $("residence").value = ""; $("languages").value = "中文, English"; $("home-city").value = "示例城市"; $("home-country").value = "示例国家"; $("airports").value = "AAA, BBB"; $("currency").value = "CNY"; $("map-apps").value = "高德地图, Google Maps"; $("booking-platforms").value = "携程, Trip.com"; $("google-access").value = "unavailable"; $("services-to-avoid").value = "需要 VPN 的服务"; $("booking-access-notes").value = "避免必须本地手机号或当地支付方式的渠道"; $("service-notes").value = "中国大陆路线优先高德地图"; $("visited").value = "东京 | city | 2024-04 | yes | 喜欢美食和步行"; $("wishlist").value = "冰岛 | country | 5 | 想看极光和火山"; $("excluded").value = "示例地点 | country | 目前不想去 | avoid_for_now"; $("direction").value = "balance"; $("pace").value = "适中"; $("lodging").value = "舒适中档"; $("location-priority").value = "景点步行范围"; $("self-drive").value = "可接受自驾"; $("cabin").value = "经济舱，可接受一次转机"; $("dietary").value = "无辣"; $("accessibility").value = "避免长距离步行"; $("avoid-list").value = "红眼航班"; document.querySelector('input[name="natural"][value="雪景/极光"]').checked = true; document.querySelector('input[name="cultural"][value="当地美食"]').checked = true; status.className = "status"; status.textContent = "已填入虚构示例；请替换为自己的信息后再生成。"; });
     })();
   </script>
 </body>

@@ -6,7 +6,7 @@ Read this reference when the user wants the agent to remember travel information
 
 Explain the exact local location and fields before the first save. For a first-time user or a user with no valid profile, use the local profile HTML and require its explicit local-storage consent checkbox before saving. Do not silently create a profile. If the user declines, do not persist a profile. A current instruction always wins over a stored value. Confirm a profile summary before using it for a consequential recommendation.
 
-Use only stable, travel-relevant fields: nationality and legal residence, response/spoken languages, city/country and preferred departure airports, usual currency, travel style, accessibility and dietary preferences, visited places, wish list, explicit exclusions, and optional digital-travel preferences (normal map/booking apps, services to avoid, Google-service access, and non-sensitive booking-access notes). Never store passport numbers or images, payment/account credentials, exact addresses, local identity numbers, or private account data.
+Use only stable, travel-relevant fields: nationality, residence country and residence-status category, response/spoken languages, city/country and preferred departure airports, usual currency, travel style, accessibility and dietary preferences, visited places, wish list, explicit exclusions, and optional digital-travel preferences (normal map/booking apps, services to avoid, Google-service access, and non-sensitive booking-access notes). Never store passport numbers or images, payment/account credentials, exact addresses, local identity numbers, or private account data.
 
 ## Decision precedence
 
@@ -16,12 +16,12 @@ Use the current-trip form to decide what is applicable now; use the profile only
 | --- | --- |
 | Current dates, party, budget, destination scope, travel geography, transport modes, climate and stay needs | Current-trip value is authoritative. Do not replace it from the profile. |
 | Home city/country, airports, usual currency, pace, stable interests, accessibility, avoid-list, service preferences | Prefill only when the current-trip field is blank. The traveler can overwrite it. |
-| Nationality and legal residence | Use only when the current trip includes cross-border options; omit from a domestic-only intake. |
+| Nationality, residence country, residence-status category | Use whenever the trip may leave the country of residence; omit when the traveller stays home. The status category is what makes the visa answer computable — store the category only, never a document number, image, or expiry date. |
 | Profile exclusions and revisit settings | Apply as hard filters/diversity rules unless the current trip explicitly overrides them. |
 | Dietary/religious food needs and `never_recommend` places | Carried into the current-trip intake as prefilled values, so they arrive as structured trip data rather than only living in the profile file. A hard rule that depends on someone remembering to open a second file is not a hard rule. |
 | Maps, booking platforms and local transport operators | Select by the actual destination/route market and normal declared access; profile apps are a preference, not a mandate. |
 
-Never infer that a trip is domestic or cross-border merely from nationality, residence, language, currency, or a saved map app. If a current-trip scope and named destination conflict, ask a short clarification before ranking.
+Never infer how far a traveller wants to go from nationality, residence, language, currency, or a saved map app: that is the scope question's job. Use nationality and residence status only for the separate question of what entry a given destination requires. If a current-trip scope and named destination conflict, ask a short clarification before ranking.
 
 ## Place history semantics
 
@@ -44,6 +44,8 @@ Use a user-selected local folder. The default implementation uses `Travel Buddy`
 - `html/` — final browse-only itinerary pages.
 
 Run `python scripts/travel_workspace.py init` to create folders. Run `python scripts/travel_workspace.py create-profile <profile-id> --consent` only after opt-in. Fill the profile using the template, then run `python scripts/travel_workspace.py validate-profile <profile.json>` before relying on it. Do not overwrite an existing profile; update only the exact profile file the user names.
+
+When exactly one valid profile exists the workflow reuses it without asking. Summarize what was loaded and confirm it before the trip form; `python scripts/start_intake_workflow.py --edit-profile` reopens the profile form preloaded with the saved values and then continues to the trip form.
 
 ### Guided form intake
 
