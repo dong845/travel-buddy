@@ -45,6 +45,24 @@ def normalized_scope(value: object) -> str | None:
     return LEGACY_TRIP_SCOPES.get(str(value))
 
 
+# The saved intake used to record `mode: "discovery"` unconditionally, which contradicted
+# its own `destination_scope.state` whenever a destination was already fixed: the file said
+# "find me a destination" while the traveller had committed to one. The work mode is not an
+# independent answer, it is a function of the scope answer (SKILL.md "Work mode"), so derive
+# it in one place and make the mismatch a validation error rather than a silent contradiction.
+WORK_MODES = ("discovery", "constrained_discovery", "construction")
+SCOPE_WORK_MODES = {
+    "fixed": "construction",
+    "anchored": "constrained_discovery",
+    "continent": "discovery",
+    "open": "discovery",
+}
+
+
+def work_mode_for(scope_state: object) -> str | None:
+    return SCOPE_WORK_MODES.get(str(scope_state))
+
+
 def parse_date(value: object) -> date | None:
     if not isinstance(value, str):
         return None
@@ -216,7 +234,7 @@ def validate_intake(value: object) -> list[str]:
     sensitive_values = find_sensitive_values(value)
     if sensitive_values:
         errors.append("提交内容疑似包含证件/支付/密码等敏感值，位置：" + "、".join(sensitive_values) + "。")
-    if value.get("profile_version") != "1.0" or value.get("mode") != "discovery":
+    if value.get("profile_version") != "1.0" or value.get("mode") not in WORK_MODES:
         errors.append("不支持的本次旅行需求格式。")
     origin = value.get("origin") if isinstance(value.get("origin"), dict) else {}
     window = value.get("travel_window") if isinstance(value.get("travel_window"), dict) else {}
@@ -271,6 +289,16 @@ def validate_intake(value: object) -> list[str]:
     scope_state = scope.get("state")
     if scope_state not in {"fixed", "anchored", "continent", "open"}:
         errors.append("需要选择目的地状态。")
+    else:
+        # A saved intake that claims one work mode while its scope implies another sends the
+        # follow-up task down the wrong branch, so reject the contradiction at the door
+        # instead of letting the file disagree with itself.
+        expected_mode = work_mode_for(scope_state)
+        if value.get("mode") in WORK_MODES and value.get("mode") != expected_mode:
+            errors.append(
+                f"目的地状态为「{scope_state}」时，工作模式应为「{expected_mode}」，"
+                f"但提交的是「{value.get('mode')}」。"
+            )
     named_places = scope.get("named_places")
     if not isinstance(named_places, list):
         errors.append("destination_scope.named_places 必须是列表。")
@@ -421,10 +449,14 @@ class TripIntakeHandler(BaseHTTPRequestHandler):
             with destination.open("x", encoding="utf-8") as file:
                 json.dump(intake, file, ensure_ascii=False, indent=2)
                 file.write("\n")
+            next_action = (
+                "trip_construction" if intake.get("mode") == "construction" else "destination_discovery"
+            )
             event = {
                 "event_version": "1.0",
                 "event_type": "travel_buddy.trip_intake_saved",
-                "next_action": "destination_discovery",
+                "next_action": next_action,
+                "work_mode": intake.get("mode"),
                 "intake_path": str(destination),
                 "profile_path": str(self.server.profile_path) if self.server.profile_path else None,
                 "profile_id": self.server.profile_defaults.get("profile_id") if self.server.profile_defaults else None,
@@ -449,7 +481,7 @@ class TripIntakeHandler(BaseHTTPRequestHandler):
             self.server.assistant_mode,
         )
         print(f"TRIP INTAKE SAVED: {destination}", flush=True)
-        print("TRAVEL BUDDY NEXT STEP: DESTINATION_DISCOVERY", flush=True)
+        print(f"TRAVEL BUDDY NEXT STEP: {next_action.upper()}", flush=True)
         print(f"TRAVEL BUDDY TRIP INPUT: {destination}", flush=True)
         if self.server.profile_path:
             print(f"TRAVEL BUDDY REUSABLE PROFILE: {self.server.profile_path}", flush=True)
@@ -458,7 +490,7 @@ class TripIntakeHandler(BaseHTTPRequestHandler):
             print(f"AUTOMATIC DESTINATION DISCOVERY: STARTED ({continuation['assistant']})", flush=True)
         else:
             print(f"AUTOMATIC DESTINATION DISCOVERY: {continuation['status'].upper()}", flush=True)
-        self.send_json(HTTPStatus.CREATED, {"saved": True, "intake_path": str(destination), "next_action": "destination_discovery", "workflow_event_path": str(event_destination), "automatic_discovery": continuation})
+        self.send_json(HTTPStatus.CREATED, {"saved": True, "intake_path": str(destination), "next_action": next_action, "work_mode": intake.get("mode"), "workflow_event_path": str(event_destination), "automatic_discovery": continuation})
         threading.Thread(target=self.server.shutdown, daemon=True).start()
 
 

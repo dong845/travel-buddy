@@ -386,9 +386,16 @@
         const primaryTraveler = travelers[0] || {};
         const rankedMustHaves = [text("rank-1"), text("rank-2")].filter(Boolean).filter((value, index, all) => all.indexOf(value) === index);
         const commitment = scopeState === "fixed" ? "必须去" : scopeState === "anchored" ? "强偏好" : null;
+        // The work mode follows from the destination-scope answer (SKILL.md "Work mode");
+        // hard-coding "discovery" made a fixed destination look like an open search.
+        // Keep this mapping in step with SCOPE_WORK_MODES in scripts/serve_trip_intake.py,
+        // which rejects a submission whose mode contradicts its scope.
+        const workMode = scopeState === "fixed" ? "construction"
+          : scopeState === "anchored" ? "constrained_discovery"
+          : "discovery";
 
         return {
-          profile_version:"1.0", mode:"discovery", intake_status:"complete",
+          profile_version:"1.0", mode:workMode, intake_status:"complete",
           trip_geography:{ scope:tripScope, entry_assessment_required:entryNeeded },
           trip_purpose:text("purpose") || null,
           origin:{ home_city:text("city"), country:text("country"), acceptable_departure_airports:list("airports"), nearby_airport_ground_transfer_tolerance:null, max_one_way_travel_time:text("travel-time"), connection_tolerance:connectionTolerance(modes) },

@@ -80,7 +80,13 @@ Resolve all choices in this order: (1) an explicit value in this current-trip in
 Present the result in this terminal when ready."""
 
 
-def command_for(assistant: str, project_root: Path, workspace: Path, intake: Path, profile: Path | None, result_path: Path) -> list[str]:
+def command_for(
+    assistant: str, project_root: Path, workspace: Path, intake: Path, profile: Path | None, result_path: Path
+) -> tuple[list[str], str | None]:
+    """Return the child command plus any prompt that must be fed on stdin.
+
+    The second element is None when the prompt travels as an argument.
+    """
     prompt = discovery_prompt(workspace, intake, profile)
     if assistant == "codex":
         executable = shutil.which("codex")
@@ -96,12 +102,17 @@ def command_for(assistant: str, project_root: Path, workspace: Path, intake: Pat
             "--output-last-message",
             str(result_path),
             prompt,
-        ]
+        ], None
     if assistant == "claude":
         executable = shutil.which("claude")
         if not executable:
             raise FileNotFoundError("Claude Code CLI was not found on PATH.")
-        return [executable, "-p", "--add-dir", str(workspace), prompt]
+        # `--add-dir` is variadic (`--add-dir <directories...>`), so a prompt appended after
+        # the workspace was parsed as a second directory and the CLI exited with "Input must
+        # be provided either through stdin or as a prompt argument when using --print",
+        # killing every automatic hand-off. Feeding the prompt on stdin removes the argv
+        # ambiguity entirely and keeps a multi-kilobyte prompt clear of argument-length limits.
+        return [executable, "-p", "--add-dir", str(workspace)], prompt
     raise ValueError(f"Unsupported assistant: {assistant}")
 
 
@@ -131,7 +142,7 @@ def main() -> int:
     if assistant == "none":
         print("AUTOMATIC DESTINATION DISCOVERY SKIPPED: assistant mode is none.", flush=True)
         return 0
-    command = command_for(assistant, project_root, workspace, intake, profile, result_path)
+    command, stdin_text = command_for(assistant, project_root, workspace, intake, profile, result_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"AUTOMATIC DESTINATION DISCOVERY STARTED WITH {assistant.upper()}.", flush=True)
     print(f"RESULT PATH: {result_path}", flush=True)
@@ -143,13 +154,20 @@ def main() -> int:
             process = subprocess.Popen(
                 command,
                 cwd=project_root,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
             )
+            if stdin_text is not None:
+                # The prompt is a few kilobytes, comfortably inside the pipe buffer, so writing
+                # and closing before draining stdout cannot deadlock. Closing is what signals
+                # end-of-input to the CLI.
+                assert process.stdin is not None
+                process.stdin.write(stdin_text)
+                process.stdin.close()
             assert process.stdout is not None
             for line in process.stdout:
                 sys.stdout.write(line)
