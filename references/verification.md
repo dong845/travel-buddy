@@ -110,3 +110,16 @@ and 800k tokens in the measured run. That is worth it for a trip someone will bo
 it is not worth it for a discovery shortlist nobody has committed to. Run the full pass before
 final delivery of a Construction plan; for Discovery, verify only `entry` and `seasonality`,
 which are the two that can eliminate a candidate outright.
+
+## Skipping it
+
+`save_trip_deliverables.py --unverified` saves without a report. It is a real escape hatch, not
+a formality, because forcing a 30-minute pass onto an early draft would only teach people to
+route around the gate entirely.
+
+What it costs: the saved plan records `verification_status: unverified`, and the rendered page
+carries a **"not fact-checked" banner above everything else**, localized with the rest of the
+page. That is deliberate — a flag stored only in JSON warns whoever opens the JSON, which is
+never the person holding the itinerary at an airline counter. Never call such a page
+booking-ready, and re-save it with `--verification` once the pass has run; the banner disappears
+on its own when the report is supplied.

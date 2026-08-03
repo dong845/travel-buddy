@@ -51,6 +51,46 @@ def full_verification() -> dict:
     }
 
 
+def verification_banner_cases(base: dict) -> list[str]:
+    """A plan saved with --unverified must say so on the page, not only in a JSON field.
+
+    Whoever books from this plan reads the HTML; a machine-readable flag they never see is
+    the same as no flag at all. The banner is renderer-owned copy, so on a non-English page
+    it must localize completely -- validate_trip_html.py fails on renderer English otherwise.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import render  # noqa: PLC0415 - import after path setup
+
+    failures: list[str] = []
+
+    unverified = copy.deepcopy(base)
+    unverified["verification_status"] = "unverified"
+    page = render(unverified)
+    if 'id="verification-notice"' not in page:
+        failures.append("banner: an unverified plan rendered no verification notice")
+    if "Not fact-checked" not in page:
+        failures.append("banner: English page is missing the notice text")
+
+    verified = copy.deepcopy(base)
+    verified["verification_status"] = "verified"
+    if 'id="verification-notice"' in render(verified):
+        failures.append("banner: a verified plan rendered a notice it should not have")
+
+    if 'id="verification-notice"' in render(copy.deepcopy(base)):
+        failures.append("banner: a plan with no verification_status rendered a notice")
+
+    zh = copy.deepcopy(base)
+    zh["trip"]["language"] = "中文"
+    zh["verification_status"] = "unverified"
+    zh_page = render(zh)
+    if "未经事实核验" not in zh_page:
+        failures.append("banner: Chinese page did not localize the notice title")
+    if "Not fact-checked" in zh_page or "skipped the five-domain" in zh_page:
+        failures.append("banner: renderer English leaked onto the Chinese page")
+
+    return failures
+
+
 def main() -> int:
     base = json.loads(FIXTURE.read_text(encoding="utf-8"))
     failures: list[str] = []
@@ -178,6 +218,8 @@ def main() -> int:
         {"claim": "entry requires only a visa", "verdict": "wrong", "resolved": True}
     ]
     expect_ok("verification defect resolved", copy.deepcopy(base), report)
+
+    failures += verification_banner_cases(base)
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
