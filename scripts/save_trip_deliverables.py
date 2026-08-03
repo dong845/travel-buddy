@@ -14,11 +14,29 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
+from check_plan_consistency import (
+    check_accommodation_coverage,
+    check_budget,
+    check_dates,
+    check_dining,
+    check_routes,
+    check_verification,
+    check_walking,
+)
 from render_final_trip_html import read_json, render, validate_plan
 from validate_trip_html import validate as validate_html
 
 
 DEFAULT_WORKSPACE = Path.home() / "Travel Buddy"
+
+CONSISTENCY_CHECKS = (
+    check_routes,
+    check_walking,
+    check_dates,
+    check_accommodation_coverage,
+    check_dining,
+    check_budget,
+)
 
 
 def safe_slug(value: object) -> str:
@@ -33,6 +51,17 @@ def main() -> int:
     parser.add_argument("--workspace", default=str(DEFAULT_WORKSPACE), help="Output root containing html and plans")
     parser.add_argument("--slug", default=None, help="Stable output name; defaults to date and trip title")
     parser.add_argument("--overwrite", action="store_true", help="Explicitly replace matching plan and HTML files")
+    parser.add_argument(
+        "--verification",
+        default=None,
+        help="Verification report JSON from the parallel-verify stage (see references/verification.md)",
+    )
+    parser.add_argument(
+        "--unverified",
+        action="store_true",
+        help="Save without a verification report. Records verification_status='unverified' in the "
+             "saved plan so the gap is visible rather than assumed away.",
+    )
     args = parser.parse_args()
     try:
         plan = read_json(args.plan)
@@ -43,6 +72,42 @@ def main() -> int:
     if errors:
         print("INVALID PLAN", file=sys.stderr)
         for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
+
+    # Structure gates prove the page is well-formed; these prove the plan agrees with itself.
+    # Both ran clean once on a plan whose "lightest walking day" was its heaviest.
+    consistency_errors: list[str] = []
+    notes: list[str] = []
+    for check in CONSISTENCY_CHECKS:
+        check(plan, consistency_errors, notes)
+
+    if args.verification:
+        try:
+            report = json.loads(Path(args.verification).read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"ERROR: Could not read verification report: {exc}", file=sys.stderr)
+            return 2
+        check_verification(report, consistency_errors, notes)
+        plan["verification_status"] = "verified"
+        plan["verification_report"] = str(args.verification)
+    elif args.unverified:
+        plan["verification_status"] = "unverified"
+    else:
+        print(
+            "ERROR: No verification report. Pass --verification <report.json> after running the "
+            "parallel-verify stage in references/verification.md, or --unverified to save anyway "
+            "and record the gap. Structure gates cannot tell you whether a fare, an opening time, "
+            "or an entry rule is true.",
+            file=sys.stderr,
+        )
+        return 1
+
+    for note in notes:
+        print(f"note: {note}")
+    if consistency_errors:
+        print("PLAN CONSISTENCY FAILED", file=sys.stderr)
+        for error in consistency_errors:
             print(f"- {error}", file=sys.stderr)
         return 1
     rendered_html = render(plan)
