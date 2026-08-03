@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "travel-buddy",
   "displayName": "Travel Buddy",
-  "description": "Decide where to go before building the itinerary: hard-filter destinations before scoring them, verify every fare, timetable and entry rule against a live source, and ship a self-contained booking-ready HTML plan.",
-  "version": "1.0.0",
+  "description": "Decide where to go before building the itinerary: hard-filter destinations before scoring them, verify every fare, timetable and entry rule against a live source through a five-domain parallel check, and ship a self-contained booking-ready HTML plan that is gated on its own internal consistency.",
+  "version": "1.1.0",
   "author": {
     "name": "Leo-Lyu",
     "url": "https://github.com/dong845"
@@ -12,14 +12,17 @@
   "repository": "https://github.com/dong845/travel-buddy",
   "license": "MIT",
   "keywords": [
-    "travel",
-    "travel-planner",
-    "itinerary",
-    "trip-planning",
-    "destination-discovery",
     "agent-skill",
     "booking-ready-html",
+    "destination-discovery",
+    "fact-checking",
+    "itinerary",
     "local-first",
-    "python"
+    "python",
+    "quality-gates",
+    "travel",
+    "travel-planner",
+    "trip-planning",
+    "verification"
   ]
 }

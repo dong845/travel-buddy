@@ -1,5 +1,7 @@
 {
   "plan_status": "researched",
+  "verification_status": null,
+  "verification_report": null,
   "generated_at": null,
   "ui_labels": null,
   "trip": {
@@ -44,6 +46,8 @@
   },
   "budget": {
     "calculation_basis": "per_person",
+    "cap_per_person": null,
+    "overrun_acknowledged": null,
     "estimated_per_person_low": null,
     "estimated_per_person_high": null,
     "included_categories": [],
@@ -271,9 +275,13 @@
         {
           "meal": null,
           "time_window": null,
+          "venue_hours": null,
+          "hours_status": null,
           "venue_name": null,
           "cuisine_or_style": null,
           "neighborhood": null,
+          "route_anchor": null,
+          "off_route_justification": null,
           "why_this_stop": null,
           "price_per_person_low": null,
           "price_per_person_high": null,

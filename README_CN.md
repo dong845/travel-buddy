@@ -113,22 +113,37 @@ start_intake_workflow.py
                     ↓
         Discovery → 候选短名单        Construction → plan JSON
                                               ↓
-                                render_final_trip_html.py   （先校验方案）
+                          五域并行核验              （references/verification.md）
                                               ↓
-                                validate_trip_html.py       （再校验页面）
+                                check_plan_consistency.py   （方案与自身是否自洽）
                                               ↓
-                                save_trip_deliverables.py   （两步都做，然后落盘）
+                                render_final_trip_html.py   （校验方案结构）
+                                              ↓
+                                validate_trip_html.py       （校验页面）
+                                              ↓
+                                save_trip_deliverables.py   （全部跑一遍，然后落盘）
 ```
 
-### 两道闸门
+### 四道闸门
 
-两者都在 `save_trip_deliverables.py` 里自动执行。值得了解，因为它们正是拦住「看着像样、其实空心」页面的东西：
+四道都在 `save_trip_deliverables.py` 里自动执行。值得了解，因为它们查的是**不同的东西**：前两道证明产物「格式规整」，后两道证明它「是真的」—— 后者是结构校验永远够不到的另一个维度。
 
 **`render_final_trip_html.py`** 会拒绝渲染结构不全的方案。它要求（部分）：起止日期之间每一天都被连续覆盖；`route.segments` 数量精确等于 `len(stops_in_order) - 1`；每段只能有**一个主要方式**（写成「地铁/公交/打车」这种选择清单会被判为含糊而拒绝）；每天都要有备选方案和步行强度；人均预算分项里每个声明的类别都要带价格状态和查询时间；每个整天都要有午餐**和**晚餐；多日城市行程要有至少三个目的地专属锚点、且分布在两天以上。
 
 **`validate_trip_html.py`** 检查渲染后的页面。它最锋利的一条规则是：**只要页面 `<html lang>` 不是英文，页面里残留任何渲染器自带的英文就判失败。** 这正是 `plan_status`、预算类别、餐次、交通方式都被定义成封闭枚举的原因 —— 任意类别字符串无法翻译，就会以英文泄漏到中文页面上。它同时强制：地图按钮必须是真正的导航 URL、大陆路线必须用高德、预订与来源行必须带上可机器校验的属性。
 
+**`check_plan_consistency.py`** 把「散文靠不住」的部分交给代码判定。路线合计必须由自身 segment 求和；步行数字必须从数据推导而非手写断言，且没有哪一天可以在实际最重时自称最轻；每顿饭必须挂在当天路线的某个真实站点上，并落在该店营业时间内；日历不得有缺口，离开日必须是退房日而不是多付一晚；预算合计必须等于它声称求和的那些行，声明了上限就不能在没有 `overrun_acknowledged` 的情况下突破。
+
+这道闸门的由来：一次真实运行通过了全部结构校验，同时交付了被标成「最轻」的实际最重的一天、六天里五天的路线合计与自身 segment 对不上、一顿离路线 2.5 公里且没有任何交通段的晚餐、以及排在 17:00 就打烊的店里的 20:00 晚餐。
+
+**核验阶段**（[`references/verification.md`](references/verification.md)）负责只有真实世界能回答的部分：入境规则、票价与时刻、营业时间与闭馆日、该日期是否已开售、每个航班实际由谁承运、以及季节性事实。它以**一次 fan-out 并发**跑五个域，因为这五个域彼此不共享状态 —— 串行会把一个 agent 的注意力摊成五份，而那正是晚餐被排进已打烊餐厅的成因。
+
+`save_trip_deliverables.py` 没有核验报告就拒绝保存。`--unverified` 逃生口保留 —— 一道被绕开的闸门谁也警告不到 —— 但它的代价从「沉默」变成「可见」：落盘计划记录 `verification_status: unverified`，页面最上方渲染一条随语言本地化的**「未经事实核验」**横幅。
+
 ```bash
+python scripts/check_plan_consistency.py plan.json \
+  --verification verification-report.json
+
 python scripts/validate_trip_html.py final.html \
   --expected-days 4 \
   --require-booking-type flight --require-booking-type hotel \
@@ -219,7 +234,8 @@ python scripts/start_intake_workflow.py --assistant none
 | `travel_workspace.py` | 工作区与档案管理 | `init` · `create-profile <id> --consent` · `validate-profile <path>` |
 | `render_final_trip_html.py` | 方案 JSON → 自包含 HTML（先校验方案） | `plan` `[output]`；`-` 表示标准输入/输出 |
 | `validate_trip_html.py` | 对渲染页面的硬性校验 | `--expected-days` · `--require-booking-type`（可重复）· `--transport-mode` |
-| `save_trip_deliverables.py` | 校验 + 渲染 + 保存配对的 JSON 与 HTML | `--workspace` · `--slug` · `--overwrite` |
+| `check_plan_consistency.py` | 证明方案与自身自洽：路线合计、步行推导、餐点落位与营业时间、日历、预算算术 | `plan` · `--verification <report.json>` · `--emit-walking` |
+| `save_trip_deliverables.py` | 跑完全部闸门 + 渲染 + 保存配对的 JSON 与 HTML | `--workspace` · `--slug` · `--overwrite` · `--verification <report.json>` · `--unverified` |
 
 > **注意：**`--profile` 在 `start_intake_workflow.py` 里指的是档案 **ID**，但在 `serve_trip_intake.py` 和 `--edit` 里指的是**文件路径**。传错了会提示「档案不存在或无效」，而不是路径错误。
 

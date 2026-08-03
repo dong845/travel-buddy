@@ -113,22 +113,37 @@ start_intake_workflow.py
                     ↓
         Discovery → shortlist          Construction → plan JSON
                                               ↓
+                          five-domain parallel verification  (references/verification.md)
+                                              ↓
+                                check_plan_consistency.py   (plan vs. itself)
+                                              ↓
                                 render_final_trip_html.py   (validates the plan)
                                               ↓
                                 validate_trip_html.py       (validates the page)
                                               ↓
-                                save_trip_deliverables.py   (does both, then saves)
+                                save_trip_deliverables.py   (runs all of it, then saves)
 ```
 
-### The two gates
+### The four gates
 
-Both run automatically inside `save_trip_deliverables.py`, and both are worth knowing because they are what stops a plausible-but-hollow page from shipping:
+All four run automatically inside `save_trip_deliverables.py`. They are worth knowing because they are what stops a plausible-but-hollow page from shipping — and because they check genuinely different things. The first two prove the artifact is *well-formed*; the last two prove it is *true*, which is a separate axis that structure checks cannot reach.
 
 **`render_final_trip_html.py`** refuses to render a plan that is missing required structure. Among other things it requires: every day covered consecutively between the start and end dates; `route.segments` numbering exactly `len(stops_in_order) - 1`; one *primary* mode per segment (a `metro/bus/taxi` choice-list is rejected as ambiguous); a fallback plan and walking burden on every day; a per-person budget breakdown where every declared category appears with a price status and check time; lunch **and** dinner on every full day; and at least three destination-specific anchors across two or more days for a multi-day city trip.
 
 **`validate_trip_html.py`** checks the rendered page. Its sharpest rule: **on any page whose `<html lang>` is not English, surviving renderer-owned English is a failure.** That is why `plan_status`, budget categories, meal types and transport modes are closed enums — an arbitrary category string could not be translated, so it would leak onto a Chinese page. It also enforces that map buttons are real directions URLs, that mainland-China routes use Amap, and that booking/source rows carry their machine-checkable attributes.
 
+**`check_plan_consistency.py`** decides in code what prose cannot be trusted to hold. Route totals must be summed from their own segments; walking figures must be derived from the data rather than asserted, and no day may call itself the lightest when it is the heaviest; every meal must be anchored to a stop on that day's route and fall inside the venue's opening hours; the calendar must have no gaps and the departure day must be a checkout rather than a night paid for twice; budget totals must match the rows they claim to sum, and a stated cap cannot be broken without `overrun_acknowledged`.
+
+This gate exists because a real run passed every structure check while shipping a "lightest walking day" that was its heaviest, five of six days whose route totals disagreed with their own segments, a dinner 2.5 km off-route with no leg to reach it, and meals booked at venues that close three hours earlier.
+
+**The verification stage** ([`references/verification.md`](references/verification.md)) covers what only the world can answer: entry rules, fares and timetables, opening hours and closure days, whether the dates are even sellable yet and who actually operates each flight, and seasonal facts. It runs as one fan-out across five domains because they share no state — running them sequentially spreads one agent's attention five ways, which is how a dinner gets scheduled at a closed restaurant.
+
+`save_trip_deliverables.py` refuses to save without a verification report. `--unverified` remains, because a gate people route around warns nobody, but it costs visibility rather than silence: the saved plan records `verification_status: unverified` and the page renders a localized **"not fact-checked"** banner above everything else.
+
 ```bash
+python scripts/check_plan_consistency.py plan.json \
+  --verification verification-report.json
+
 python scripts/validate_trip_html.py final.html \
   --expected-days 4 \
   --require-booking-type flight --require-booking-type hotel \
@@ -219,7 +234,8 @@ If you'd rather not use the browser form at all, say so — it falls back to a c
 | `travel_workspace.py` | Workspace and profile management | `init` · `create-profile <id> --consent` · `validate-profile <path>` |
 | `render_final_trip_html.py` | Plan JSON → self-contained HTML (validates the plan first) | `plan` `[output]`; `-` for stdin/stdout |
 | `validate_trip_html.py` | The hard gate on a rendered page | `--expected-days` · `--require-booking-type` (repeatable) · `--transport-mode` |
-| `save_trip_deliverables.py` | Validate + render + save the paired JSON and HTML | `--workspace` · `--slug` · `--overwrite` |
+| `check_plan_consistency.py` | Proves the plan agrees with itself: route totals, walking figures, meal placement and hours, calendar, budget arithmetic | `plan` · `--verification <report.json>` · `--emit-walking` |
+| `save_trip_deliverables.py` | Run every gate, render, and save the paired JSON and HTML | `--workspace` · `--slug` · `--overwrite` · `--verification <report.json>` · `--unverified` |
 
 > **Careful:** `--profile` means a profile **ID** in `start_intake_workflow.py`, but a **file path** in `serve_trip_intake.py` and in `--edit`. Passing the wrong one reports "profile not found", not a path error.
 
