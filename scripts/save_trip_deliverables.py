@@ -17,7 +17,9 @@ from pathlib import Path
 from check_plan_consistency import (
     check_accommodation_coverage,
     check_budget,
+    check_cross_references,
     check_dates,
+    check_day_internals,
     check_dining,
     check_routes,
     check_verification,
@@ -32,6 +34,8 @@ DEFAULT_WORKSPACE = Path.home() / "Travel Buddy"
 CONSISTENCY_CHECKS = (
     check_routes,
     check_walking,
+    check_day_internals,
+    check_cross_references,
     check_dates,
     check_accommodation_coverage,
     check_dining,
@@ -88,7 +92,7 @@ def main() -> int:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"ERROR: Could not read verification report: {exc}", file=sys.stderr)
             return 2
-        check_verification(report, consistency_errors, notes)
+        check_verification(report, consistency_errors, notes, plan=plan, plan_path=args.plan)
         plan["verification_status"] = "verified"
         plan["verification_report"] = str(args.verification)
     elif args.unverified:

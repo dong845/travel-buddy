@@ -83,6 +83,7 @@ Write to `<workspace>/plans/verification-<slug>.json`:
   "domains": [
     {
       "domain": "entry",
+      "claims_checked": 14,
       "findings": [
         {
           "claim": "the plan states a B1/B2 visa is sufficient to board",
@@ -99,17 +100,38 @@ Write to `<workspace>/plans/verification-<slug>.json`:
 }
 ```
 
-`domain` must be one of the five names above and all five must appear. `verdict` is
-`confirmed`, `wrong`, `misleading`, or `unverifiable`. `severity` is `critical`, `major`, or
-`minor`. `resolved` is required on `wrong` and `misleading`.
+`domain` must be one of the five names above, all five must appear, and no others are allowed.
+`verdict` is `confirmed`, `wrong`, `misleading`, or `unverifiable`. `severity` is `critical`,
+`major`, or `minor`. `resolved` is required on `wrong` and `misleading`.
+
+`plan` and `claims_checked` exist to make forgery cost something. `plan` binds the report to one
+itinerary, so a single clean report cannot be handed to every trip; the checker compares it to
+the file it was supplied for. `claims_checked` is the count of individual assertions that domain
+examined, and must be greater than zero — without it, a domain that returns no findings is
+indistinguishable from a domain nobody ran, and "all five clean" is exactly what a skipped pass
+looks like. The checker also rejects a report dated before the plan's `generated_at`, since it
+cannot have inspected a plan that did not exist.
+
+**What none of this can prove:** that a finding marked `resolved` was actually fixed. Code cannot
+diff an edit it never saw. That is why every resolved finding carries a `resolution` string
+naming the change — it is checkable by a human reading the report against the plan, and it is
+the honest boundary of the automated gate.
 
 ## Cost, honestly
 
 A five-domain fan-out plus two auditors on a six-day plan cost about 30 minutes of wall-clock
 and 800k tokens in the measured run. That is worth it for a trip someone will book and fly, and
-it is not worth it for a discovery shortlist nobody has committed to. Run the full pass before
-final delivery of a Construction plan; for Discovery, verify only `entry` and `seasonality`,
-which are the two that can eliminate a candidate outright.
+it is not worth it for a discovery shortlist nobody has committed to.
+
+So the scope depends on what is being delivered, and this is the one place the distinction
+matters:
+
+- **Construction** — all five domains, always. This is the only shape the report schema accepts,
+  because a Construction plan is something the traveller books from.
+- **Discovery** — `entry` and `seasonality` are the two that can eliminate a candidate outright,
+  so verify those inline while scoring candidates. Do **not** write a report for them. Discovery
+  produces an intermediate shortlist, not a saved plan, so no report is required and a partial
+  one would fail `check_plan_consistency.py --verification`, which requires all five by design.
 
 ## Skipping it
 

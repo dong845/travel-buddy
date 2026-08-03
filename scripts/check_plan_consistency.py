@@ -64,6 +64,24 @@ def _num(value) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
+def _obj(value) -> dict:
+    """Malformed input must produce a finding, never a traceback -- an operator who sees a
+    stack trace learns nothing about their plan and tends to stop running the gate."""
+    return value if isinstance(value, dict) else {}
+
+
+def _seq(value) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _route(day: dict) -> dict:
+    return _obj(_obj(day).get("route"))
+
+
+def _segments(day: dict) -> list:
+    return [s for s in _seq(_route(day).get("segments")) if isinstance(s, dict)]
+
+
 def _is_walk(segment: dict) -> bool:
     return str(segment.get("mode", "")).strip().lower() in {m.lower() for m in WALK_MODES}
 
@@ -72,7 +90,7 @@ def walking_totals(day: dict) -> tuple[int, float]:
     """Scheduled walking a day actually contains: every segment's walking_minutes, and the
     distance of the legs whose mode *is* walking. Terminal/pier walking inside a ferry or
     rail segment counts toward minutes -- it is still the traveller on their feet."""
-    segments = day.get("route", {}).get("segments") or []
+    segments = _segments(day)
     minutes = int(sum(_num(s.get("walking_minutes")) for s in segments))
     km = round(sum(_num(s.get("distance_km")) for s in segments if _is_walk(s)), 1)
     return minutes, km
@@ -86,6 +104,10 @@ def _parse_hhmm(text: str) -> int | None:
     if hour > 47 or minute > 59:
         return None
     return hour * 60 + minute
+
+
+def _fmt_hhmm(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 def _parse_window(text: object) -> tuple[int, int] | None:
@@ -105,10 +127,10 @@ def _parse_window(text: object) -> tuple[int, int] | None:
 
 def _route_text(day: dict) -> str:
     """Everything naming a place on this day's route, for on-route venue matching."""
-    route = day.get("route", {}) or {}
+    route = _route(day)
     chunks = [str(route.get("start") or ""), str(route.get("end") or "")]
-    chunks += [str(s) for s in (route.get("stops_in_order") or [])]
-    for seg in route.get("segments") or []:
+    chunks += [str(s) for s in _seq(route.get("stops_in_order"))]
+    for seg in _segments(day):
         chunks += [
             str(seg.get("from") or ""), str(seg.get("to") or ""),
             str(seg.get("journey_instruction") or ""), str(seg.get("arrival_instruction") or ""),
@@ -117,10 +139,11 @@ def _route_text(day: dict) -> str:
 
 
 def check_routes(plan: dict, errors: list[str], notes: list[str]) -> None:
-    for day in plan.get("days") or []:
+    for day in _seq(plan.get("days")):
+        day = _obj(day)
         number = day.get("number")
-        route = day.get("route") or {}
-        segments = route.get("segments") or []
+        route = _route(day)
+        segments = _segments(day)
         if not segments:
             continue
 
@@ -156,7 +179,7 @@ def check_walking(plan: dict, errors: list[str], notes: list[str]) -> None:
 
     Two rules: the prose must quote the computed minute figure (so it cannot drift from the
     data), and no day may claim to be the lightest/heaviest unless it actually is."""
-    days = plan.get("days") or []
+    days = [_obj(d) for d in _seq(plan.get("days"))]
     totals = {d.get("number"): walking_totals(d) for d in days}
     if not totals:
         return
@@ -167,15 +190,17 @@ def check_walking(plan: dict, errors: list[str], notes: list[str]) -> None:
     for day in days:
         number = day.get("number")
         minutes, km = totals[number]
-        burden = str(day.get("route", {}).get("walking_burden") or "")
+        burden = str(_route(day).get("walking_burden") or "")
         if not burden.strip():
             errors.append(f"day {number}: route.walking_burden is empty.")
             continue
-        if str(minutes) not in burden:
+        # Substring matching let a day whose real total was 5 satisfy the rule by writing
+        # "15 minutes" -- the exact inversion the check exists to prevent. Match a whole number.
+        if not re.search(rf"(?<!\d){minutes}(?!\d)", burden):
             errors.append(
                 f"day {number}: walking_burden does not quote the computed walking total "
-                f"({minutes} min / {km} km). Derive the text from the segments so prose cannot "
-                f"contradict the data.")
+                f"({minutes} min / {km} km) as a number. Derive the text from the segments, and "
+                f"write the figure in digits so it cannot drift from the data.")
         light_text = _NEGATED_LIGHT.sub("", burden)
         if _LIGHT_CLAIM.search(light_text) and number != min_day:
             errors.append(
@@ -190,8 +215,59 @@ def check_walking(plan: dict, errors: list[str], notes: list[str]) -> None:
         f"d{n}={m}/{k}" for n, (m, k) in sorted(totals.items(), key=lambda kv: kv[0] or 0)))
 
 
+def check_day_internals(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """Within-day coherence: a timeline that runs backwards, or a transfer count that does not
+    match the route it summarises, is wrong on the page in a way no structure gate can see."""
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        number = day.get("number")
+
+        previous = None
+        previous_label = None
+        for activity in [_obj(a) for a in _seq(day.get("activities"))]:
+            stamp = _parse_hhmm(str(activity.get("time") or ""))
+            if stamp is None:
+                continue
+            if previous is not None and stamp < previous:
+                errors.append(
+                    f"day {number}: activity '{activity.get('name')}' at {activity.get('time')} comes "
+                    f"after '{previous_label}' at {_fmt_hhmm(previous)} in the list but earlier on the "
+                    f"clock. The timeline renders in order, so it would read as time travel.")
+                break
+            previous, previous_label = stamp, activity.get("name")
+
+        segments = _segments(day)
+        if segments and _route(day).get("transfer_count") is not None:
+            stated = int(_num(_route(day).get("transfer_count")))
+            actual = sum(1 for seg in segments if not _is_walk(seg))
+            if stated > len(segments):
+                errors.append(
+                    f"day {number}: route.transfer_count={stated} exceeds the {len(segments)} segments "
+                    f"it summarises ({actual} of them are not walking).")
+
+
+def check_cross_references(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """An id or day number pointing at nothing renders as a blank or a dropped card."""
+    day_numbers = {_obj(d).get("number") for d in _seq(plan.get("days"))}
+    booking = _obj(plan.get("booking_options"))
+    for ticket in [t for t in _seq(booking.get("attraction_tickets")) if isinstance(t, dict)]:
+        target = ticket.get("day_number")
+        if target is not None and target not in day_numbers:
+            errors.append(
+                f"attraction ticket '{ticket.get('attraction_name')}' references day {target}, "
+                f"which is not in this plan (days: {sorted(n for n in day_numbers if n is not None)}).")
+
+    ticket_ids = {t.get("id") for t in _seq(booking.get("attraction_tickets")) if isinstance(t, dict)}
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        for activity in [_obj(a) for a in _seq(day.get("activities"))]:
+            ref = activity.get("ticket_option_id")
+            if ref and ref not in ticket_ids:
+                errors.append(
+                    f"day {day.get('number')}: activity '{activity.get('name')}' references ticket "
+                    f"'{ref}', which no attraction_tickets entry defines.")
+
+
 def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
-    trip = plan.get("trip") or {}
+    trip = _obj(plan.get("trip"))
     try:
         start = dt.date.fromisoformat(str(trip.get("start_date")))
         end = dt.date.fromisoformat(str(trip.get("end_date")))
@@ -206,7 +282,7 @@ def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
         cursor += dt.timedelta(days=1)
 
     actual = []
-    for day in plan.get("days") or []:
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
         try:
             actual.append(dt.date.fromisoformat(str(day.get("date"))))
         except (TypeError, ValueError):
@@ -219,7 +295,7 @@ def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
             f"got {[d.isoformat() for d in actual]}.")
 
     # A weekday named in prose is a claim the calendar can settle.
-    for day in plan.get("days") or []:
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
         try:
             date = dt.date.fromisoformat(str(day.get("date")))
         except (TypeError, ValueError):
@@ -236,12 +312,12 @@ def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
 
 
 def check_accommodation_coverage(plan: dict, errors: list[str], notes: list[str]) -> None:
-    stays = {a.get("id"): a for a in (plan.get("booking_options") or {}).get("accommodations") or []}
-    for day in plan.get("days") or []:
+    stays = {a.get("id"): a for a in _seq(_obj(plan.get("booking_options")).get("accommodations")) if isinstance(a, dict)}
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
         stay_id = day.get("accommodation_option_id")
         if not stay_id:
             continue
-        stay = stays.get(stay_id)
+        stay = _obj(stays.get(stay_id)) or None
         if stay is None:
             errors.append(f"day {day.get('number')}: accommodation_option_id '{stay_id}' has no matching option.")
             continue
@@ -266,11 +342,15 @@ def check_accommodation_coverage(plan: dict, errors: list[str], notes: list[str]
 def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
     """Two failures that shipped once: a dinner 2.5 km off the day's route with no leg to
     reach it, and meals scheduled at venues that had already closed."""
-    for day in plan.get("days") or []:
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
         number = day.get("number")
         route_blob = _route_text(day)
-        stops = [str(s) for s in (day.get("route", {}) or {}).get("stops_in_order") or []]
-        for card in day.get("dining") or []:
+        stops = [str(s) for s in _seq(_route(day).get("stops_in_order"))]
+        for raw in _seq(day.get("dining")):
+            if not isinstance(raw, dict):
+                errors.append(f"day {number}: a dining entry is {type(raw).__name__}, not an object.")
+                continue
+            card = raw
             venue = str(card.get("venue_name") or "").strip()
             if not venue:
                 errors.append(f"day {number}: a dining card has no venue_name.")
@@ -311,9 +391,9 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
 
 
 def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
-    budget = plan.get("budget") or {}
-    rows = budget.get("breakdown") or []
-    included = set(budget.get("included_categories") or [])
+    budget = _obj(plan.get("budget"))
+    rows = [r for r in _seq(budget.get("breakdown")) if isinstance(r, dict)]
+    included = set(_seq(budget.get("included_categories")))
     if not rows:
         return
 
@@ -332,7 +412,7 @@ def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
                 f"sum to {high:g}.")
 
     # Ticket prices and the attractions budget line must agree with each other.
-    tickets = (plan.get("booking_options") or {}).get("attraction_tickets") or []
+    tickets = [t for t in _seq(_obj(plan.get("booking_options")).get("attraction_tickets")) if isinstance(t, dict)]
     if tickets:
         t_low = sum(_num(t.get("price_low")) for t in tickets)
         t_high = sum(_num(t.get("price_high")) for t in tickets)
@@ -366,21 +446,63 @@ REQUIRED_DOMAINS = {"entry", "transport", "sights_and_hours", "booking_and_lodgi
 VERDICTS = {"confirmed", "wrong", "misleading", "unverifiable"}
 
 
-def check_verification(report: dict, errors: list[str], notes: list[str]) -> None:
+def check_verification(report: dict, errors: list[str], notes: list[str],
+                       plan: dict | None = None, plan_path: str | None = None) -> None:
+    """The report is written by the same run it vouches for, so treat it as an interested
+    witness. These checks make the cheap forgeries fail; see the limitation note below for the
+    one that cannot be automated."""
+    report = _obj(report)
     checked_at = str(report.get("checked_at") or "")
-    if not re.match(r"^\d{4}-\d{2}-\d{2}", checked_at):
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", checked_at[:10]) or len(checked_at) < 10:
         errors.append("verification report needs an ISO checked_at date.")
+    else:
+        # A report older than the plan it certifies cannot have seen the plan.
+        generated = str(_obj(plan).get("generated_at") or "")[:10] if plan else ""
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", generated) and checked_at[:10] < generated:
+            errors.append(
+                f"verification report is dated {checked_at[:10]}, before the plan's generated_at "
+                f"{generated}. It cannot have checked this plan.")
 
-    covered = {str(d.get("domain")) for d in report.get("domains") or []}
+    # Bind the report to the plan, so one report cannot silently certify every trip.
+    if plan_path:
+        claimed = str(report.get("plan") or "")
+        if not claimed:
+            errors.append(
+                "verification report has no 'plan' field naming what it verified. Without it the "
+                "same report certifies any plan it is handed.")
+        elif Path(claimed).name != Path(plan_path).name:
+            errors.append(
+                f"verification report says it verified '{claimed}' but was supplied for "
+                f"'{Path(plan_path).name}'.")
+
+    domains = [_obj(d) for d in _seq(report.get("domains"))]
+    covered = {str(d.get("domain")) for d in domains}
     missing = REQUIRED_DOMAINS - covered
     if missing:
         errors.append(
             "verification report is missing required domains: " + ", ".join(sorted(missing))
             + ". Every domain must be checked, or the gap is invisible.")
+    unknown = covered - REQUIRED_DOMAINS
+    if unknown:
+        errors.append(
+            "verification report contains domains that are not part of the protocol: "
+            + ", ".join(sorted(unknown)) + ".")
+
+    # An all-empty report is indistinguishable from one where nothing ran, unless each domain
+    # states how much it actually examined.
+    for domain in domains:
+        name = domain.get("domain")
+        if name not in REQUIRED_DOMAINS:
+            continue
+        checked = domain.get("claims_checked")
+        if not isinstance(checked, int) or checked <= 0:
+            errors.append(
+                f"verification domain '{name}' does not report claims_checked > 0. A domain with "
+                f"no findings and no count is indistinguishable from a domain nobody ran.")
 
     unresolved = []
-    for domain in report.get("domains") or []:
-        for finding in domain.get("findings") or []:
+    for domain in domains:
+        for finding in [_obj(f) for f in _seq(domain.get("findings"))]:
             verdict = str(finding.get("verdict") or "").lower()
             if verdict not in VERDICTS:
                 errors.append(
@@ -394,6 +516,10 @@ def check_verification(report: dict, errors: list[str], notes: list[str]) -> Non
             "verification found defects that were never resolved in the plan:\n    - "
             + "\n    - ".join(unresolved))
     notes.append(f"verification covered {len(covered)} domains, checked {checked_at}.")
+    # KNOWN LIMIT, stated rather than hidden: nothing here can prove a finding marked resolved
+    # actually changed the plan. Code cannot diff an edit it never saw. That one relies on the
+    # protocol in references/verification.md, and it is the reason the report records a
+    # resolution string a reader can check by eye.
 
 
 def main() -> int:
@@ -411,16 +537,20 @@ def main() -> int:
         print(f"ERROR: could not read plan JSON: {exc}", file=sys.stderr)
         return 2
 
+    if not isinstance(plan, dict):
+        print(f"ERROR: plan JSON must be an object, got {type(plan).__name__}.", file=sys.stderr)
+        return 2
+
     if args.emit_walking:
-        for day in plan.get("days") or []:
+        for day in [_obj(d) for d in _seq(plan.get("days"))]:
             minutes, km = walking_totals(day)
             print(f"day {day.get('number')} ({day.get('date')}): {minutes} min / {km} km")
         return 0
 
     errors: list[str] = []
     notes: list[str] = []
-    for check in (check_routes, check_walking, check_dates,
-                  check_accommodation_coverage, check_dining, check_budget):
+    for check in (check_routes, check_walking, check_day_internals, check_cross_references,
+                  check_dates, check_accommodation_coverage, check_dining, check_budget):
         check(plan, errors, notes)
 
     if args.verification:
@@ -429,7 +559,7 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: could not read verification report: {exc}", file=sys.stderr)
             return 2
-        check_verification(report, errors, notes)
+        check_verification(report, errors, notes, plan=plan, plan_path=args.plan)
 
     for note in notes:
         print(f"note: {note}")

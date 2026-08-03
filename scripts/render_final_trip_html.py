@@ -296,7 +296,11 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
     return {}
 
 
-REQUIRED_UI_LABEL_KEYS = frozenset(labels_for("zh-CN"))
+# Keys added after custom ui_labels became a supported input. Requiring them would reject every
+# label set authored before they existed, silently dropping that page back to English -- so they
+# are optional, and localize_static_page falls back to the English source string when absent.
+OPTIONAL_UI_LABEL_KEYS = frozenset({"unverified_banner_title", "unverified_banner_body"})
+REQUIRED_UI_LABEL_KEYS = frozenset(labels_for("zh-CN")) - OPTIONAL_UI_LABEL_KEYS
 
 
 def has_builtin_interface_language(language: object) -> bool:
@@ -447,11 +451,15 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         "No meal recommendation was researched.": labels["no_meal_recommendation"],
         "Check current opening hours before switching.": labels["opening_hours_recheck"],
         " per person · ": f" {labels['per_person_suffix']} · ",
-        ">Not fact-checked<": f">{labels['unverified_banner_title']}<",
+        ">Not fact-checked<": f">{labels.get('unverified_banner_title', 'Not fact-checked')}<",
         ("This plan skipped the five-domain verification pass. Its fares, opening hours, "
          "entry rules, and availability have not been checked against operators or official "
          "sources. Treat every figure as an estimate and verify before booking."):
-            labels["unverified_banner_body"],
+            labels.get("unverified_banner_body",
+                       "This plan skipped the five-domain verification pass. Its fares, opening "
+                       "hours, entry rules, and availability have not been checked against "
+                       "operators or official sources. Treat every figure as an estimate and "
+                       "verify before booking."),
         "Plan status · ": labels["plan_status_prefix"],
         "Arrival: ": labels["arrival"],
         " · Pace: ": f" · {labels['pace']}",

@@ -43,8 +43,9 @@ def day(plan: dict, number: int) -> dict:
 def full_verification() -> dict:
     return {
         "checked_at": "2026-08-03",
+        "plan": "plan.json",
         "domains": [
-            {"domain": name, "findings": []}
+            {"domain": name, "claims_checked": 3, "findings": []}
             for name in ("entry", "transport", "sights_and_hours",
                          "booking_and_lodging", "seasonality")
         ],
@@ -218,6 +219,78 @@ def main() -> int:
         {"claim": "entry requires only a visa", "verdict": "wrong", "resolved": True}
     ]
     expect_ok("verification defect resolved", copy.deepcopy(base), report)
+
+    # 11. Substring matching once let a day whose real walking total was 5 minutes satisfy the
+    # rule by writing "15 minutes" -- the exact inversion the check exists to prevent.
+    p = copy.deepcopy(base)
+    for seg in day(p, 1)["route"]["segments"]:
+        seg["walking_minutes"] = 0
+    day(p, 1)["route"]["segments"][0]["walking_minutes"] = 5
+    day(p, 1)["route"]["walking_burden"] = "15 minutes of walking."
+    expect_fail("walking figure matched as a substring", p, "does not quote the computed")
+
+    p = copy.deepcopy(base)
+    for seg in day(p, 1)["route"]["segments"]:
+        seg["walking_minutes"] = 0
+    day(p, 1)["route"]["segments"][0]["walking_minutes"] = 5
+    day(p, 1)["route"]["walking_burden"] = "5 minutes on foot; the climb is 15 metres."
+    expect_ok("larger numbers nearby do not break the match", p)
+
+    # 12. A timeline that renders in list order but runs backwards on the clock.
+    p = copy.deepcopy(base)
+    acts = day(p, 1)["activities"]
+    if len(acts) >= 2:
+        acts[0]["time"], acts[1]["time"] = "18:00", "09:00"
+        expect_fail("activities out of chronological order", p, "time travel")
+
+    # 13. References that point at nothing render as blanks or dropped cards.
+    p = copy.deepcopy(base)
+    tickets = p["booking_options"]["attraction_tickets"]
+    if tickets:
+        tickets[0]["day_number"] = 99
+        expect_fail("ticket references a day that does not exist", p, "which is not in this plan")
+
+    p = copy.deepcopy(base)
+    day(p, 1)["activities"][0]["ticket_option_id"] = "no-such-ticket"
+    expect_fail("activity references an undefined ticket", p, "which no attraction_tickets entry")
+
+    # 14. Malformed input must produce a finding, not a traceback: an operator who sees a stack
+    # trace learns nothing about their plan and stops running the gate.
+    for name, broken in {
+        "route is null": {"trip": {"start_date": "2026-01-01", "end_date": "2026-01-01"},
+                          "days": [{"number": 1, "date": "2026-01-01", "route": None}]},
+        "dining card is a string": {"trip": {"start_date": "2026-01-01", "end_date": "2026-01-01"},
+                                    "days": [{"number": 1, "date": "2026-01-01", "dining": ["oops"],
+                                              "route": {"segments": [], "walking_burden": "0"}}]},
+        "plan is a list": [1, 2, 3],
+    }.items():
+        code, out = run(broken)
+        if "Traceback" in out:
+            failures.append(f"crash on {name}: checker raised instead of reporting\n{out[-400:]}")
+
+    # 15. The verification report is written by the run it vouches for, so cheap forgeries must fail.
+    report = full_verification()
+    report["domains"].append({"domain": "made_up", "claims_checked": 1, "findings": []})
+    expect_fail("invented domain", copy.deepcopy(base), "not part of the protocol", report)
+
+    report = full_verification()
+    for domain in report["domains"]:
+        domain.pop("claims_checked", None)
+    expect_fail("no claims_checked count", copy.deepcopy(base), "claims_checked", report)
+
+    report = full_verification()
+    report["plan"] = "a-completely-different-trip.json"
+    expect_fail("report bound to another plan", copy.deepcopy(base), "was supplied for", report)
+
+    report = full_verification()
+    report.pop("plan")
+    expect_fail("report names no plan", copy.deepcopy(base), "no 'plan' field", report)
+
+    p = copy.deepcopy(base)
+    p["generated_at"] = "2026-08-03"
+    report = full_verification()
+    report["checked_at"] = "2019-01-01"
+    expect_fail("report predates the plan", p, "before the plan's generated_at", report)
 
     failures += verification_banner_cases(base)
 
