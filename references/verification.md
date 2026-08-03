@@ -35,6 +35,27 @@ Always all five, always in one fan-out. A domain that looks irrelevant still ret
 | `booking_and_lodging` | Whether the dates are sellable yet — airline windows apply to **both** legs of a round trip, and codeshare inventory opens no earlier than the operating carrier's. Who actually operates each flight. Whether the property offers the room product claimed, in that season. Whether search URLs load a prefilled search. Applicable lodging taxes. |
 | `seasonality` | Climate figures with the right statistic — a monthly *mean* is not the mean daily *maximum*, and quoting the latter as the former oversells a destination by ~5 °C. Daylight and sunset times where the plan schedules a sunset. Whether seasonal services still run on the planned dates. |
 
+### How to fan out, per runtime
+
+"Concurrently" is a property of the harness, not of this file, so use whatever the one you are in
+actually provides:
+
+- **Claude Code** — the Workflow tool, or several Agent calls issued in a single message. Give
+  each agent one domain and a schema so the results come back structured.
+- **Codex** — no subagent tool, but `codex exec` is a normal command: launch one non-interactive
+  child per domain from the shell, each writing to its own `--output-last-message` file, then
+  collect the files. Cap the number in flight so the five do not contend.
+- **Anything else, or when a fan-out is unavailable** — run the five **sequentially but
+  separately**, one domain per pass, and do not carry one domain's findings into the next.
+
+That last option is not a consolation prize, and understanding why matters more than the
+mechanism. The reason to split verification was never wall-clock: it is that a single pass asked
+to check entry rules, fares, opening hours, lodging inventory, and seasonality at once gives each
+of them a fifth of its attention, and the thing that gets dropped is whatever is least
+interesting at that moment — which is how a dinner ends up booked at a restaurant that closes at
+17:00. Five sequential focused passes preserve that benefit entirely and cost only time. Five
+domains crammed into one prompt do not, however fast they return.
+
 ### Prompt shape
 
 Each verifier gets the plan path and this instruction. The default must be doubt, because an
