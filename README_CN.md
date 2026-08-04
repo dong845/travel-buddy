@@ -113,7 +113,7 @@ start_intake_workflow.py
                     ↓
             run_destination_discovery.py → 拉起一个全新的非交互 Codex/Claude 任务
                     ↓
-        Discovery → 候选短名单        Construction → plan JSON
+        Discovery → 候选短名单        Construction → new_plan_skeleton.py → plan JSON
                                               ↓
                           五域并行核验              （references/verification.md）
                                               ↓
@@ -124,6 +124,8 @@ start_intake_workflow.py
                                 validate_trip_html.py       （校验页面）
                                               ↓
                                 save_trip_deliverables.py   （全部跑一遍，然后落盘）
+                                              ↓
+                                check_link_targets.py       （需联网，由你手动跑）
 ```
 
 ### 四道闸门
@@ -132,17 +134,27 @@ start_intake_workflow.py
 
 **`render_final_trip_html.py`** 会拒绝渲染结构不全的方案。它要求（部分）：起止日期之间每一天都被连续覆盖；`route.segments` 数量精确等于 `len(stops_in_order) - 1`；每段只能有**一个主要方式**（写成「地铁/公交/打车」这种选择清单会被判为含糊而拒绝）；每天都要有备选方案和步行强度；人均预算分项里每个声明的类别都要带价格状态和查询时间；每个整天都要有午餐**和**晚餐；多日城市行程要有至少三个目的地专属锚点、且分布在两天以上。
 
-**`validate_trip_html.py`** 检查渲染后的页面。它最锋利的一条规则是：**只要页面 `<html lang>` 不是英文，页面里残留任何渲染器自带的英文就判失败。** 这正是 `plan_status`、预算类别、餐次、交通方式都被定义成封闭枚举的原因 —— 任意类别字符串无法翻译，就会以英文泄漏到中文页面上。它同时强制：地图按钮必须是真正的导航 URL、大陆路线必须用高德、预订与来源行必须带上可机器校验的属性。
+**`validate_trip_html.py`** 检查渲染后的页面。它最锋利的一条规则是：**只要页面 `<html lang>` 不是英文，页面里残留任何渲染器自带的英文就判失败。** 这正是 `plan_status`、预算类别、餐次、交通方式都被定义成封闭枚举的原因 —— 任意类别字符串无法翻译，就会以英文泄漏到中文页面上。它同时强制：地图按钮必须是真正的导航 URL、大陆路线必须用高德、预订与来源行必须带上可机器校验的属性。2.0 起还会拒绝任何「按钮上写的提供方 ≠ 链接实际打开的域名」的页面：曾有九个按钮写着 *在 KLM 查看选项* 却打开 Google Flights、写着 *在 Google Maps 查看餐厅* 却打开美食博客，而当时所有闸门全绿 —— HTTPS 与唯一性都说明不了链接会去哪里。
 
-**`check_plan_consistency.py`** 把「散文靠不住」的部分交给代码判定。路线合计必须由自身 segment 求和；步行数字必须从数据推导而非手写断言，且没有哪一天可以在实际最重时自称最轻；每顿饭必须挂在当天路线的某个真实站点上，并落在该店营业时间内；日历不得有缺口，离开日必须是退房日而不是多付一晚；预算合计必须等于它声称求和的那些行，声明了上限就不能在没有 `overrun_acknowledged` 的情况下突破。
+**`check_plan_consistency.py`** 把「散文靠不住」的部分交给代码判定。路线合计必须由自身 segment 求和；步行数字必须从数据推导而非手写断言，且没有哪一天可以在实际最重时自称最轻；每顿饭必须挂在当天路线的某个真实站点上，并落在该店营业时间内；日历不得有缺口，离开日必须是退房日而不是多付一晚；预算合计必须等于它声称求和的那些行、总额声称包含的每个类别都必须真的有一行明细，声明了上限就不能在没有 `overrun_acknowledged` 的情况下突破。2.0 的一次自审又补了三条：行程日期反转（此前会让日期覆盖循环一次都不迭代，从而**静默关掉下游全部日期检查**）、负数路段（−25 分钟的一段能抵消真实的一段，而算术仍然自洽）、以及某天声称的换乘次数少于它自己各路段声明之和。
 
 这道闸门的由来：一次真实运行通过了全部结构校验，同时交付了被标成「最轻」的实际最重的一天、六天里五天的路线合计与自身 segment 对不上、一顿离路线 2.5 公里且没有任何交通段的晚餐、以及排在 17:00 就打烊的店里的 20:00 晚餐。
 
 **核验阶段**（[`references/verification.md`](references/verification.md)）负责只有真实世界能回答的部分：入境规则、票价与时刻、营业时间与闭馆日、该日期是否已开售、每个航班实际由谁承运、以及季节性事实。它把核验拆成五个域，因为它们彼此不共享状态，也因为让**一次**调用同时查完五件事，每件只能分到五分之一的注意力 —— 而那正是晚餐被排进已打烊餐厅的成因。运行时支持并发就并发（Claude Code 用 Workflow 或并行 Agent，Codex 用每域一个 `codex exec` 子进程）；不支持就跑五趟**各自独立**的串行，而不是把五个域塞进一个 prompt。真正的收益是注意力集中而非墙钟时间，所以「串行但分开」保住了它。
 
+### 2.0 新增的两个脚本
+
+**`new_plan_skeleton.py`** 生成一份结构合法、等着你填内容的方案骨架，让「渲染—修正」这个循环花在事实上，而不是花在重新摸索契约上。`templates/final-trip-plan.json` 列得出每个字段，却表达不了字段之间的规则 —— 分段必须与 `stops_in_order` 逐字对应、步行段的 `service_or_line` 也不能为空、离开日仍需要早餐卡 —— 这些以前只能靠撞失败去学。有一次实测为此损失了三轮返工和 21 个结构错误。所有待填值都是 `TODO:` 标记，而 `validate_trip_html.py` 拒绝任何含 TODO 的页面，所以「起步更快」不会变成「能交空壳」。
+
+**`check_link_targets.py`** 逐个跟踪外链按钮，报告它实际落在哪里。它**故意没有**接进 `save_trip_deliverables.py`：其余闸门都是离线确定性的，这正是保存路径敢直接 import 它们并据此拒绝的原因；而这一个需要联网 —— 一道会在飞机上或 CI 里失败的闸门，最终只会被绕过。它的 `broken` 判定刻意收得很窄，只覆盖硬 4xx/5xx 和跳转到不同域名两种。其余一律归为 `unverified`，因为服务商的回答取决于是谁在问：同一个 Google Flights 地址对浏览器返回 200 且不跳转，对脚本却跳到 `unsupported` 页 —— 这个检查的早期版本正因此错判过一条完好的链接。
+
 `save_trip_deliverables.py` 没有核验报告就拒绝保存。`--unverified` 逃生口保留 —— 一道被绕开的闸门谁也警告不到 —— 但它的代价从「沉默」变成「可见」：落盘计划记录 `verification_status: unverified`，页面最上方渲染一条随语言本地化的**「未经事实核验」**横幅。
 
 ```bash
+python scripts/new_plan_skeleton.py --start 2026-09-11 --end 2026-09-14 \
+  --origin 阿姆斯特丹 --destination 马拉加 --language zh --currency EUR \
+  --travellers 1 --mode public-transit --stops-per-day 4 > plan.json
+
 python scripts/check_plan_consistency.py plan.json \
   --verification verification-report.json
 
@@ -150,6 +162,8 @@ python scripts/validate_trip_html.py final.html \
   --expected-days 4 \
   --require-booking-type flight --require-booking-type hotel \
   --transport-mode public-transit
+
+python scripts/check_link_targets.py final.html
 ```
 
 ---

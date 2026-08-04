@@ -128,12 +128,30 @@ def main() -> int:
             failures.append(f"{path} is gitignored and would not ship")
 
     # 7. Both READMEs document the gate; a one-sided update leaves the other language wrong.
-    for readme in ("README.md", "README_CN.md"):
-        text = (ROOT / readme).read_text(encoding="utf-8")
+    readmes = {name: (ROOT / name).read_text(encoding="utf-8") for name in ("README.md", "README_CN.md")}
+    for readme, text in readmes.items():
         if "check_plan_consistency.py" not in text:
             failures.append(f"{readme} does not mention check_plan_consistency.py")
         if "verification.md" not in text:
             failures.append(f"{readme} does not link references/verification.md")
+
+    # 7b. Every user-facing script must appear in both. Naming only two files let
+    #     check_link_targets.py and new_plan_skeleton.py ship undocumented: the READMEs
+    #     described seven scripts while eleven existed, and nothing objected. The exemptions
+    #     are listed rather than inferred, so each one stays a decision somebody made.
+    INTERNAL = {
+        # Launched by start_intake_workflow.py; a reader never invokes these directly.
+        "serve_profile_intake.py": "started by start_intake_workflow.py",
+        "serve_trip_intake.py": "started by start_intake_workflow.py",
+    }
+    for script in sorted((ROOT / "scripts").glob("*.py")):
+        if script.name in INTERNAL:
+            continue
+        for readme, text in readmes.items():
+            if script.name not in text:
+                failures.append(
+                    f"{readme} does not mention scripts/{script.name}. Either document it, or add "
+                    f"it to INTERNAL in this test with the reason it needs no entry.")
 
     if failures:
         print(f"PACKAGING FAILED ({len(failures)}):", file=sys.stderr)

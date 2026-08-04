@@ -113,7 +113,7 @@ start_intake_workflow.py
                     ↓
             run_destination_discovery.py → a fresh non-interactive Codex/Claude task
                     ↓
-        Discovery → shortlist          Construction → plan JSON
+        Discovery → shortlist          Construction → new_plan_skeleton.py → plan JSON
                                               ↓
                           five-domain parallel verification  (references/verification.md)
                                               ↓
@@ -124,6 +124,8 @@ start_intake_workflow.py
                                 validate_trip_html.py       (validates the page)
                                               ↓
                                 save_trip_deliverables.py   (runs all of it, then saves)
+                                              ↓
+                                check_link_targets.py       (needs the network; run it yourself)
 ```
 
 ### The four gates
@@ -132,17 +134,27 @@ All four run automatically inside `save_trip_deliverables.py`. They are worth kn
 
 **`render_final_trip_html.py`** refuses to render a plan that is missing required structure. Among other things it requires: every day covered consecutively between the start and end dates; `route.segments` numbering exactly `len(stops_in_order) - 1`; one *primary* mode per segment (a `metro/bus/taxi` choice-list is rejected as ambiguous); a fallback plan and walking burden on every day; a per-person budget breakdown where every declared category appears with a price status and check time; lunch **and** dinner on every full day; and at least three destination-specific anchors across two or more days for a multi-day city trip.
 
-**`validate_trip_html.py`** checks the rendered page. Its sharpest rule: **on any page whose `<html lang>` is not English, surviving renderer-owned English is a failure.** That is why `plan_status`, budget categories, meal types and transport modes are closed enums — an arbitrary category string could not be translated, so it would leak onto a Chinese page. It also enforces that map buttons are real directions URLs, that mainland-China routes use Amap, and that booking/source rows carry their machine-checkable attributes.
+**`validate_trip_html.py`** checks the rendered page. Its sharpest rule: **on any page whose `<html lang>` is not English, surviving renderer-owned English is a failure.** That is why `plan_status`, budget categories, meal types and transport modes are closed enums — an arbitrary category string could not be translated, so it would leak onto a Chinese page. It also enforces that map buttons are real directions URLs, that mainland-China routes use Amap, and that booking/source rows carry their machine-checkable attributes. Since 2.0 it fails any button whose named provider is not the host its URL opens: nine buttons once shipped reading *Review option in KLM* and opening Google Flights, or *View restaurant in Google Maps* and opening a food blog, with every gate green — HTTPS-ness and uniqueness say nothing about where a link goes.
 
-**`check_plan_consistency.py`** decides in code what prose cannot be trusted to hold. Route totals must be summed from their own segments; walking figures must be derived from the data rather than asserted, and no day may call itself the lightest when it is the heaviest; every meal must be anchored to a stop on that day's route and fall inside the venue's opening hours; the calendar must have no gaps and the departure day must be a checkout rather than a night paid for twice; budget totals must match the rows they claim to sum, and a stated cap cannot be broken without `overrun_acknowledged`.
+**`check_plan_consistency.py`** decides in code what prose cannot be trusted to hold. Route totals must be summed from their own segments; walking figures must be derived from the data rather than asserted, and no day may call itself the lightest when it is the heaviest; every meal must be anchored to a stop on that day's route and fall inside the venue's opening hours; the calendar must have no gaps and the departure day must be a checkout rather than a night paid for twice; budget totals must match the rows they claim to sum, every category the total claims to include must actually appear as a row, and a stated cap cannot be broken without `overrun_acknowledged`. A 2.0 audit added three more: a trip window that runs backwards (which used to make the day-coverage loop iterate nothing and silently disable every date check downstream), negative segment numbers (a −25 minute leg cancels a real one while the arithmetic still balances), and a day claiming fewer interchanges than its own segments declare.
 
 This gate exists because a real run passed every structure check while shipping a "lightest walking day" that was its heaviest, five of six days whose route totals disagreed with their own segments, a dinner 2.5 km off-route with no leg to reach it, and meals booked at venues that close three hours earlier.
 
 **The verification stage** ([`references/verification.md`](references/verification.md)) covers what only the world can answer: entry rules, fares and timetables, opening hours and closure days, whether the dates are even sellable yet and who actually operates each flight, and seasonal facts. It splits across five domains because they share no state, and because one pass asked to check all of them at once gives each a fifth of its attention — which is how a dinner gets scheduled at a closed restaurant. Fan them out where the runtime allows (Workflow or parallel agents in Claude Code, one `codex exec` child per domain in Codex); where it does not, run five separate sequential passes. The benefit is concentration rather than wall-clock, so sequential-but-separate keeps it.
 
+### Two more scripts, added in 2.0
+
+**`new_plan_skeleton.py`** emits a structurally valid plan to fill in, so the render loop is spent on facts rather than on rediscovering the contract. `templates/final-trip-plan.json` lists every field but cannot express the rules that relate them — segments mirroring `stops_in_order` by exact string equality, a non-empty `service_or_line` even on a walking leg, a breakfast card on the departure day — so those used to be learned by failing. One measured run lost three edit-render round-trips and 21 structural errors to that. Every unfilled value is a `TODO:` marker that `validate_trip_html.py` refuses to ship, so a faster start cannot become a hollow page.
+
+**`check_link_targets.py`** follows every outbound button and reports where it lands. It is deliberately **not** wired into `save_trip_deliverables.py`: the other gates are offline and deterministic, which is what lets the save path import them and refuse, while this one needs the network — and a gate that fails on a plane or in CI is a gate people learn to skip. Its `broken` verdict is narrow on purpose, covering only a hard 4xx/5xx or a redirect onto a different host. Everything else is `unverified`, because a provider's answer depends on who asked: the same Google Flights URL returns 200 unredirected to a browser and an `unsupported` page to a script, and an earlier version of this check called that broken when it was not.
+
 `save_trip_deliverables.py` refuses to save without a verification report. `--unverified` remains, because a gate people route around warns nobody, but it costs visibility rather than silence: the saved plan records `verification_status: unverified` and the page renders a localized **"not fact-checked"** banner above everything else.
 
 ```bash
+python scripts/new_plan_skeleton.py --start 2026-09-11 --end 2026-09-14 \
+  --origin Amsterdam --destination Malaga --language en --currency EUR \
+  --travellers 1 --mode public-transit --stops-per-day 4 > plan.json
+
 python scripts/check_plan_consistency.py plan.json \
   --verification verification-report.json
 
@@ -150,6 +162,8 @@ python scripts/validate_trip_html.py final.html \
   --expected-days 4 \
   --require-booking-type flight --require-booking-type hotel \
   --transport-mode public-transit
+
+python scripts/check_link_targets.py final.html
 ```
 
 ---
