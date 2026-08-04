@@ -104,14 +104,21 @@ def main() -> int:
                 f"verification-report template domain {domain.get('domain')!r} omits claims_checked, "
                 f"which the checker requires — the template would teach the wrong shape")
 
-    # 5. Every template the READMEs point at must exist, in both languages.
-    for readme in ("README.md", "README_CN.md"):
-        text = (ROOT / readme).read_text(encoding="utf-8")
-        for name in sorted(set(re.findall(r"`([a-z][a-z0-9.-]*\.json)`", text))):
-            if name.startswith("verification-") and name != "verification-report.json":
-                continue  # example report filenames in prose, not shipped templates
-            if not (ROOT / "templates" / name).exists() and "-report.json" not in name:
-                failures.append(f"{readme} names templates/{name}, which does not exist")
+    # 5. Every shipped template must be reachable from SKILL.md or a reference it points at.
+    #    A template nobody links to is a template nobody copies, which is the same as not
+    #    shipping it -- and the README is not a valid home for that pointer, since it is
+    #    documentation for humans browsing GitHub rather than context the model receives.
+    reachable = skill + "\n".join(
+        (ROOT / ref).read_text(encoding="utf-8")
+        for ref in referenced if ref.startswith("references/"))
+    for template in sorted((ROOT / "templates").glob("*.json")):
+        name = template.name
+        if name.endswith(".example.json"):
+            continue  # opt-in example, named in SKILL.md prose only when the case arises
+        if name not in reachable:
+            failures.append(
+                f"templates/{name} is shipped but nothing in SKILL.md or its references points at "
+                f"it; nobody would know to copy it")
 
     # 6. Nothing the skill needs may be excluded from the package.
     for path in ("scripts/check_plan_consistency.py", "references/verification.md",

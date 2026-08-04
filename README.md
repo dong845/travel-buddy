@@ -225,42 +225,6 @@ If you'd rather not use the browser form at all, say so — it falls back to a c
 
 ---
 
-## Script reference
-
-| Script | Purpose | Key options |
-| --- | --- | --- |
-| `start_intake_workflow.py` | The normal entry point; chains profile form → trip form → auto hand-off | `--workspace` · `--profile <ID>` · `--assistant {auto,codex,claude,none}` · `--edit-profile` |
-| `serve_profile_intake.py` | Serves the one-time profile form on loopback | `--port` (0 = random) · `--overwrite` · `--next-trip` · `--edit <profile.json>` |
-| `serve_trip_intake.py` | Serves the current-trip form; saves intake + workflow event | `--port` · `--profile <profile.json>` · `--assistant` |
-| `run_destination_discovery.py` | Launches a fresh non-interactive Codex/Claude task on a saved intake | `--workspace` · `--intake` · `--result-path` · `--log-path` (all required) |
-| `travel_workspace.py` | Workspace and profile management | `init` · `create-profile <id> --consent` · `validate-profile <path>` |
-| `render_final_trip_html.py` | Plan JSON → self-contained HTML (validates the plan first) | `plan` `[output]`; `-` for stdin/stdout |
-| `validate_trip_html.py` | The hard gate on a rendered page | `--expected-days` · `--require-booking-type` (repeatable) · `--transport-mode` |
-| `check_plan_consistency.py` | Proves the plan agrees with itself: route totals, walking figures, meal placement and hours, calendar, budget arithmetic | `plan` · `--verification <report.json>` · `--emit-walking` |
-| `save_trip_deliverables.py` | Run every gate, render, and save the paired JSON and HTML | `--workspace` · `--slug` · `--overwrite` · `--verification <report.json>` · `--unverified` |
-
-> **Careful:** `--profile` means a profile **ID** in `start_intake_workflow.py`, but a **file path** in `serve_trip_intake.py` and in `--edit`. Passing the wrong one reports "profile not found", not a path error.
-
----
-
-## Data contracts
-
-`templates/` holds the shapes that carry a trip through the pipeline. Copy the relevant one and fill it in:
-
-| Template | When |
-| --- | --- |
-| `personal-travel-profile.json` | The opt-in reusable profile (stable preferences only) |
-| `trip-profile.json` | This trip's normalized intake |
-| `destination-evaluation.json` | One record per candidate during Discovery |
-| `final-trip-plan.json` | **The Construction data contract** — the input to the renderer |
-| `verification-report.json` | **The verification contract** — what the five-domain pass produces and what `--verification` consumes |
-| `replan-request.json` | Preserves the prior plan plus the changed fields |
-| `renderer-ui-labels.example.json` | Only needed for an interface language other than English or Chinese; the renderer rejects a partial map so buttons cannot silently fall back to English |
-
-Two notes worth knowing: `destination-evaluation.json` and `replan-request.json` have **no code path** — they are model discipline, not machinery, which is why SKILL.md names them inline. And `assets/final-trip-template.html` is a structural reference, **not** the renderer's input: `render_final_trip_html.py` generates its own markup, so editing that file alone changes nothing.
-
----
-
 ## Workspace and privacy
 
 ```

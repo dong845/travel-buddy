@@ -95,7 +95,9 @@ each other and themselves.
 
 ## Report schema
 
-Write to `<workspace>/plans/verification-<slug>.json`:
+Start from [templates/verification-report.json](../templates/verification-report.json), which
+carries all five domain blocks and an inline note on each required field. Write the filled copy to
+`<workspace>/plans/verification-<slug>.json`:
 
 ```json
 {

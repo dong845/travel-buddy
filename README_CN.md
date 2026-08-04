@@ -225,41 +225,6 @@ python scripts/start_intake_workflow.py --assistant none
 
 ---
 
-## 脚本速查
-
-| 脚本 | 用途 | 主要参数 |
-| --- | --- | --- |
-| `start_intake_workflow.py` | 常规入口；串起档案表单 → 行程表单 → 自动接续 | `--workspace` · `--profile <ID>` · `--assistant {auto,codex,claude,none}` · `--edit-profile` |
-| `serve_profile_intake.py` | 在本机回环地址上提供一次性档案表单 | `--port`（0 = 随机）· `--overwrite` · `--next-trip` · `--edit <profile.json>` |
-| `serve_trip_intake.py` | 提供本次行程表单；保存 intake 与工作流事件 | `--port` · `--profile <profile.json>` · `--assistant` |
-| `run_destination_discovery.py` | 针对已保存的 intake 拉起新的非交互 Codex/Claude 任务 | `--workspace` · `--intake` · `--result-path` · `--log-path`（均必填） |
-| `travel_workspace.py` | 工作区与档案管理 | `init` · `create-profile <id> --consent` · `validate-profile <path>` |
-| `render_final_trip_html.py` | 方案 JSON → 自包含 HTML（先校验方案） | `plan` `[output]`；`-` 表示标准输入/输出 |
-| `validate_trip_html.py` | 对渲染页面的硬性校验 | `--expected-days` · `--require-booking-type`（可重复）· `--transport-mode` |
-| `check_plan_consistency.py` | 证明方案与自身自洽：路线合计、步行推导、餐点落位与营业时间、日历、预算算术 | `plan` · `--verification <report.json>` · `--emit-walking` |
-| `save_trip_deliverables.py` | 跑完全部闸门 + 渲染 + 保存配对的 JSON 与 HTML | `--workspace` · `--slug` · `--overwrite` · `--verification <report.json>` · `--unverified` |
-
-> **注意：**`--profile` 在 `start_intake_workflow.py` 里指的是档案 **ID**，但在 `serve_trip_intake.py` 和 `--edit` 里指的是**文件路径**。传错了会提示「档案不存在或无效」，而不是路径错误。
-
----
-
-## 数据契约
-
-`templates/` 里是贯穿流水线的固定结构。用哪个就复制哪个来填：
-
-| 模板 | 何时用 |
-| --- | --- |
-| `personal-travel-profile.json` | 可选存储的可复用档案（只放稳定偏好） |
-| `trip-profile.json` | 本次行程规范化后的需求 |
-| `destination-evaluation.json` | Discovery 阶段每个候选一份 |
-| `final-trip-plan.json` | **Construction 的数据契约** —— 渲染器的输入 |
-| `replan-request.json` | 保留原方案 + 变更字段 |
-| `renderer-ui-labels.example.json` | 仅当界面语言既不是英文也不是中文时需要；渲染器拒绝不完整的映射，以免按钮悄悄退回英文 |
-
-两点值得知道：`destination-evaluation.json` 和 `replan-request.json` **没有任何代码路径** —— 它们是给模型的纪律，不是机器，所以 SKILL.md 才把它们写在正文里。另外 `assets/final-trip-template.html` 是结构参考，**不是**渲染器的输入：`render_final_trip_html.py` 自己生成全部标记，只改那个文件不会有任何效果。
-
----
-
 ## 工作区与隐私
 
 ```
