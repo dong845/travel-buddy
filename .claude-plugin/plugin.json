@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "travel-buddy",
   "displayName": "Travel Buddy",
-  "description": "Decide where to go before building the itinerary: hard-filter destinations before scoring them, verify every fare, timetable and entry rule against a live source through a five-domain parallel check, and ship a self-contained booking-ready HTML plan that is gated on its own internal consistency.",
-  "version": "1.0.0",
+  "description": "Decide where to go before building the itinerary: hard-filter destinations before scoring them, verify every fare, timetable and entry rule against a live source through a five-domain parallel check, and ship a self-contained booking-ready HTML plan gated on its own internal consistency and on every outbound button naming the provider it actually opens.",
+  "version": "2.0.0",
   "author": {
     "name": "Leo-Lyu",
     "url": "https://github.com/dong845"
