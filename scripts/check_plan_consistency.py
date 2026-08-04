@@ -236,13 +236,30 @@ def check_day_internals(plan: dict, errors: list[str], notes: list[str]) -> None
             previous, previous_label = stamp, activity.get("name")
 
         segments = _segments(day)
+        for position, segment in enumerate(segments, 1):
+            for field in ("duration_minutes", "distance_km", "cost_low", "cost_high", "walking_minutes"):
+                if _num(segment.get(field)) < 0:
+                    errors.append(
+                        f"day {number} segment {position}: {field}={segment.get(field)} is negative. "
+                        f"Route totals are summed from these, so a negative leg can cancel a real one "
+                        f"out and leave the day looking self-consistent.")
         if segments and _route(day).get("transfer_count") is not None:
             stated = int(_num(_route(day).get("transfer_count")))
-            actual = sum(1 for seg in segments if not _is_walk(seg))
+            non_walking = sum(1 for seg in segments if not _is_walk(seg))
+            within_segments = int(sum(_num(seg.get("transfer_count")) for seg in segments))
             if stated > len(segments):
                 errors.append(
                     f"day {number}: route.transfer_count={stated} exceeds the {len(segments)} segments "
-                    f"it summarises ({actual} of them are not walking).")
+                    f"it summarises ({non_walking} of them are not walking).")
+            # A day cannot contain fewer interchanges than happen inside its own legs. This is a
+            # lower bound rather than equality on purpose: bus -> walk -> bus is two segments with
+            # no internal transfer each, yet one vehicle change for the traveller, so summing the
+            # segments would under-count a correct plan and summing them as equality would reject it.
+            if stated < within_segments:
+                errors.append(
+                    f"day {number}: route.transfer_count={stated} is fewer than the "
+                    f"{within_segments} transfer(s) its own segments declare. The day cannot contain "
+                    f"fewer interchanges than the legs inside it.")
 
 
 def check_cross_references(plan: dict, errors: list[str], notes: list[str]) -> None:
@@ -273,6 +290,14 @@ def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
         end = dt.date.fromisoformat(str(trip.get("end_date")))
     except (TypeError, ValueError):
         errors.append("trip.start_date / trip.end_date must be ISO dates.")
+        return
+
+    if end < start:
+        # Left unguarded this passes silently: the day-coverage loop below builds an empty
+        # expected list, so it compares the plan's days against nothing and finds no gap.
+        errors.append(
+            f"trip.start_date {start} is after trip.end_date {end}. Every date check downstream "
+            f"iterates the window, so a reversed one disables them all instead of failing.")
         return
 
     expected = []
@@ -396,6 +421,13 @@ def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
     included = set(_seq(budget.get("included_categories")))
     if not rows:
         return
+
+    priced = {r.get("category") for r in rows}
+    for category in sorted(c for c in included if c not in priced):
+        errors.append(
+            f"budget.included_categories lists {category!r} but no breakdown row prices it. The "
+            f"page then claims the per-person total covers something it never itemises, which is "
+            f"the black-box total the breakdown exists to prevent.")
 
     low = sum(_num(r.get("per_person_low")) for r in rows if r.get("category") in included)
     high = sum(_num(r.get("per_person_high")) for r in rows if r.get("category") in included)

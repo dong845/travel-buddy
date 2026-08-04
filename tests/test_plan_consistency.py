@@ -292,6 +292,40 @@ def main() -> int:
     report["checked_at"] = "2019-01-01"
     expect_fail("report predates the plan", p, "before the plan's generated_at", report)
 
+    # --- gaps found by the 2026-08-05 audit. Each of these passed every gate before it. ---
+
+    # `actual` was computed and never compared, so a day could claim fewer interchanges than its
+    # own legs declared. The rule is a lower bound, not equality: bus -> walk -> bus is one
+    # vehicle change across two segments that each declare none, and equality would reject it.
+    p = copy.deepcopy(base)
+    day(p, 1)["route"]["transfer_count"] = 0
+    expect_fail("transfer_count below what the segments declare", p, "fewer than the")
+    p = copy.deepcopy(base)
+    segments = day(p, 1)["route"]["segments"]
+    day(p, 1)["route"]["transfer_count"] = sum(s.get("transfer_count") or 0 for s in segments)
+    expect_ok("transfer_count equal to the segment declarations is fine", p)
+
+    # A category declared included but never itemised makes the headline total a black box --
+    # exactly what the breakdown exists to prevent.
+    p = copy.deepcopy(base)
+    p["budget"]["included_categories"] = sorted(set(p["budget"]["included_categories"]) | {"insurance"})
+    expect_fail("included category with no breakdown row", p, "no breakdown row prices it")
+
+    # A reversed window did not fail; it made the day-coverage loop iterate nothing, silently
+    # disabling every downstream date check.
+    p = copy.deepcopy(base)
+    p["trip"]["start_date"], p["trip"]["end_date"] = "2026-09-30", "2026-09-28"
+    expect_fail("reversed trip window", p, "is after trip.end_date")
+
+    # Totals are summed from segments, so a negative leg can cancel a real one and leave the
+    # arithmetic checks satisfied.
+    p = copy.deepcopy(base)
+    first = day(p, 1)["route"]["segments"][0]
+    first["duration_minutes"] = -first["duration_minutes"]
+    day(p, 1)["route"]["duration_minutes"] = sum(s["duration_minutes"] for s in day(p, 1)["route"]["segments"])
+    expect_fail("negative segment duration", p, "is negative")
+
+
     failures += verification_banner_cases(base)
 
     if failures:
