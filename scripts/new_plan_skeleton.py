@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Emit a structurally valid final-trip-plan skeleton, so authoring fills content not structure.
+
+Usage:
+  python new_plan_skeleton.py --start 2026-09-11 --end 2026-09-14 \
+      --origin "阿姆斯特丹" --destination "马拉加" --language zh --currency EUR \
+      --travellers 1 --mode public-transit --stops-per-day 4 > plan.json
+
+WHY THIS EXISTS
+---------------
+`templates/final-trip-plan.json` lists every field but cannot express the rules that relate them,
+so an author discovers those by failing the renderer. Measured on one real run, the first render
+returned 21 errors and every one was structural, not factual:
+
+  * segments must mirror consecutive pairs in stops_in_order, exactly, by string equality --
+    a stop written "老城 Calle Larios 街区" and a segment ending "老城 Calle Larios 街区（午餐）"
+    is a mismatch;
+  * `service_or_line` must be non-empty even on a walking leg;
+  * booking-access categories are `attraction_ticket` / `rail_or_ground`, not the budget
+    spellings `attractions` / `local_transport`;
+  * a departure day still needs a breakfast card;
+  * two flight candidates must not share a review_url.
+
+Three edit-render round-trips went into rediscovering that. This script encodes it once: the
+skeleton it prints renders on the first try, so the whole of that loop is spent on facts.
+
+IT CANNOT BE SHIPPED HALF-FILLED
+--------------------------------
+Free-text values an author must supply are the string "TODO: ...". Those survive rendering --
+the renderer only requires fields to be non-empty -- and are then rejected by
+`validate_trip_html.py`, which fails any page still carrying a TODO. So the skeleton speeds up
+authoring without becoming a way to deliver a hollow page.
+
+Typed fields cannot hold that prose, so they take type-valid sentinels. URLs keep the property:
+https://example.invalid/TODO-... is HTTPS enough for the renderer, still trips the TODO scan,
+and can never resolve, so `check_link_targets.py` objects too. Dates do not: 1970-01-01 is
+conspicuous on the page but no gate rejects it. That is the one hole in this design, and it is
+stated rather than papered over -- check every `checked_at` before delivery.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import sys
+
+TODO = "TODO: "
+# Typed fields cannot hold prose, so they get type-valid sentinels instead. The URL sentinel is
+# chosen so three separate gates still object: it is HTTPS (renderer accepts it), it contains
+# TODO (validate_trip_html rejects the page), and .invalid is a reserved TLD that can never
+# resolve (check_link_targets reports it). The date sentinel has no such backstop -- 1970 is
+# merely conspicuous on the page -- and that is a stated limit, not an oversight.
+URL = "https://example.invalid/TODO-replace-with-a-researched-url"
+DATE = "1970-01-01"
+
+
+def stop_name(day_number: int, index: int, total: int, day_type: str) -> str:
+    if day_type == "arrival" and index == 0:
+        return f"{TODO}day {day_number} arrival point (airport/station)"
+    if day_type == "departure" and index == total - 1:
+        return f"{TODO}day {day_number} departure point (airport/station)"
+    return f"{TODO}day {day_number} stop {index + 1}"
+
+
+def segment(origin: str, destination: str) -> dict:
+    """Walking legs still need service_or_line; the renderer rejects an empty one."""
+    return {
+        "from": origin,
+        "to": destination,
+        "mode": "步行",
+        "service_or_line": f"{TODO}line or operator (write 步行（无线路） for a walking leg)",
+        "duration_minutes": 0,
+        "distance_km": 0,
+        "walking_minutes": 0,
+        "transfer_count": 0,
+        "cost_low": 0,
+        "cost_high": 0,
+        "currency": f"{TODO}currency",
+        "journey_instruction": f"{TODO}how to board / which way to walk",
+        "arrival_instruction": f"{TODO}what the traveller sees on arrival",
+        "fare_basis": f"{TODO}fare and its source, or 'walking, no fare'",
+        "fallback_note": f"{TODO}what to do if this leg fails",
+        "verified_map_url": URL,
+        "map_checked_at": DATE,
+        "map_provider": f"{TODO}map provider (must own the URL above)",
+        "map_link_kind": "directions",
+        "alternative_map_links": [],
+    }
+
+
+def dining_card(meal: str, anchor: str) -> dict:
+    return {
+        "meal": meal,
+        "time_window": f"{TODO}HH:MM-HH:MM",
+        "venue_hours": None,
+        "hours_status": "unverified",
+        "venue_name": f"{TODO}venue for {meal}",
+        "cuisine_or_style": f"{TODO}cuisine or style",
+        "neighborhood": f"{TODO}neighbourhood",
+        "route_anchor": anchor,
+        "off_route_justification": None,
+        "why_this_stop": f"{TODO}why it fits the stop before or after it",
+        "price_per_person_low": 0,
+        "price_per_person_high": 0,
+        "currency": f"{TODO}currency",
+        "reservation_or_queue_note": f"{TODO}queue or reservation note",
+        "venue_url": URL,
+        "map_provider": f"{TODO}map provider (must own venue_url)",
+        "checked_at": DATE,
+        "reservation_provider": None,
+        "reservation_url": None,
+        "backup_venue_name": f"{TODO}backup venue",
+        "backup_note": f"{TODO}when to switch to the backup",
+    }
+
+
+def build_day(number: int, date: dt.date, day_type: str, stops_per_day: int, mode: str) -> dict:
+    total = max(2, stops_per_day)
+    stops = [stop_name(number, i, total, day_type) for i in range(total)]
+    segments = [segment(stops[i], stops[i + 1]) for i in range(total - 1)]
+
+    meals = {"arrival": ["dinner"], "departure": ["breakfast", "lunch"]}.get(day_type, ["lunch", "dinner"])
+    return {
+        "number": number,
+        "date": date.isoformat(),
+        "day_type": day_type,
+        "title": f"{TODO}day {number} title",
+        "focus": f"{TODO}what this day is for",
+        "base_location": f"{TODO}base location",
+        "accommodation_option_id": "acc-1",
+        "activities": [
+            {"time": "09:00", "name": f"{TODO}day {number} first activity", "detail": f"{TODO}detail",
+             "ticket_option_id": None, "meal_or_rest_buffer": None},
+            {"time": "14:00", "name": f"{TODO}day {number} second activity", "detail": f"{TODO}detail",
+             "ticket_option_id": None, "meal_or_rest_buffer": None},
+        ],
+        "dining": [dining_card(meal, stops[min(1, len(stops) - 1)]) for meal in meals],
+        "route": {
+            "start": stops[0],
+            "stops_in_order": stops,
+            "end": stops[-1],
+            "mode": mode,
+            "route_logic": f"{TODO}why this order",
+            "fallback_plan": f"{TODO}what to do if the day breaks",
+            "duration_minutes": 0,
+            "distance_km": 0,
+            "transfer_count": 0,
+            "walking_burden": f"{TODO}quote the computed walking total in digits",
+            "cost_low": 0,
+            "cost_high": 0,
+            "currency": f"{TODO}currency",
+            "fare_basis_or_fuel_toll_parking_note": f"{TODO}fare or fuel/toll/parking basis",
+            "service_or_driving_caveat": f"{TODO}service caveat",
+            "verified_map_url": URL,
+            "map_checked_at": DATE,
+            "map_provider": f"{TODO}map provider",
+            "map_link_kind": "directions",
+            "route_map_scope": "multi_stop" if total > 2 else "primary_leg",
+            "alternative_map_links": [],
+            "segments": segments,
+            "schematic_svg": None,
+        },
+        "contingency": f"{TODO}day-level contingency",
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--start", required=True)
+    parser.add_argument("--end", required=True)
+    parser.add_argument("--origin", required=True)
+    parser.add_argument("--destination", required=True)
+    parser.add_argument("--language", default="zh")
+    parser.add_argument("--currency", default="EUR")
+    parser.add_argument("--travellers", type=int, default=1)
+    parser.add_argument("--mode", choices=("public-transit", "self-drive"), default="public-transit")
+    parser.add_argument("--stops-per-day", type=int, default=4)
+    args = parser.parse_args()
+
+    try:
+        start = dt.date.fromisoformat(args.start)
+        end = dt.date.fromisoformat(args.end)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if end < start:
+        print("ERROR: --end is before --start.", file=sys.stderr)
+        return 2
+
+    span = (end - start).days + 1
+    days = []
+    for offset in range(span):
+        date = start + dt.timedelta(days=offset)
+        day_type = "arrival" if offset == 0 else "departure" if offset == span - 1 else "full"
+        days.append(build_day(offset + 1, date, day_type, args.stops_per_day, args.mode))
+
+    plan = {
+        "plan_status": "researched",
+        "verification_status": None,
+        "verification_report": None,
+        "generated_at": DATE,
+        "ui_labels": None,
+        "trip": {
+            "title": f"{TODO}trip title", "language": args.language, "currency": args.currency,
+            "origin": args.origin, "destination": args.destination, "destination_type": "city",
+            "start_date": start.isoformat(), "end_date": end.isoformat(),
+            "traveler_count": args.travellers, "pace": f"{TODO}pace",
+            "budget_basis": f"{TODO}what the per-person total includes",
+            "arrival_transport_mode": "flight",
+        },
+        "profile_context": {"profile_id": None, "profile_last_reviewed_at": None,
+                            "applied_saved_fields": [], "excluded_places_checked": []},
+        "regional_service_context": {
+            "destination_service_market": f"{TODO}service market",
+            "selection_basis": f"{TODO}why these providers suit this market",
+            "google_services_access": "unknown",
+            "primary_map_provider": f"{TODO}primary map provider",
+            "primary_map_exception_reason": None, "alternative_map_providers": [],
+            "local_transport_sources": [], "booking_platform_selection_note": f"{TODO}platform rationale",
+            # These categories are NOT the budget spellings. attraction_ticket / rail_or_ground.
+            "booking_access_checks": [
+                {"category": category, "access_status": "unknown",
+                 # Never interpolate the category enum into prose: on a non-Latin page the
+                 # validator rejects the surviving English, and it is right to.
+                 "provider_or_channel": f"{TODO}booking channel for this category",
+                 "requirements_note": f"{TODO}non-sensitive requirement or caveat",
+                 "source_url": URL, "checked_at": DATE}
+                # rental_car is required only when the self-drive branch shows a car option.
+                for category in (("flight", "accommodation", "attraction_ticket", "rail_or_ground")
+                                 + (("rental_car",) if args.mode == "self-drive" else ()))
+            ],
+        },
+        "budget": {
+            "calculation_basis": "per_person", "cap_per_person": None, "overrun_acknowledged": None,
+            "estimated_per_person_low": 0, "estimated_per_person_high": 0,
+            "included_categories": ["flight", "accommodation"],
+            "unverified_categories": [],
+            "breakdown": [
+                {"category": category, "description": f"{TODO}what this covers",
+                 "per_person_low": 0, "per_person_high": 0, "currency": args.currency,
+                 "price_status": "estimate", "checked_at": DATE,
+                 "note": f"{TODO}basis for this figure"}
+                for category in ("flight", "accommodation")
+            ],
+        },
+        "transport_preference": {"mode": args.mode,
+                                 "self_drive_selected": args.mode == "self-drive",
+                                 "public_transit_selected": args.mode == "public-transit"},
+        "booking_options": {
+            # Two candidates, and their review_urls must differ.
+            "flights": [
+                {"id": f"fl-{n}", "provider": f"{TODO}provider {n} (must own review_url)",
+                 "comparison_platform": f"{TODO}comparison platform {n}",
+                 "comparison_checked_at": DATE,
+                 "direct_provider": None, "direct_review_url": None,
+                 "source_type": "airline_and_comparison_platform", "checked_at": DATE,
+                 "review_url": f"{URL}-flight-{n}",
+                 "round_trip_search_provider": f"{TODO}search platform {n}",
+                 "round_trip_search_checked_at": DATE,
+                 "round_trip_search_url": f"{URL}-search-{n}",
+                 "round_trip_prefilled_fields": ["origin", "destination", "outbound_date",
+                                                 "return_date", "travellers"],
+                 "origin_airport": f"{TODO}origin airport", "destination_airport": f"{TODO}destination airport",
+                 "outbound_date": start.isoformat(), "return_date": end.isoformat(),
+                 "outbound_itinerary": {"service_identifier": f"{TODO}service", "departure_local": f"{TODO}local time",
+                                        "arrival_local": f"{TODO}local time", "duration_minutes": 0, "stops": 0,
+                                        "connection_or_terminal_note": f"{TODO}connection note"},
+                 "return_itinerary": {"service_identifier": f"{TODO}service", "departure_local": f"{TODO}local time",
+                                      "arrival_local": f"{TODO}local time", "duration_minutes": 0, "stops": 0,
+                                      "connection_or_terminal_note": f"{TODO}connection note"},
+                 "cabin": f"{TODO}cabin", "baggage_assumption": f"{TODO}baggage assumption",
+                 "connection_summary": f"{TODO}connection summary", "fare_currency": args.currency,
+                 "fare_low": 0, "fare_high": 0, "price_basis": "per_person_round_trip",
+                 "price_status": "estimate", "material_conditions": f"{TODO}fare conditions",
+                 "availability_status": "unknown", "price_checked_at": DATE,
+                 "airport_transfer_note": f"{TODO}airport-to-city burden", "single_option_reason": None}
+                for n in (1, 2)
+            ],
+            "accommodations": [
+                {"id": f"acc-{n}", "stay_group_id": "stay-1", "stay_location": f"{TODO}stay area",
+                 "neighborhood": f"{TODO}neighbourhood", "address_or_location_reference": f"{TODO}location reference",
+                 "property_name": f"{TODO}property {n}", "provider": f"{TODO}provider (must own review_url)",
+                 "comparison_platform": f"{TODO}comparison platform", "comparison_checked_at": DATE,
+                 "direct_provider": None, "direct_review_url": None, "source_type": "comparison_platform",
+                 "checked_at": DATE, "review_url": f"{URL}-property-{n}",
+                 "check_in": start.isoformat(), "check_out": end.isoformat(),
+                 "guest_count": args.travellers, "room_count": 1,
+                 "comparison_searches": [{"platform": f"{TODO}platform", "search_url": URL,
+                                          "checked_at": DATE,
+                                          "prefilled_fields": ["destination", "check_in", "check_out", "guests", "rooms"]}],
+                 "room_basis": f"{TODO}room basis", "nightly_cost_low": 0, "nightly_cost_high": 0,
+                 "price_basis": "per_room_per_night", "price_status": "estimate",
+                 "trip_cost_low": 0, "trip_cost_high": 0, "currency": args.currency,
+                 "price_checked_at": DATE, "availability_status": "unknown",
+                 "taxes_and_fees_status": f"{TODO}taxes and fees", "cancellation_terms": f"{TODO}cancellation",
+                 "accessibility_or_location_note": f"{TODO}access note", "arrival_access_note": f"{TODO}arrival access",
+                 "key_area_access_note": f"{TODO}access to planned areas",
+                 "selection_rationale": f"{TODO}why this one", "single_option_reason": None}
+                for n in (1, 2)
+            ],
+            "attraction_tickets": [],
+            # Only the self-drive branch requires this; the renderer rejects a self-drive plan
+            # with no rental option, and an empty list on a transit plan is correct.
+            "rental_cars": ([
+                {"id": "car-1", "provider": f"{TODO}rental provider (must own review_url)",
+                 "comparison_platform": f"{TODO}comparison platform", "comparison_checked_at": DATE,
+                 "direct_provider": None, "direct_review_url": None, "source_type": "comparison_platform",
+                 "checked_at": DATE, "review_url": f"{URL}-rental",
+                 "pickup_location": f"{TODO}pickup place", "dropoff_location": f"{TODO}dropoff place",
+                 "pickup_time": f"{TODO}YYYY-MM-DD HH:MM", "dropoff_time": f"{TODO}YYYY-MM-DD HH:MM",
+                 "vehicle_class": f"{TODO}vehicle class", "transmission": f"{TODO}transmission",
+                 "capacity_note": f"{TODO}luggage and party capacity",
+                 "price_low": 0, "price_high": 0, "currency": args.currency,
+                 "price_basis": "per_vehicle_per_day", "price_status": "estimate",
+                 "price_checked_at": DATE, "availability_status": "unknown",
+                 "rental_search_prefilled_fields": ["pickup_location", "dropoff_location",
+                                                    "pickup_time", "dropoff_time"],
+                 "insurance_excess": f"{TODO}insurance excess", "fuel_policy": f"{TODO}fuel policy",
+                 "mileage_policy": f"{TODO}mileage policy",
+                 "cross_border_or_restriction_note": f"{TODO}restrictions"}
+            ] if args.mode == "self-drive" else []),
+        },
+        "transport_overview": {
+            "map_link_kind": "directions", "overall_map_scope": "primary_leg",
+            "overall_route_map_url": URL,
+            "overall_map_checked_at": DATE, "overall_map_provider": f"{TODO}map provider",
+            "overall_alternative_map_links": [], "overall_duration_minutes": 0, "overall_distance_km": 0,
+            "cost_low": 0, "cost_high": 0, "notes": [f"{TODO}overall transport note"],
+        },
+        "days": days,
+        "destination_experience_anchors": [
+            {"name": f"{TODO}anchor {n}", "category": f"{TODO}category",
+             "neighborhood_or_area": f"{TODO}area", "planned_day": min(n, span),
+             "why_it_matters": f"{TODO}why it matters", "source_url": URL,
+             "checked_at": DATE} for n in (1, 2, 3)
+        ],
+        "sources": [{"name": f"{TODO}source", "url": URL, "source_type": f"{TODO}type",
+                     "accessed_at": DATE, "claim_or_decision_supported": f"{TODO}what it supports",
+                     "confidence": "medium"}],
+        "assumptions": [f"{TODO}state every assumption you carried"],
+        "recheck_before_purchase": [f"{TODO}what must be rechecked before booking"],
+    }
+
+    json.dump(plan, sys.stdout, ensure_ascii=False, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
