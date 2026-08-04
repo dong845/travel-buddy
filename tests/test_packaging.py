@@ -88,14 +88,39 @@ def main() -> int:
                 f"templates/final-trip-plan.json {label} is missing {sorted(missing)}. Anyone "
                 f"copying the contract would fail check_plan_consistency.py with no hint why.")
 
-    # 5. Nothing the skill needs may be excluded from the package.
+    # 4b. The verification contract people copy must satisfy the checker that consumes it.
+    report = json.loads((ROOT / "templates" / "verification-report.json").read_text(encoding="utf-8"))
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from check_plan_consistency import REQUIRED_DOMAINS  # noqa: PLC0415 - import after path setup
+
+    shipped = {d.get("domain") for d in report.get("domains", [])}
+    if shipped != REQUIRED_DOMAINS:
+        failures.append(
+            f"templates/verification-report.json covers {sorted(shipped)} but the checker requires "
+            f"exactly {sorted(REQUIRED_DOMAINS)}")
+    for domain in report.get("domains", []):
+        if "claims_checked" not in domain:
+            failures.append(
+                f"verification-report template domain {domain.get('domain')!r} omits claims_checked, "
+                f"which the checker requires — the template would teach the wrong shape")
+
+    # 5. Every template the READMEs point at must exist, in both languages.
+    for readme in ("README.md", "README_CN.md"):
+        text = (ROOT / readme).read_text(encoding="utf-8")
+        for name in sorted(set(re.findall(r"`([a-z][a-z0-9.-]*\.json)`", text))):
+            if name.startswith("verification-") and name != "verification-report.json":
+                continue  # example report filenames in prose, not shipped templates
+            if not (ROOT / "templates" / name).exists() and "-report.json" not in name:
+                failures.append(f"{readme} names templates/{name}, which does not exist")
+
+    # 6. Nothing the skill needs may be excluded from the package.
     for path in ("scripts/check_plan_consistency.py", "references/verification.md",
                  "SKILL.md", "templates/final-trip-plan.json"):
         ignored = subprocess.run(["git", "check-ignore", "-q", path], cwd=ROOT).returncode == 0
         if ignored:
             failures.append(f"{path} is gitignored and would not ship")
 
-    # 6. Both READMEs document the gate; a one-sided update leaves the other language wrong.
+    # 7. Both READMEs document the gate; a one-sided update leaves the other language wrong.
     for readme in ("README.md", "README_CN.md"):
         text = (ROOT / readme).read_text(encoding="utf-8")
         if "check_plan_consistency.py" not in text:

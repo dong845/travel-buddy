@@ -41,7 +41,7 @@ Nothing leaves your machine except the research queries. There is no account, no
 2. **Hard constraints gate; preferences only rank.** A destination that fails a hard filter cannot win on charm. If nothing survives the filters, that is an *outcome* — it reports the conflict and the smallest relaxation, instead of crowning a loser.
 3. **Entry burden is destination × traveller status, not geography.** "Domestic or international?" is the wrong question: a third-country national holding a member-state residence permit crosses into Schengen visa-free. The form asks how much *visa effort* you accept, and derives the rest.
 4. **Browse, never transact.** Every outbound link is a browse-only URL you click yourself. The skill never logs in, never fills payment details, never puts anything in a cart, and never calls something "booked" because a website displayed it.
-5. **A gate that fails outranks a paragraph that asks nicely.** The completeness rules are enforced by two validators, not by hoping the model remembers.
+5. **A gate that fails outranks a paragraph that asks nicely.** The rules are enforced by four gates, not by hoping the model remembers — two prove the artifact is well-formed, two prove it is true.
 
 ---
 
@@ -52,6 +52,8 @@ Nothing leaves your machine except the research queries. There is no account, no
 **It shows you what a channel costs you.** The same four flights priced ¥4,259 on the domestic site and ¥7,020 on the international one — a ¥2,761 gap that decides whether the trip fits the budget. travel-buddy records the access status of each booking channel (`available` / `limited` / `unknown`) rather than assuming a visible search result means you can complete a purchase.
 
 **It routes by the destination market, not by brand habit.** Mainland-China routes get verified `uri.amap.com/navigation` directions links with real coordinates; the validator *rejects* the page if a Google Maps URL is the primary route there. A place/POI page is never accepted as navigation.
+
+**It assumes it will get things wrong, and makes the errors audible.** Structure checks prove a page is well-formed, never that it is true — a real run passed every one of them while shipping a visa conclusion that stopped at the visa and missed the EVUS enrolment that gets Chinese passport holders denied boarding at check-in; two "competing" flights that were one aircraft sold twice; a free tour booked on a day it does not run; dinners at venues that close three hours earlier; and a "lightest walking day" that was the heaviest, against a stated accessibility constraint. So `check_plan_consistency.py` now decides in code what prose cannot be trusted to hold, and a five-domain verification pass covers what only the world can answer. A plan saved without that pass says so on its own front page.
 
 **It won't quietly ship a half-finished plan.** A Construction task is not complete until a validated JSON *and* HTML both exist on disk and their exact paths are reported. Anything less must be labelled intermediate discovery with the one blocking question named.
 
@@ -251,6 +253,7 @@ If you'd rather not use the browser form at all, say so — it falls back to a c
 | `trip-profile.json` | This trip's normalized intake |
 | `destination-evaluation.json` | One record per candidate during Discovery |
 | `final-trip-plan.json` | **The Construction data contract** — the input to the renderer |
+| `verification-report.json` | **The verification contract** — what the five-domain pass produces and what `--verification` consumes |
 | `replan-request.json` | Preserves the prior plan plus the changed fields |
 | `renderer-ui-labels.example.json` | Only needed for an interface language other than English or Chinese; the renderer rejects a partial map so buttons cannot silently fall back to English |
 
@@ -294,6 +297,10 @@ Never remove the whole workspace to satisfy a profile deletion.
 **A freshly created profile validates but is empty.** `create-profile` writes a consented *shell*; `validate-profile` will call it VALID with every substantive field still null. Fill it in — via `--edit-profile` — before relying on it.
 
 **The validator rejects your page for English text.** On a non-English page, every renderer-owned string must be translated, and machine values printed as visible text count. Use the closed enums rather than inventing a category name.
+
+**It refuses to save: "No verification report."** That is the gate working. Run the five-domain pass in [`references/verification.md`](references/verification.md), save the report, and pass `--verification <report.json>`. If you are deliberately saving a draft, `--unverified` saves it and stamps a "not fact-checked" banner on the page so nobody mistakes it for booking-ready.
+
+**The consistency gate rejects a plan that looks fine.** Read what it names — it is arithmetic, not taste. `walking_burden` must quote the walking total computed from that day's segments, in digits, so prose cannot drift from the data. Every dining card needs a `route_anchor` naming one of that day's stops (or an `off_route_justification` stating the detour it costs) and either `venue_hours` or `hours_status: "unverified"`. Route totals must equal the sum of their segments. A stated `cap_per_person` cannot be exceeded without `overrun_acknowledged`.
 
 **A map button fails the gate.** It must be a real directions URL. For mainland China that means `https://uri.amap.com/navigation` with non-empty `from`, `to` and `mode`; a `ditu.amap.com/place/...` link is a POI page and is rejected. Remember Amap uses GCJ-02, so convert WGS-84 coordinates before building the link or every route lands a few hundred metres off.
 

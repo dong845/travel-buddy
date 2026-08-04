@@ -3,7 +3,7 @@
   "name": "travel-buddy",
   "displayName": "Travel Buddy",
   "description": "Decide where to go before building the itinerary: hard-filter destinations before scoring them, verify every fare, timetable and entry rule against a live source through a five-domain parallel check, and ship a self-contained booking-ready HTML plan that is gated on its own internal consistency.",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "author": {
     "name": "Leo-Lyu",
     "url": "https://github.com/dong845"

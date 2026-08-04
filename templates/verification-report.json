@@ -1,0 +1,58 @@
+{
+  "checked_at": "2026-08-04",
+  "plan": "plans/2027-09-08-your-trip.json",
+  "method": "five-domain fan-out; note here how it was run so a reader can judge the coverage",
+
+  "_contract": [
+    "All five domains must appear and no others. Copy every block below even when a domain",
+    "found nothing -- an absent domain is a gap nobody can see, which is exactly what a skipped",
+    "pass looks like.",
+    "claims_checked is the number of individual assertions that domain examined and must be > 0.",
+    "Without it, 'no findings' cannot be told apart from 'nobody ran this'.",
+    "plan binds the report to one itinerary; the checker compares it to the file it is given, so",
+    "one clean report cannot certify every trip.",
+    "verdict: confirmed | wrong | misleading | unverifiable. Only report the last three --",
+    "confirmed claims are noise. severity: critical | major | minor.",
+    "resolved is required on wrong and misleading, and resolution names the change that fixed it.",
+    "No code can prove a resolution actually happened, so write it for a human to check by eye.",
+    "Delete this _contract key before saving the real report."
+  ],
+
+  "domains": [
+    {
+      "domain": "entry",
+      "claims_checked": 0,
+      "findings": [
+        {
+          "claim": "the plan's own words, quoted, so a reader can find what was wrong",
+          "verdict": "misleading",
+          "correction": "what is actually true, stated concretely",
+          "severity": "critical",
+          "evidence_url": "https://official-source.example/page",
+          "resolved": true,
+          "resolution": "which field of the plan changed, and how"
+        }
+      ]
+    },
+    {
+      "domain": "transport",
+      "claims_checked": 0,
+      "findings": []
+    },
+    {
+      "domain": "sights_and_hours",
+      "claims_checked": 0,
+      "findings": []
+    },
+    {
+      "domain": "booking_and_lodging",
+      "claims_checked": 0,
+      "findings": []
+    },
+    {
+      "domain": "seasonality",
+      "claims_checked": 0,
+      "findings": []
+    }
+  ]
+}
