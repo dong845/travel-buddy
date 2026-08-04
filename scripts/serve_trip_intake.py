@@ -370,8 +370,18 @@ def validate_intake(value: object) -> list[str]:
             errors.append("不需要现办签证时，visa_tolerance 必须为 no_new_visa_needed。")
         if feasibility.get("entry_status") != "traveler_asserts_can_enter":
             errors.append("不需要现办签证时，entry_status 必须为 traveler_asserts_can_enter。")
-        if feasibility.get("passport_validity_status") != "not_applicable_domestic":
-            errors.append("不需要现办签证时，passport_validity_status 必须为 not_applicable_domestic。")
+        # A held visa does not make an expired passport board a plane. This branch covers both
+        # "staying home" and "going abroad on something I already hold", so validity is still
+        # required here -- with an explicit domestic opt-out, not an assumed one.
+        if feasibility.get("passport_validity_status") not in {
+            "valid_through_trip", "not_sure", "needs_renewal", "not_applicable_domestic"
+        }:
+            errors.append("即使无需现办签证，也要确认护照有效期（国内出行请选 not_applicable_domestic）。")
+        # Restores the privacy guard the three-way scope carried: identity is collected only
+        # where it can affect entry. A trip that never leaves the country has no entry question
+        # to answer, so nationality and residence must not be stored for it.
+        if feasibility.get("passport_validity_status") == "not_applicable_domestic" and entries not in ([], None):
+            errors.append("仅国内出行时不应收集同行人的身份信息。")
     climate = feasibility.get("climate_preferences")
     if not isinstance(climate, list):
         errors.append("气候偏好必须是列表。")

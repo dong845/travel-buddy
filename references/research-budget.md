@@ -49,10 +49,23 @@ Do **not** put feasibility, design, and adversarial challenge in one fan-out.
 3. **Design** — anchors, opening hours, seasonality, service routing. Only now are the weekdays
    real.
 
+Discovery does not have a design phase in this sense: it produces a shortlist, not day plans, so
+it never researches opening hours and the weekday rule does not bite. Its equivalent of the
+checkpoint is the shortlist itself — the traveller picks a destination, dates get fixed, and only
+then does the Construction pipeline above start at phase 1.
+
 Separate invocations, not separate phases inside one call. In the measured run a single
 `ECONNRESET` late in a combined workflow destroyed 587k tokens of *already-completed* feasibility
 work, because the surviving results sat behind a barrier. Separate calls are independently
 resumable and independently cacheable.
+
+**The checkpoint must be one consolidated question, not a series.** It exists to save wall-clock,
+and it only does that if it replaces several round-trips rather than adding one. The measured run
+put four separate questions to the traveller at four different moments — profile confirmation,
+visa type, return-day structure and outbound structure, then ticket structure — each one stalling
+the pipeline. Every decision that feasibility has surfaced goes into a single prompt: dates,
+routing, ticket structure, and any constraint that turned out to conflict. If you find yourself
+asking a second question before design starts, the first one was incomplete.
 
 ## 3. Cap what each agent may spend
 
@@ -60,12 +73,27 @@ State a budget in every agent prompt. Without one, agents will exhaust a shared 
 search quota and leave later stages — including verification — with no network at all. That
 happened: the verify pass had to run WebFetch-only because research had used 200 of 200 searches.
 
-- **At most 10–12 web searches per agent.** Prefer fetching a known official URL directly over
-  searching for it.
+Tier the cap by what the domain can cost if it is wrong — a feasibility miss cancels the trip, a
+thin anchor list only makes a day duller:
+
+| Stage | Searches per agent | Why |
+| --- | --- | --- |
+| Feasibility (entry, reachability, budget) | ~15 | These decide whether the trip happens. Underspending here is how a suspended air route or a broken cap survives to the page. |
+| Design (anchors, hours, seasonality, service routing) | ~8 | Mostly official pages you can address directly once the district is chosen. |
+| Verification | ~10 | Needs enough to fetch every cited source and refute it. |
+| Discovery candidate generation | ~10 per candidate batch, not per candidate | Breadth here is the product; cap the batch, not the search. |
+
+That is roughly 3×15 + 3×8 + 7×10 ≈ 139 for a Construction trip, inside a 200-call session budget
+with headroom for the orchestrator. Also:
+
+- **Prefer fetching a known official URL directly over searching for it.**
 - **Name the primary sources you expect them to use** in the prompt. An agent given
   `csair.com`, `keisei.co.jp`, `tokyometro.jp` does not need to search for them.
 - **One domain per agent, and say what is out of scope.** "Do not price hotels" in the flights
   prompt is worth more than any instruction about what to include.
+- **Never let an agent silently exhaust the shared quota.** Tell it the cap and tell it to report
+  what it could not check rather than spending past it. An unchecked fact that says so is a
+  finding; an unchecked fact that does not is a defect.
 
 ## 4. Bound the schema
 
