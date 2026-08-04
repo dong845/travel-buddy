@@ -97,7 +97,8 @@
       <section class="section"><h2>4. 出行范围、交通与气候条件</h2>
         <p class="hint">国内旅行不需要填写入境信息；只有可能出境时才收集国籍、合法居留地和可接受签证方式。无论国内或海外，都会比较飞机、铁路、长途巴士、轮渡和自驾等实际可行的方式。</p>
         <div class="grid">
-          <div><label for="travel-scope">这次愿意跑多远 <span>必填</span></label><select id="travel-scope" required><option value="">请选择</option><option value="home_country_only">只在常住国内</option><option value="visa_free_only">可以出国，但只去不用提前办签证的地方</option><option value="any_including_visa">哪儿都行，需要提前办签证也接受</option></select></div>
+          <div><label for="travel-scope">这趟需要现办签证吗 <span>必填</span></label><select id="travel-scope" required><option value="">请选择</option><option value="no_new_visa_needed">不需要——想去的地方我现在就能入境（免签、已持有效签证/居留，或就在常住国内）</option><option value="any_including_visa">需要——愿意为这趟提前去办签证</option></select></div>
+          <div id="held-visa-wrap" hidden><label for="held-visas">↳ 靠什么入境 <span>承接上一栏，越具体越省事</span></label><input id="held-visas" placeholder="如：日本三年多次签、申根居留卡、目的地免签、就在国内"></div>
           <div id="visa-effort-wrap" hidden><label for="visa-tolerance">↳ 能接受到什么程度 <span>承接上一栏</span></label><select id="visa-tolerance"><option value="evisa_acceptable">只接受电子签/落地签</option><option value="visa_process_acceptable">可以提前去办正式签证</option></select></div>
           <div><label for="travel-time">可接受的最长单程总时长 <span>必填，含候车/转机/地面接驳</span></label><select id="travel-time" required><option value="">请选择</option><option value="不超过 3 小时">不超过 3 小时</option><option value="不超过 6 小时">不超过 6 小时</option><option value="不超过 10 小时">不超过 10 小时</option><option value="不超过 15 小时">不超过 15 小时</option><option value="不超过 24 小时">不超过 24 小时</option><option value="无明确上限，以舒适为准">无明确上限，以舒适为准</option></select></div>
           <div><label for="transport-priority">跨城交通优先级</label><select id="transport-priority"><option value="">综合比较</option><option value="shortest_total_time">总耗时最短</option><option value="lowest_reasonable_cost">合理价格优先</option><option value="fewest_transfers">少换乘优先</option><option value="comfort_and_scenery">舒适/沿途景观优先</option></select></div>
@@ -225,12 +226,16 @@
       // Geography no longer stands in for visa burden: entry is assessed whenever the
       // trip may leave the country of residence, and how much visa effort is acceptable
       // follows from the same answer instead of being a separate question.
-      function requiresEntryAssessment() { return ["visa_free_only", "any_including_visa"].includes(text("travel-scope")); }
+      // Only "I need to get a visa" triggers the full entry panel. A traveller who says they
+      // can already enter is asked one thing instead — what they enter ON — because that is
+      // the fact worth verifying. Re-deriving eligibility from nationality when the traveller
+      // already holds the visa is how a whole research branch gets spent and then voided.
+      function requiresEntryAssessment() { return text("travel-scope") === "any_including_visa"; }
       function visaTolerance() {
         const scope = text("travel-scope");
-        if (scope === "visa_free_only") return "visa_free_only";
         if (scope === "any_including_visa") return text("visa-tolerance") || "visa_process_acceptable";
-        return "not_applicable_domestic";
+        if (scope === "visa_free_only") return "visa_free_only";
+        return "no_new_visa_needed";
       }
 
       function entryProfiles(required) {
@@ -255,6 +260,7 @@
         const entryNeeded = requiresEntryAssessment();
         $("entry-requirements").hidden = !entryNeeded;
         $("visa-effort-wrap").hidden = text("travel-scope") !== "any_including_visa";
+        $("held-visa-wrap").hidden = text("travel-scope") !== "no_new_visa_needed";
         const anchored = ["fixed", "anchored"].includes(text("scope"));
         $("places-hint").textContent = anchored ? "必填，逗号分隔" : "逗号分隔，可选";
         refreshRanking();
@@ -407,7 +413,7 @@
           transport_preferences:{ preferred_modes:modes, priority:text("transport-priority") || null, willing_to_self_drive:modes.includes("self_drive"), luggage_or_baggage_needs:text("baggage") || null, cabin_preference:text("cabin") || null, flight_time_preference:text("flight-time") || null, rail_preference:text("rail-preference") || null, bus_comfort_tolerance:text("bus-comfort") || null, ferry_acceptable:modes.includes("ferry") },
           regional_service_access:{ selection_preference:"auto_by_destination", preferred_map_apps:list("preferred-map-apps"), preferred_booking_platforms:list("preferred-booking-platforms"), services_to_avoid:list("services-to-avoid"), google_services_access:text("google-services-access") || "unknown", notes:text("service-access-notes") || null },
           stay_preferences:{ room_count:roomCount, lodging_style:text("comfort") || null, location_priority:text("stay-location") || null, breakfast_preference:text("breakfast") || null, cancellation_preference:text("cancellation") || null },
-          feasibility:{ entry_assessment_required:entryNeeded, traveler_entry_profiles:travelers, passport_nationality:primaryTraveler.passport_nationality || null, legal_residence:primaryTraveler.legal_residence || null, residence_status:primaryTraveler.residence_status || profileDefaults.residence_status || null, passport_validity_status:entryNeeded ? text("passport-validity") : "not_applicable_domestic", entry_status:entryNeeded ? "unknown" : "not_applicable_domestic", visa_tolerance:visaTolerance(), climate_preferences:climate, dietary_or_religious_needs:list("dietary"), safety_or_connectivity_needs:[] },
+          feasibility:{ entry_assessment_required:entryNeeded, traveler_entry_profiles:travelers, passport_nationality:primaryTraveler.passport_nationality || null, legal_residence:primaryTraveler.legal_residence || null, residence_status:primaryTraveler.residence_status || profileDefaults.residence_status || null, passport_validity_status:entryNeeded ? text("passport-validity") : "not_applicable_domestic", entry_status:entryNeeded ? "unknown" : "traveler_asserts_can_enter", held_entry_documents:text("held-visas") || null, visa_tolerance:visaTolerance(), climate_preferences:climate, dietary_or_religious_needs:list("dietary"), safety_or_connectivity_needs:[] },
           constraint_registry:[], open_questions:[], assumptions:[]
         };
       }

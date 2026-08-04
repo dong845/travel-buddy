@@ -31,9 +31,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # "domestic vs cross-border" was standing in for "does this need a visa" and got it
 # wrong for anyone whose residence permit gives them free movement. Legacy values from
 # intakes saved before that change are still accepted and mapped forward.
-TRIP_SCOPES = ("home_country_only", "visa_free_only", "any_including_visa")
+#
+# Narrowed again to a yes/no: does this trip need a visa the traveller does not yet hold?
+# The three-way version still made a traveller who already holds the visa answer a question
+# about visa *effort*, which then triggered a full entry-eligibility research pass that their
+# own passport had already settled. "No" now means "I can enter what I want to enter", and
+# `held_entry_documents` records what on — which is the only fact worth verifying.
+TRIP_SCOPES = ("no_new_visa_needed", "any_including_visa")
 LEGACY_TRIP_SCOPES = {
-    "domestic": "home_country_only",
+    "home_country_only": "no_new_visa_needed",
+    "visa_free_only": "no_new_visa_needed",
+    "domestic": "no_new_visa_needed",
     "cross_border": "any_including_visa",
     "domestic_or_cross_border": "any_including_visa",
 }
@@ -308,8 +316,8 @@ def validate_intake(value: object) -> list[str]:
         errors.append("选择了已固定或有偏好的目的地时，必须填写具体地点。")
     trip_scope = normalized_scope(geography.get("scope"))
     if trip_scope is None:
-        errors.append("需要选择这次愿意跑多远。")
-    entry_assessment_required = trip_scope in {"visa_free_only", "any_including_visa"}
+        errors.append("需要选择这趟是否需要现办签证。")
+    entry_assessment_required = trip_scope == "any_including_visa"
     if geography.get("entry_assessment_required") is not entry_assessment_required:
         errors.append("trip_geography.entry_assessment_required 与所选出行范围不一致。")
     if experience.get("direction") not in {"natural", "human_cultural", "balance"}:
@@ -350,20 +358,20 @@ def validate_intake(value: object) -> list[str]:
                     errors.append("身份类别必须是文字或留空。")
                     break
         if feasibility.get("visa_tolerance") not in {"visa_free_only", "evisa_acceptable", "visa_process_acceptable"}:
-            errors.append("可接受的签证程度必须由「这次愿意跑多远」推导得出。")
+            errors.append("可接受的签证程度必须由「这趟是否需要现办签证」推导得出。")
         # Passport validity is a hard entry filter in SKILL.md; asking for the status
         # (never the number or the date) is what makes that filter checkable.
         if feasibility.get("passport_validity_status") not in {"valid_through_trip", "not_sure", "needs_renewal"}:
             errors.append("跨境旅行需要确认护照在行程结束后是否仍然有效。")
     else:
-        if entries not in ([], None):
-            errors.append("只在常住国内出行时不应收集同行人的身份信息。")
-        if (
-            feasibility.get("visa_tolerance") != "not_applicable_domestic"
-            or feasibility.get("entry_status") != "not_applicable_domestic"
-            or feasibility.get("passport_validity_status") != "not_applicable_domestic"
-        ):
-            errors.append("仅国内旅行必须把入境相关字段标记为 not_applicable_domestic。")
+        # "I can already enter" still has to say what it enters on, because that string is
+        # what the verify stage checks instead of re-deriving eligibility from nationality.
+        if feasibility.get("visa_tolerance") != "no_new_visa_needed":
+            errors.append("不需要现办签证时，visa_tolerance 必须为 no_new_visa_needed。")
+        if feasibility.get("entry_status") != "traveler_asserts_can_enter":
+            errors.append("不需要现办签证时，entry_status 必须为 traveler_asserts_can_enter。")
+        if feasibility.get("passport_validity_status") != "not_applicable_domestic":
+            errors.append("不需要现办签证时，passport_validity_status 必须为 not_applicable_domestic。")
     climate = feasibility.get("climate_preferences")
     if not isinstance(climate, list):
         errors.append("气候偏好必须是列表。")

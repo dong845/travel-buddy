@@ -25,6 +25,17 @@ Use this skill for advice and planning; do not make bookings, purchases, or acco
 
 Use the skill for intake, constraint interpretation, candidate generation, hard filtering, scoring logic, explanations, and dependency-aware replanning. Use MCPs, APIs, or web research only to obtain current-world facts. If a required live-data capability is unavailable, leave the fact unverified and offer a range or verification step; never compensate by guessing. Retain a profile only for the active task unless the user explicitly asks to save it.
 
+### Research order, which is a correctness rule before it is a cost rule
+
+Read [references/research-budget.md](references/research-budget.md) before launching any research fan-out. Four rules bind on every run:
+
+1. **Ask the disqualifiers first.** Before the first agent: do you already hold the visa/entry permission, are the dates truly immovable, have you booked anything yet? Each "yes" deletes a whole branch. A measured run researched a complete visa procedure and the traveller's next message was "我有签证".
+2. **Feasibility, then a checkpoint with the traveller, then design — as separate invocations.** Feasibility covers only what can kill the trip (entry, reachability, budget). **Research no anchors, opening hours, or weather until the dates are final**, because every one of those facts is keyed to a weekday. In the measured run the dates moved by a day afterwards, the weekday map had to be redone by hand, and that manual redo is what introduced an off-by-one in every ticket and anchor day index. Researching too early manufactures defects, it does not merely waste tokens.
+3. **Cap each agent** at ~10–12 web searches and name the official sources you expect it to use. Agents will otherwise exhaust a session-wide search quota and leave the verification stage with no network.
+4. **Never challenge a user-confirmed fact.** The adversarial pass is for claims you produced. Verify its *consequences* if they are checkable; do not re-litigate the traveller's own statement.
+
+None of this applies to the verification stage, which is not the place to save money — see the last section of that reference.
+
 ### Reusable profiles and local deliverables
 
 For a first Travel Buddy use, or whenever no valid reusable profile exists, start the one-time reusable-profile HTML form after explaining its local storage and consent checkbox. Do not silently create a profile: the user must explicitly confirm local storage in that form. If the user declines, do not persist a profile and use a per-trip form only for that active request. Store a consented profile in the user-selected Travel Buddy workspace, which defaults to a `Travel Buddy` folder directly inside the user’s home folder and contains `profiles`, `plans`, and `html`; never put profile data in a shared cloud service by default.
@@ -62,7 +73,14 @@ Default to the local HTML intake workflow for a first-time traveler or any trave
 
 ### First-turn essentials
 
-When a consented profile is available, first summarize only the relevant saved constraints and ask whether anything changed. Do not re-ask confirmed stable fields. The HTML trip form must collect or confirm these seven fields before claiming a destination is a strong fit. First ask **how far they are willing to go in terms of visa effort** — only within the country of residence, abroad but only where no visa must be arranged in advance, or anywhere including visa-required countries. Do not ask "domestic or cross-border": geography is a bad proxy for entry burden, and it misfires for exactly the travellers it matters most to. Someone holding a member-state residence permit crosses a border into the Schengen area with no visa at all, so a geographic label forces them to answer a question that has no correct answer. Entry burden follows from **destination country × traveller status**, and the traveller's status belongs in the profile (`identity_and_language.residence_status`), not in a per-trip question. Collect per-traveller identity and a yes/not-sure/needs-renewal passport-validity confirmation only when the trip may leave the country of residence; acceptable visa effort is then derived from the same scope answer rather than asked twice. Always collect maximum one-way journey time, applicable climate constraints, and transport modes—including high-speed rail, conventional/night rail, intercity bus, ferry, flights, and self-drive where relevant. Accept rough answers and mark them as approximate.
+When a consented profile is available, first summarize only the relevant saved constraints and ask whether anything changed. Do not re-ask confirmed stable fields. The HTML trip form must collect or confirm these seven fields before claiming a destination is a strong fit. First ask one yes/no: **does this trip need a visa the traveller does not already hold?** Do not ask "domestic or cross-border": geography is a bad proxy for entry burden, and it misfires for exactly the travellers it matters most to — someone holding a member-state residence permit crosses into the Schengen area with no visa at all. Do not ask about visa *effort* either. Effort only matters to someone who still has to apply, and asking it first spends the expensive research on a traveller whose own passport had already settled the question.
+
+The two answers are different constraints, not two points on one scale:
+
+- **No — I can already enter what I want to enter.** Collect one field, `feasibility.held_entry_documents`: what they enter *on* (a held multi-entry visa, a residence permit, visa-free, or simply being at home). Set `entry_status: traveler_asserts_can_enter` and skip the entry panel entirely. This is the only fact worth verifying, and verifying it is cheap. It also constrains destinations: candidates are limited to what that document actually admits them to, so a `no_new_visa_needed` answer is a hard filter on the shortlist, not a free pass.
+- **Yes — I am willing to apply.** Now the effort sub-question is worth asking (e-visa/visa-on-arrival only, or a full application), and only now collect per-traveller identity and a yes/not-sure/needs-renewal passport-validity confirmation.
+
+The reason this ordering matters is measurable. A real run researched a complete Japan visa procedure for a PRC passport — consular jurisdiction, designated-agency rules, fee schedule, processing times, roughly 100KB of output — and the traveller's next message was "我有签证". One yes/no, asked first, deletes that entire branch. Entry burden follows from **destination country × traveller status**; status lives in the profile (`identity_and_language.residence_status`), not in a per-trip question. Always collect maximum one-way journey time, applicable climate constraints, and transport modes—including high-speed rail, conventional/night rail, intercity bus, ferry, flights, and self-drive where relevant. Accept rough answers and mark them as approximate.
 
 1. **Starting point** — current city and country; acceptable departure airports or willingness to use a nearby airport. A city is enough; never ask for an address.
 2. **Travel window** — exact `start_date`/`end_date` when the traveller has them, otherwise month/season plus duration; date flexibility; and any fixed commitment the trip must fit around (a return-to-work date, a wedding, an event). Exact dates are authoritative: a Construction task cannot start without them, so never downgrade a supplied date pair to a month.
@@ -180,6 +198,7 @@ Keep unaffected, still-feasible choices. Return a concise change log: retained i
 
 Before delivering a recommendation or plan, verify:
 
+- the disqualifier questions in [references/research-budget.md](references/research-budget.md) were asked before any research fan-out, and no anchor, opening-hour, or weather research was launched before the travel dates were final;
 - origin, dates/duration, party, budget basis, destination scope, and experience direction are either known or visibly assumed;
 - first-time intake used the loopback HTML form unless the user already supplied the information or explicitly chose the chat fallback;
 - human/cultural and natural preferences have been decomposed into useful subtypes rather than treated as vague labels;
