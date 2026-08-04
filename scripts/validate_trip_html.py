@@ -206,6 +206,56 @@ def is_safe_https(value: str) -> bool:
     return True
 
 
+# A button's visible label and its data-*-provider attribute are built from the same plan field,
+# so comparing the attribute to the href is the same test the traveller performs by clicking.
+GENERIC_PROVIDER_TOKENS = {"com", "org", "net", "www", "http", "https", "official", "inc", "ltd", "app"}
+
+# Providers whose name carries no Latin token cannot be matched against a host directly.
+# Naming the common ones keeps them checkable instead of merely undecidable.
+PROVIDER_HOST_ALIASES = {
+    "高德": "amap",
+    "谷歌": "google",
+    "百度": "baidu",
+    "腾讯": "qq",
+    "携程": "trip",
+    "去哪儿": "qunar",
+    "飞猪": "fliggy",
+    "同程": "ly",
+    "铁路": "12306",
+    "大众点评": "dianping",
+    "美团": "meituan",
+}
+
+
+def provider_match_tokens(provider: str) -> set[str]:
+    """Tokens a host could plausibly contain if it belongs to this provider."""
+    tokens = set(re.findall(r"[a-z0-9]{3,}", provider.casefold())) - GENERIC_PROVIDER_TOKENS
+    for needle, token in PROVIDER_HOST_ALIASES.items():
+        if needle in provider:
+            tokens.add(token)
+    return tokens
+
+
+def provider_target_verdict(provider: str, url: str) -> bool | None:
+    """Does the provider a button *names* own the URL it *opens*?
+
+    Returns True/False, or None when the provider name yields nothing matchable — an
+    undecidable result the caller must report rather than swallow.
+
+    This exists because every other gate passed while nine buttons shipped reading "Review
+    option in KLM" and opening Google Flights, and "View restaurant in Google Maps" and opening
+    a food blog. HTTPS-ness, uniqueness, and attribute presence all say nothing about *where* a
+    link goes, so nothing fired. The mismatch is trivially decidable, and a lint that fails
+    outranks a quality-gate bullet that asks nicely.
+    """
+    tokens = provider_match_tokens(provider)
+    if not tokens:
+        return None
+    parsed = urlparse(url)
+    haystack = re.sub(r"[^a-z0-9]", "", (parsed.netloc + parsed.path).casefold())
+    return any(token in haystack for token in tokens)
+
+
 def is_google_map_link(provider: str, url: str) -> bool:
     host = urlparse(url).hostname or ""
     normalized_host = host.casefold()
@@ -264,6 +314,22 @@ class TripHTMLParser(HTMLParser):
         self.trip_plan_attrs: dict[str, str] | None = None
         self.has_page_nav = False
         self.day_nav_targets: set[str] = set()
+        self.undecidable_provider_links: list[str] = []
+
+    def check_provider_target(self, kind: str, provider: str, href: str) -> None:
+        """A button that names one provider and opens another is a lie the page tells silently."""
+        if not provider or not href:
+            return
+        verdict = provider_target_verdict(provider, href)
+        if verdict is False:
+            self.errors.append(
+                f"{kind} link names provider {provider!r} but opens "
+                f"{urlparse(href).netloc or href!r}. The visible button label is built from that "
+                f"same provider field, so it reads 'open {provider}' and goes somewhere else. "
+                f"Point the URL at that provider, or name the provider the URL actually belongs to."
+            )
+        elif verdict is None:
+            self.undecidable_provider_links.append(f"{kind}: {provider!r} → {urlparse(href).netloc or href}")
 
     def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
         attrs = {key: value or "" for key, value in attrs_list}
@@ -322,6 +388,8 @@ class TripHTMLParser(HTMLParser):
                     self.errors.append("Map links need data-verified-at.")
                 if not attrs.get("data-map-provider"):
                     self.errors.append("Map links need data-map-provider.")
+                else:
+                    self.check_provider_target("Map", attrs["data-map-provider"], href)
                 if attrs.get("data-map-role") not in {"primary", "alternative"}:
                     self.errors.append("Map links need data-map-role=primary or alternative.")
                 if attrs.get("data-map-kind") != "directions":
@@ -345,6 +413,8 @@ class TripHTMLParser(HTMLParser):
                     self.errors.append("Dining links must include rel=noopener noreferrer.")
                 if not attrs.get("data-dining-provider") or not attrs.get("data-verified-at"):
                     self.errors.append("Dining links need provider and check-time attributes.")
+                else:
+                    self.check_provider_target("Dining", attrs["data-dining-provider"], href)
             if "data-booking-type" in attrs:
                 self.booking_links.append(attrs)
                 if attrs["data-booking-type"] not in ALLOWED_BOOKING_TYPES:
@@ -359,6 +429,9 @@ class TripHTMLParser(HTMLParser):
                 for key in ("data-provider", "data-verified-at"):
                     if not attrs.get(key):
                         self.errors.append(f"Booking links need {key}.")
+                if attrs.get("data-provider"):
+                    self.check_provider_target(
+                        f"Booking ({attrs.get('data-booking-type', '?')})", attrs["data-provider"], href)
                 if attrs.get("data-booking-purpose") == "round-trip-search":
                     self.round_trip_links.append(attrs)
                 if attrs.get("data-booking-purpose") == "comparison-search" and attrs.get("data-booking-type") == "hotel":
@@ -393,10 +466,16 @@ def validate(
     expected_days: int | None,
     required_booking_types: set[str],
     transport_mode: str | None,
+    notes: list[str] | None = None,
 ) -> list[str]:
     parser = TripHTMLParser()
     parser.feed(content)
     parser.close()
+    if notes is not None and parser.undecidable_provider_links:
+        notes.append(
+            "provider/target match undecidable for "
+            f"{len(parser.undecidable_provider_links)} link(s) (no matchable token in the provider "
+            "name); check these by eye: " + "; ".join(parser.undecidable_provider_links))
     errors = parser.errors
     if re.search(r"\{\{[^}]+\}\}|\bTODO\b", content, re.IGNORECASE):
         errors.append("Final HTML still contains a template token or TODO.")
@@ -578,12 +657,16 @@ def main() -> int:
     except OSError as exc:
         print(f"ERROR: Could not read HTML: {exc}", file=sys.stderr)
         return 2
+    notes: list[str] = []
     errors = validate(
         content,
         args.expected_days,
         set(args.require_booking_type),
         args.transport_mode,
+        notes,
     )
+    for note in notes:
+        print(f"note: {note}")
     if errors:
         print("INVALID")
         for error in errors:

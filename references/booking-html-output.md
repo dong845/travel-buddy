@@ -56,7 +56,24 @@ For every option included in the page, show provider, option name, price/range a
 - **Attractions:** show a ticket link only if paid entry, advance reservation, or timed entry is material. Prefer the official venue ticket page; otherwise say that booking status is unverified. Do not send the user to an unknown resale site.
 - **Rental cars:** include only after the user selects self-drive and confirm location, dates/times, driver requirements, transmission preference, luggage/party capacity, insurance excess, fuel policy, mileage, tolls, parking, and cross-border limits where relevant. Show a dated provider/comparison search page with pickup/dropoff location and times prefilled, not a checkout URL; label the per-vehicle-per-day price basis, status, availability, and check time.
 
-Do not invent a deep-link pattern. Use a provider URL returned by live research, or label a generic provider search link as a starting point rather than a verified quote.
+Do not invent a deep-link pattern. Use a provider URL returned by live research, or label a generic provider search link as a starting point rather than a verified quote. When a provider's site blocks automated access so you cannot confirm a deeper path resolves, link its documented entry point and say on the card that it is a channel entry rather than a dated quote — a hand-built path you could not load is a 404 waiting to happen in front of the traveller.
+
+### The provider a button names is the provider its URL opens
+
+The renderer builds a button's visible label **and** its `data-*-provider` attribute from the same plan field, so these pairs must describe one destination:
+
+| Card | Labels the button | Must open |
+| --- | --- | --- |
+| flight / hotel / car | `provider` | that provider's own site (`review_url`) |
+| flight comparison | `round_trip_search_provider` | that platform (`round_trip_search_url`) |
+| hotel comparison | `comparison_searches[].platform` | that platform's search URL |
+| ticket | `official_or_authorised_provider` | that venue's page (`review_url`) |
+| dining | `map_provider` | that map provider's place lookup (`venue_url`) |
+| route / segment | `map_provider` | that map provider's directions URL |
+
+A comparison platform therefore belongs in the comparison field, never behind an airline's name in `review_url`. The dining pair is the one that surprises people: the button reads "view restaurant in *`map_provider`*", so `venue_url` must be a place lookup on that map provider — a blog or listicle that merely *mentions* the venue fails, and the article belongs in `sources[]` instead.
+
+This is written down because nine buttons once shipped violating it — "Review option in KLM" opening Google Flights, "View restaurant in Google Maps" opening a food blog — with every gate green. HTTPS-ness, uniqueness, tracker-freeness, and attribute presence say nothing about *where* a link goes. `validate_trip_html.py` now fails the page on a mismatch, and emits a `note:` for any provider name it cannot match a host against (a name in a non-Latin script with no alias). Those notes are the residue the gate could not decide; read them rather than assuming a clean exit covered them.
 
 ### Local booking and ticket constraints
 
