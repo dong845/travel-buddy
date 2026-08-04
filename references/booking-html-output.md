@@ -73,6 +73,22 @@ The renderer builds a button's visible label **and** its `data-*-provider` attri
 
 A comparison platform therefore belongs in the comparison field, never behind an airline's name in `review_url`. The dining pair is the one that surprises people: the button reads "view restaurant in *`map_provider`*", so `venue_url` must be a place lookup on that map provider — a blog or listicle that merely *mentions* the venue fails, and the article belongs in `sources[]` instead.
 
+### Where a button lands is a third question, after who it names and whether it is HTTPS
+
+`check_link_targets.py` follows each button. Treat its output as three buckets:
+
+- **broken** — a hard 4xx/5xx or a redirect onto a different host. Fix or remove before delivery.
+- **unverified** — a challenge status (202/403/429), a refused connection, dropped query parameters, or an
+  `unsupported`-shaped landing path. None of these prove a link is bad; they prove the provider did not trust
+  the request. Open them in a browser and confirm the page shows what the label promises.
+- **ok** — reachable, same host, parameters intact. Still not proof the *content* is the right hotel or the right
+  restaurant; that is what the `sights_and_hours` and `booking_and_lodging` verification domains are for.
+
+The reason `broken` is so narrow is worth keeping: the same Google Flights URL answers 200 with no redirect to a
+Chrome agent and redirects to `/travel/flights/unsupported` to a scripted one. A run that compared two probes sent
+with different agents concluded the link was dead and replaced a working button. When a landing page looks wrong,
+the first hypothesis is your own user agent.
+
 This is written down because nine buttons once shipped violating it — "Review option in KLM" opening Google Flights, "View restaurant in Google Maps" opening a food blog — with every gate green. HTTPS-ness, uniqueness, tracker-freeness, and attribute presence say nothing about *where* a link goes. `validate_trip_html.py` now fails the page on a mismatch, and emits a `note:` for any provider name it cannot match a host against (a name in a non-Latin script with no alias). Those notes are the residue the gate could not decide; read them rather than assuming a clean exit covered them.
 
 ### Local booking and ticket constraints
