@@ -16,6 +16,8 @@
 <p align="center">
   <a href="#install"><img alt="Install with npx skills" src="https://img.shields.io/badge/npx_skills-add_dong845%2Ftravel--buddy-000000"></a>
   <a href="#install"><img alt="Install as a Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-install_as_plugin-5b5bd6"></a>
+  <a href="https://clawhub.ai/dong845/skills/travel-buddy"><img alt="On ClawHub" src="https://img.shields.io/badge/ClawHub-%40dong845%2Ftravel--buddy-7c3aed"></a>
+  <a href="https://skillhub.cn/skills/user_f486c577/travel-buddy"><img alt="On SkillHub" src="https://img.shields.io/badge/SkillHub-travel--buddy-ff6a00"></a>
 </p>
 
 > **A travel agent that refuses to invent a price, refuses to call a trip "bookable" before it has checked the last train home, and won't hand you a day-by-day plan until it has proven the destination is even reachable.**
@@ -172,7 +174,7 @@ python scripts/check_link_targets.py final.html
 
 ### Install
 
-Requires **Python 3.10+** (developed on 3.13). There is nothing to `pip install` — every script is standard library only. Pick whichever of the three paths suits you.
+Requires **Python 3.10+** (developed on 3.13). There is nothing to `pip install` — every script is standard library only. Pick whichever of the four paths suits you.
 
 **Option 1 — one line with [`npx skills`](https://github.com/vercel-labs/skills)** (simplest):
 
@@ -204,6 +206,14 @@ Or clone straight into the skills folder if you don't need it elsewhere:
 ```bash
 git clone --depth 1 https://github.com/dong845/travel-buddy.git ~/.claude/skills/travel-buddy
 ```
+
+**Option 4 — from [ClawHub](https://clawhub.ai/dong845/skills/travel-buddy)**, the marketplace for [OpenClaw](https://clawhub.ai) agents:
+
+```bash
+openclaw skills install @dong845/travel-buddy
+```
+
+travel-buddy is also listed on **[SkillHub](https://skillhub.cn/skills/user_f486c577/travel-buddy)**, a Chinese-language skills community — useful for browsing and comparing skills, though installation still goes through one of the four paths above.
 
 Then create the workspace once:
 

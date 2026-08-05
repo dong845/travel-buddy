@@ -16,6 +16,8 @@
 <p align="center">
   <a href="#安装"><img alt="用 npx skills 安装" src="https://img.shields.io/badge/npx_skills-add_dong845%2Ftravel--buddy-000000"></a>
   <a href="#安装"><img alt="作为 Claude Code 插件安装" src="https://img.shields.io/badge/Claude_Code-%E4%BD%9C%E4%B8%BA%E6%8F%92%E4%BB%B6%E5%AE%89%E8%A3%85-5b5bd6"></a>
+  <a href="https://clawhub.ai/dong845/skills/travel-buddy"><img alt="在 ClawHub 上" src="https://img.shields.io/badge/ClawHub-%40dong845%2Ftravel--buddy-7c3aed"></a>
+  <a href="https://skillhub.cn/skills/user_f486c577/travel-buddy"><img alt="在 SkillHub 上" src="https://img.shields.io/badge/SkillHub-travel--buddy-ff6a00"></a>
 </p>
 
 > **一个不肯编价格、不肯在没确认末班车之前说「可以订了」、也不肯在证明目的地根本到得了之前就给你排逐日行程的旅行助手。**
@@ -174,7 +176,7 @@ python scripts/check_link_targets.py final.html
 
 ### 安装
 
-需要 **Python 3.10+**（开发环境为 3.13）。**不需要 pip 装任何东西** —— 所有脚本只用标准库。三条路任选其一。
+需要 **Python 3.10+**（开发环境为 3.13）。**不需要 pip 装任何东西** —— 所有脚本只用标准库。四条路任选其一。
 
 **方式一 —— 用 [`npx skills`](https://github.com/vercel-labs/skills) 一行装完**（最省事）：
 
@@ -206,6 +208,14 @@ ln -s ~/code_project/travel-buddy ~/.claude/skills/travel-buddy
 ```bash
 git clone --depth 1 https://github.com/dong845/travel-buddy.git ~/.claude/skills/travel-buddy
 ```
+
+**方式四 —— 从 [ClawHub](https://clawhub.ai/dong845/skills/travel-buddy) 安装**（[OpenClaw](https://clawhub.ai) 智能体的 skill 市场）：
+
+```bash
+openclaw skills install @dong845/travel-buddy
+```
+
+travel-buddy 同时上架了 **[SkillHub](https://skillhub.cn/skills/user_f486c577/travel-buddy)**（面向中文用户的 skills 社区），适合在那里浏览和横向比较；安装仍然走上面四条路之一。
 
 然后初始化一次工作区：
 
