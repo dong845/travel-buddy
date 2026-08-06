@@ -14,7 +14,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from serve_trip_intake import TripIntakeServer, profile_defaults_from_profile
+from serve_trip_intake import IntakeRequestGuard, TripIntakeServer, mint_token, profile_defaults_from_profile, request_route
 from travel_workspace import DEFAULT_WORKSPACE, profile_filename, validate_profile
 
 
@@ -33,9 +33,16 @@ class IntakeServer(ThreadingHTTPServer):
         self.saved_profile_path: Path | None = None
         self.next_trip_server: TripIntakeServer | None = None
         self.next_trip_thread: threading.Thread | None = None
+        self.token = mint_token()
+        # Same one-submission hole as the trip server: `shutdown()` is asynchronous, so a second
+        # POST used to be answered too. Here it was worse -- each one bound a fresh trip-intake
+        # port and overwrote `next_trip_server`, orphaning the first server and its thread with
+        # nothing left holding a reference to close them.
+        self.submit_lock = threading.Lock()
+        self.submitted = False
 
 
-class IntakeHandler(BaseHTTPRequestHandler):
+class IntakeHandler(IntakeRequestGuard, BaseHTTPRequestHandler):
     server: IntakeServer
 
     def log_message(self, format: str, *args: object) -> None:
@@ -51,11 +58,13 @@ class IntakeHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path not in {"/", "/index.html"}:
+        if request_route(self.path) not in {"/", "/index.html"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
+        if not self.get_is_allowed():
+            return
         page = FORM.read_text(encoding="utf-8")
-        startup = json.dumps({"submit_url": "/submit", "next_trip": self.server.next_trip, "existing_profile": self.server.existing_profile}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+        startup = json.dumps({"submit_url": f"/submit?token={self.server.token}", "next_trip": self.server.next_trip, "existing_profile": self.server.existing_profile}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
         page = page.replace("<head>", f'<head><script>window.TRAVEL_BUDDY_PROFILE_INTAKE={startup};</script>', 1)
         body = page.encode("utf-8")
         self.send_response(HTTPStatus.OK)
@@ -66,8 +75,10 @@ class IntakeHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
-        if self.path != "/submit":
+        if request_route(self.path) != "/submit":
             self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if not self.post_is_allowed():
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -77,45 +88,55 @@ class IntakeHandler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": f"档案内容无法解析：{exc}"})
             return
-        errors = validate_profile(profile)
-        if errors:
-            self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": " ".join(errors)})
-            return
-        next_server: TripIntakeServer | None = None
         next_url: str | None = None
-        try:
-            destination = self.server.workspace / "profiles" / profile_filename(str(profile["profile_id"]))
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists() and not self.server.overwrite:
-                self.send_json(HTTPStatus.CONFLICT, {"error": "已存在同名的旅行档案。请换一个档案名称后重新提交；如需覆盖，请在终端用 --overwrite 重新启动。"})
+        # As in the trip server: claim the single submission before anything is written or any
+        # second port is bound, and leave the slot open when this submission is refused.
+        with self.server.submit_lock:
+            if self.server.submitted:
+                self.send_json(HTTPStatus.CONFLICT, {"error": "本次表单只接受一次提交，已经保存过一份旅行档案。如需修改，请回到终端用 --edit 重新打开档案。"})
                 return
-            if self.server.next_trip:
-                defaults = profile_defaults_from_profile(profile)
-                next_server = TripIntakeServer(
-                    ("127.0.0.1", 0),
-                    self.server.workspace,
-                    destination.resolve(),
-                    defaults,
-                    self.server.assistant_mode,
-                )
-            destination.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        except OSError as exc:
+            errors = validate_profile(profile)
+            if errors:
+                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": " ".join(errors)})
+                return
+            next_server: TripIntakeServer | None = None
+            try:
+                destination = self.server.workspace / "profiles" / profile_filename(str(profile["profile_id"]))
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists() and not self.server.overwrite:
+                    self.send_json(HTTPStatus.CONFLICT, {"error": "已存在同名的旅行档案。请换一个档案名称后重新提交；如需覆盖，请在终端用 --overwrite 重新启动。"})
+                    return
+                if self.server.next_trip:
+                    defaults = profile_defaults_from_profile(profile)
+                    next_server = TripIntakeServer(
+                        ("127.0.0.1", 0),
+                        self.server.workspace,
+                        destination.resolve(),
+                        defaults,
+                        self.server.assistant_mode,
+                    )
+                destination.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            except OSError as exc:
+                if next_server:
+                    next_server.server_close()
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"无法在本机保存旅行档案：{exc}"})
+                return
+            except ValueError as exc:
+                if next_server:
+                    next_server.server_close()
+                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": f"无法准备本次行程填写页：{exc}"})
+                return
+            self.server.submitted = True
+            self.server.saved_profile_path = destination
             if next_server:
-                next_server.server_close()
-            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"无法在本机保存旅行档案：{exc}"})
-            return
-        except ValueError as exc:
-            if next_server:
-                next_server.server_close()
-            self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": f"无法准备本次行程填写页：{exc}"})
-            return
-        self.server.saved_profile_path = destination
-        if next_server:
-            host, port = next_server.server_address
-            next_url = f"http://{host}:{port}/"
-            self.server.next_trip_server = next_server
-            self.server.next_trip_thread = threading.Thread(target=next_server.serve_forever, daemon=False)
-            self.server.next_trip_thread.start()
+                host, port = next_server.server_address
+                # The trip server mints its own token, and the browser is redirected to this URL
+                # without ever passing through the terminal -- so the handoff link has to carry
+                # that token or the chained form would greet the traveller with a rejection.
+                next_url = f"http://{host}:{port}/?token={next_server.token}"
+                self.server.next_trip_server = next_server
+                self.server.next_trip_thread = threading.Thread(target=next_server.serve_forever, daemon=False)
+                self.server.next_trip_thread.start()
         print(f"PROFILE SAVED: {destination}", flush=True)
         if self.server.next_trip:
             print("PROFILE NEXT STEP: opening the current-trip intake automatically in the same browser tab.", flush=True)
@@ -151,8 +172,8 @@ def main() -> int:
         print(f"ERROR: Could not start local intake server: {exc}", file=sys.stderr)
         return 2
     host, port = server.server_address
-    print(f"OPEN THIS LOCAL LINK: http://{host}:{port}/", flush=True)
-    print("WAITING FOR ONE PROFILE SUBMISSION. The server accepts only this computer's loopback requests.", flush=True)
+    print(f"OPEN THIS LOCAL LINK: http://{host}:{port}/?token={server.token}", flush=True)
+    print("WAITING FOR ONE PROFILE SUBMISSION. The server accepts only this computer's loopback requests, and only through the whole link above: the token in it is what proves the page is the one this terminal opened. Copy the link in full.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

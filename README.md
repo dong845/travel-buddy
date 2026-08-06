@@ -278,7 +278,7 @@ Never remove the whole workspace to satisfy a profile deletion.
 
 **"Unsupported trip request format" on submit.** The form's work mode must agree with its destination scope (`fixed` → `construction`, `anchored` → `constrained_discovery`, otherwise `discovery`). The server rejects a contradiction on purpose, so a saved file cannot claim it still needs a destination found while one is already fixed.
 
-**The automatic hand-off did nothing.** Check `plans/destination-discovery-*.log`. If the CLI is missing from `PATH`, the runner says so. Use `--assistant none` to disable the hand-off and continue manually.
+**The automatic hand-off did nothing.** Under `--assistant auto` that is usually correct, not a fault: when the skill is running *inside* Claude Code or Codex, the runner stands down and prints the saved intake path for the assistant you are already talking to. It used to spawn a second, unattended agent there, which produced two conflicting plans in one workspace. From a bare terminal it does launch; check `plans/destination-discovery-*.log`, and `plans/destination-discovery-*.pid.json` for the PID and a stop command. If the CLI is missing from `PATH`, the runner says so. Force a detached run with `--assistant codex` or `--assistant claude`.
 
 **`--edit-profile` seemed to be ignored.** It only applies when a profile already exists; with an empty `profiles/` directory the workflow goes straight to creating a new one.
 

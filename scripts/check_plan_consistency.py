@@ -8,6 +8,12 @@ with their own segments, a dinner 2.5 km off-route with no transport leg, meals 
 venues that close three hours earlier, and a budget high case that silently broke the
 traveller's stated cap.
 
+A later run passed this checker too, while shipping a day whose own numbers did not fit in
+its own clock, a "42 minutes on foot" figure this gate itself REQUIRED to be printed for a
+day holding roughly 3.5 hours of walking, and realistic opening hours ("周二至周日 15:00-21:00")
+whose weekday prefix made the hours check silently skip -- so the plan was rewarded for
+writing the less informative string.
+
 Every one of those is decidable by a program, so it belongs here rather than in prose.
 This checker reads the plan JSON only -- no network, no model -- and exits non-zero on any
 finding. Checks that need the world (opening hours, fares, entry rules, carrier identity)
@@ -32,6 +38,10 @@ from pathlib import Path
 DURATION_TOLERANCE_MIN = 5
 DISTANCE_TOLERANCE_KM = 1.0
 COST_TOLERANCE = 1.0
+# What is left of a meal window after travel, below which the meal is not a meal. Set at the
+# length of a hurried sit-down rather than a generous one, because this gate exists to catch a
+# window that is impossible, not one that is merely tight -- a tight lunch is the author's call.
+MEAL_MINIMUM_MINUTES = 30
 
 WALK_MODES = {"步行", "walk", "walking", "on foot"}
 
@@ -53,6 +63,25 @@ _CN_WEEKDAY = {"周一": 0, "周二": 1, "周三": 2, "周四": 3, "周五": 4, 
 # worse than no gate. Anchor on phrases that actually assert what today is.
 _DAY_CLAIM = re.compile(
     r"(?:本日|当日|当天|该日|今天|本行程)\s*(?:为|是)?\s*(周[一二三四五六日]|星期[一二三四五六日])")
+
+# The same rule in English, and deliberately narrower. WEEKDAYS has carried English names since
+# the beginning, but only for error messages -- so an English plan could assert "Day 3 is a Monday"
+# on a Tuesday and nothing fired. The anchor must bolt the claim to *this* day: "today"/"this day",
+# or a day number or ISO date, immediately followed by a copula and a weekday. Anything looser
+# catches the honest weekday prose that opening hours are made of ("closed on Monday"), and an
+# author who gets flagged for honest hours text deletes the hours text.
+_EN_WEEKDAY_NAMES = "|".join(names[2] for names in WEEKDAYS.values())
+_EN_DAY_ANCHOR = r"(?:day\s*(?P<daynum>\d{1,2})|(?P<date>\d{4}-\d{2}-\d{2})|today|this day)"
+_EN_DAY_CLAIM = re.compile(
+    rf"\b{_EN_DAY_ANCHOR}\b[^.!?;\n\"]{{0,24}}?\b(?:is|was|falls on|lands on)\s+(?:an?\s+|the\s+)?"
+    rf"(?P<weekday>{_EN_WEEKDAY_NAMES})\b(?![-–—])",
+    re.IGNORECASE)
+# "Day 2 (Monday)" is the other form that actually appears, and it is tight enough to trust.
+_EN_DAY_PAREN = re.compile(
+    rf"\b(?:day\s*(?P<daynum>\d{{1,2}})|(?P<date>\d{{4}}-\d{{2}}-\d{{2}}))\s*[(（]\s*"
+    rf"(?P<weekday>{_EN_WEEKDAY_NAMES})\s*[)）]",
+    re.IGNORECASE)
+_EN_WEEKDAY_INDEX = {names[2]: index for index, names in WEEKDAYS.items()}
 
 # "而非最轻的一天" is a correction, not a claim. Strip negated forms before judging.
 _NEGATED_LIGHT = re.compile(r"(?:而非|并非|不是|非)\s*(?:本行程)?(?:步行量)?最轻")
@@ -110,10 +139,139 @@ def _fmt_hhmm(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
+def _weekday_tokens() -> dict[str, int]:
+    """Every spelling of a weekday a plan may legitimately use, mapped to Python's weekday index."""
+    tokens: dict[str, int] = {}
+    for index, (cn, _cn_full, en) in WEEKDAYS.items():
+        for prefix in ("周", "星期", "礼拜"):
+            tokens[prefix + cn[-1]] = index
+        tokens[en] = index
+        tokens[en[:3]] = index
+    for prefix in ("周", "星期", "礼拜"):
+        tokens[prefix + "天"] = 6  # 周天 is Sunday in speech and on shop signage
+    tokens.update({"tues": 1, "weds": 2, "thur": 3, "thurs": 3})
+    # German and Dutch, because this skill's most common cross-border trips are inside western
+    # Europe and an author copying hours off a venue's own site copies them in the venue's
+    # language. "Mo-Sa 09:00-18:00" is the standard form on German opening-hours pages; without
+    # these it parsed as nothing, and the "hours must be machine-checkable" rule then rejected a
+    # perfectly honest string. The two-letter forms are safe here because a weekday prefix is only
+    # ever matched at the head of an hours string, never inside prose.
+    tokens.update({
+        "montag": 0, "mo": 0, "dienstag": 1, "di": 1, "mittwoch": 2, "mi": 2,
+        "donnerstag": 3, "do": 3, "freitag": 4, "fr": 4,
+        "samstag": 5, "sonnabend": 5, "sa": 5, "sonntag": 6, "so": 6,
+        "maandag": 0, "ma": 0, "dinsdag": 1, "woensdag": 2, "wo": 2,
+        "donderdag": 3, "vrijdag": 4, "vr": 4,
+        "zaterdag": 5, "za": 5, "zondag": 6, "zo": 6,
+    })
+    return tokens
+
+
+_WEEKDAY_TOKENS = _weekday_tokens()
+# Longest-first so 'monday' wins over 'mon'; the trailing (?![a-z]) keeps 'Sun' out of 'Sunset',
+# which would otherwise turn a normal venue name into a claim that the place opens only on Sundays.
+_WEEKDAY_TOKEN = re.compile(
+    "(?:{cn})|(?:{en})\\.?(?![a-z])".format(
+        cn="|".join(sorted((t for t in _WEEKDAY_TOKENS if not t.isascii()), key=len, reverse=True)),
+        en="|".join(sorted((t for t in _WEEKDAY_TOKENS if t.isascii()), key=len, reverse=True))),
+    re.IGNORECASE)
+_WEEKDAY_RANGE_SEP = re.compile(r"\s*(?:[-–—~～]|至|到|through|thru|to)\s*", re.IGNORECASE)
+_WEEKDAY_LIST_SEP = re.compile(r"\s*(?:[、,，/&+]|and|和|以及)\s*", re.IGNORECASE)
+_EVERY_DAY = re.compile(
+    r"^\s*(?:daily|open\s+daily|every\s*day|täglich|taeglich|dagelijks|每日|每天|天天)\s*[:：]?\s*",
+    re.IGNORECASE)
+_HOUR_WINDOW = re.compile(r"(\d{1,2})[:：](\d{2})\s*[-–—~～至到]\s*(\d{1,2})[:：](\d{2})")
+_ALL_DAY_HOURS = re.compile(r"24\s*(?:小时|hours?|hrs?|/7)|全天|通宵", re.IGNORECASE)
+# "Monday closed, 11:00-22:00 otherwise" names the day the venue is SHUT. Read as an open-days set
+# it inverts the verdict and reports the six days it opens as the six days it does not.
+_CLOSED_MARKER = re.compile(r"^(?:closed|closes|close\b|rest\s*day|休息|休业|闭馆|不营业|打烊)", re.IGNORECASE)
+
+
+def _parse_weekday_prefix(text: str) -> tuple[frozenset[int] | None, str]:
+    """Split a leading weekday prefix off an hours string: ('Tue-Sun 15:00-21:00') -> ({1..6}, '15:00-21:00').
+
+    Handles both languages, ranges that wrap (Sat-Mon = {5,6,0}), lists ('周一、周三', 'Mon, Wed'),
+    and 'daily'/'每日'. Returns (None, text) when there is no prefix, so the bare '15:00-21:00'
+    that plans already carry parses exactly as it did before.
+
+    One deliberate refusal: if a weekday token also appears *after* the prefix, the string is
+    per-day ('Sat 10:00-14:00, Sun 11:00-15:00') and a single set of open days would describe it
+    wrongly. Reporting nothing is the right answer there -- a gate that is wrong about a correct
+    plan gets switched off, and takes the cases it did decide correctly with it.
+    """
+    every = _EVERY_DAY.match(text)
+    if every:
+        return frozenset(range(7)), text[every.end():]
+
+    days: set[int] = set()
+    position = 0
+    while True:
+        if days:
+            separator = _WEEKDAY_LIST_SEP.match(text, position)
+            if not separator:
+                break
+            position = separator.end()
+        first = _WEEKDAY_TOKEN.match(text, position)
+        if not first:
+            break
+        start = _WEEKDAY_TOKENS[first.group(0).rstrip(".").lower()]
+        position = first.end()
+        end = start
+        dash = _WEEKDAY_RANGE_SEP.match(text, position)
+        if dash:
+            last = _WEEKDAY_TOKEN.match(text, dash.end())
+            if last:
+                end = _WEEKDAY_TOKENS[last.group(0).rstrip(".").lower()]
+                position = last.end()
+        cursor = start
+        days.add(cursor)
+        while cursor != end:  # ranges wrap: Sat-Mon is Sat, Sun, Mon
+            cursor = (cursor + 1) % 7
+            days.add(cursor)
+
+    if not days:
+        return None, text
+    rest = text[position:].lstrip(" \t:：,，、")
+    if _WEEKDAY_TOKEN.search(rest) or _CLOSED_MARKER.match(rest):
+        return None, rest
+    return frozenset(days), rest
+
+
+def _hour_windows(text: str) -> list[tuple[int, int]]:
+    """Every HH:MM-HH:MM window in a string, past-midnight ends rolled over.
+
+    A list rather than one window because split service ('11:00-15:00, 17:00-21:00') is ordinary
+    and a dinner sitting inside the second block must not be reported as closed.
+    """
+    windows: list[tuple[int, int]] = []
+    for match in _HOUR_WINDOW.finditer(text):
+        start_h, start_m, end_h, end_m = (int(group) for group in match.groups())
+        if start_h > 47 or end_h > 47 or start_m > 59 or end_m > 59:
+            continue
+        start, end = start_h * 60 + start_m, end_h * 60 + end_m
+        if end <= start:
+            end += 24 * 60
+        windows.append((start, end))
+    if not windows and _ALL_DAY_HOURS.search(text):
+        windows.append((0, 24 * 60))
+    return windows
+
+
+def _parse_venue_hours(text: str) -> tuple[frozenset[int] | None, list[tuple[int, int]]]:
+    """Open weekdays (None when the string does not say) and the service windows, from venue_hours."""
+    days, rest = _parse_weekday_prefix(text)
+    return days, _hour_windows(rest)
+
+
 def _parse_window(text: object) -> tuple[int, int] | None:
-    """Accept '18:30-20:00', '18:30–20:00', '17:00~02:00'. Past-midnight ends roll over."""
+    """Accept '18:30-20:00', '18:30–20:00', '17:00~02:00'. Past-midnight ends roll over.
+
+    A leading weekday prefix is stripped first: splitting 'Tue-Sun 15:00-21:00' on its first dash
+    produced two unparseable halves, so the string that carries *more* information used to parse
+    as nothing at all."""
     if not isinstance(text, str):
         return None
+    _, text = _parse_weekday_prefix(text)
     parts = re.split(r"[-–—~至]", text, maxsplit=1)
     if len(parts) != 2:
         return None
@@ -174,45 +332,173 @@ def check_routes(plan: dict, errors: list[str], notes: list[str]) -> None:
                 f"{seg_cost_high:g}.")
 
 
-def check_walking(plan: dict, errors: list[str], notes: list[str]) -> None:
+def activity_on_foot_minutes(day: dict) -> int:
+    """Minutes on foot *inside* the day's activities, which no segment records.
+
+    Segments only know the connecting legs. Queuing at a gate, a park loop, a market crawl and a
+    two-hour standing tour are not segments at all, so a plan that reported only its segments told
+    the truth about the wrong number. Optional by contract: a plan that omits on_foot_minutes
+    computes 0 here, and every rule that depends on it stays off rather than guessing."""
+    total = 0
+    for activity in [_obj(a) for a in _seq(day.get("activities"))]:
+        value = activity.get("on_foot_minutes")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            total += int(value)
+    return total
+
+
+def check_walking_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
     """The traveller's accessibility constraint is decided here, not in adjectives.
 
-    Two rules: the prose must quote the computed minute figure (so it cannot drift from the
-    data), and no day may claim to be the lightest/heaviest unless it actually is."""
+    A day's walking is two numbers, not one: the connecting legs (walking_totals) and the minutes
+    the activities themselves keep the traveller on their feet (on_foot_minutes). A real run
+    printed "42 minutes on foot" for a day scheduling roughly 3.5 hours of it against a hard
+    mobility constraint -- and the old rule REQUIRED that misleading figure be on the page,
+    because it only knew about the segments. Both must now be quoted, both feed the
+    lightest/heaviest claim, and neither may exceed a limit the traveller stated."""
     days = [_obj(d) for d in _seq(plan.get("days"))]
     totals = {d.get("number"): walking_totals(d) for d in days}
     if not totals:
         return
-    minutes_by_day = {n: m for n, (m, _) in totals.items()}
-    max_day = max(minutes_by_day, key=lambda n: minutes_by_day[n])
-    min_day = min(minutes_by_day, key=lambda n: minutes_by_day[n])
+    on_foot = {d.get("number"): activity_on_foot_minutes(d) for d in days}
+    # Lightest/heaviest is a claim about what the traveller's legs do, so judge it on both numbers.
+    load = {number: minutes + on_foot[number] for number, (minutes, _) in totals.items()}
+    max_day = max(load, key=lambda n: load[n])
+    min_day = min(load, key=lambda n: load[n])
+
+    cap = _obj(_obj(plan.get("trip")).get("traveler_constraints")).get("max_continuous_walking_minutes")
+    if isinstance(cap, bool) or not isinstance(cap, (int, float)):
+        cap = None
 
     for day in days:
         number = day.get("number")
         minutes, km = totals[number]
+        walked_in_activities = on_foot[number]
         burden = str(_route(day).get("walking_burden") or "")
         if not burden.strip():
             errors.append(f"day {number}: route.walking_burden is empty.")
-            continue
-        # Substring matching let a day whose real total was 5 satisfy the rule by writing
-        # "15 minutes" -- the exact inversion the check exists to prevent. Match a whole number.
-        if not re.search(rf"(?<!\d){minutes}(?!\d)", burden):
-            errors.append(
-                f"day {number}: walking_burden does not quote the computed walking total "
-                f"({minutes} min / {km} km) as a number. Derive the text from the segments, and "
-                f"write the figure in digits so it cannot drift from the data.")
-        light_text = _NEGATED_LIGHT.sub("", burden)
-        if _LIGHT_CLAIM.search(light_text) and number != min_day:
-            errors.append(
-                f"day {number}: walking_burden claims it is the lightest day, but day {min_day} "
-                f"is ({minutes_by_day[min_day]} min vs {minutes} min).")
-        if _HEAVY_CLAIM.search(burden) and number != max_day:
-            errors.append(
-                f"day {number}: walking_burden claims it is the heaviest day, but day {max_day} "
-                f"is ({minutes_by_day[max_day]} min vs {minutes} min).")
+        else:
+            # Substring matching let a day whose real total was 5 satisfy the rule by writing
+            # "15 minutes" -- the exact inversion the check exists to prevent. Match a whole number.
+            if not re.search(rf"(?<!\d){minutes}(?!\d)", burden):
+                errors.append(
+                    f"day {number}: walking_burden does not quote the computed walking total "
+                    f"({minutes} min / {km} km) as a number. Derive the text from the segments, and "
+                    f"write the figure in digits so it cannot drift from the data.")
+            # Only demanded when the plan actually carries the second number, so a plan written
+            # before on_foot_minutes existed passes exactly as it did before. A negative total is
+            # reported below on its own terms; demanding the prose quote "-40" would be nonsense.
+            if walked_in_activities > 0 and not re.search(rf"(?<!\d){walked_in_activities}(?!\d)", burden):
+                errors.append(
+                    f"day {number}: walking_burden quotes the connecting legs but not the "
+                    f"{walked_in_activities} minutes this day's activities declare on foot "
+                    f"(on_foot_minutes). Write both figures in digits -- "
+                    f"'{minutes} min between stops plus {walked_in_activities} min at them, "
+                    f"{minutes + walked_in_activities} in total' -- because the traveller reads the "
+                    f"page and their legs pay for whichever number it left out.")
+            light_text = _NEGATED_LIGHT.sub("", burden)
+            if _LIGHT_CLAIM.search(light_text) and number != min_day:
+                errors.append(
+                    f"day {number}: walking_burden claims it is the lightest day, but day {min_day} "
+                    f"is ({load[min_day]} min vs {load[number]} min on foot in total).")
+            if _HEAVY_CLAIM.search(burden) and number != max_day:
+                errors.append(
+                    f"day {number}: walking_burden claims it is the heaviest day, but day {max_day} "
+                    f"is ({load[max_day]} min vs {load[number]} min on foot in total).")
+
+        for position, segment in enumerate(_segments(day), 1):
+            walk = int(_num(segment.get("walking_minutes")))
+            if cap is not None and walk > cap:
+                errors.append(
+                    f"day {number} segment {position} ({segment.get('from')} -> {segment.get('to')}): "
+                    f"walking_minutes={walk} exceeds the traveller's stated "
+                    f"max_continuous_walking_minutes={cap:g}. Split the leg with a seated stop, or "
+                    f"move it onto transport. The limit is a constraint they gave us, not a target.")
+        for activity in [_obj(a) for a in _seq(day.get("activities"))]:
+            value = activity.get("on_foot_minutes")
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+            if value < 0:
+                errors.append(
+                    f"day {number}: activity '{activity.get('name')}' has on_foot_minutes={value}, "
+                    f"which is negative. The day's on-foot total is summed from these, so one "
+                    f"negative entry cancels a real one and leaves the day looking easy.")
+            elif cap is not None and value > cap:
+                errors.append(
+                    f"day {number}: activity '{activity.get('name')}' has on_foot_minutes={int(value)}, "
+                    f"over the traveller's stated max_continuous_walking_minutes={cap:g}. Build in a "
+                    f"seated break, shorten the visit, or say in the plan how they sit down inside it.")
 
     notes.append("walking per day (min/km): " + ", ".join(
         f"d{n}={m}/{k}" for n, (m, k) in sorted(totals.items(), key=lambda kv: kv[0] or 0)))
+    if any(on_foot.values()):
+        notes.append("on-foot minutes inside activities: " + ", ".join(
+            f"d{n}={m}" for n, m in sorted(on_foot.items(), key=lambda kv: kv[0] or 0)))
+
+
+# save_trip_deliverables.py imports this name to build its own copy of the check list. Renaming it
+# outright would have broken the save path -- the one path that writes files a traveller keeps.
+check_walking = check_walking_budget
+
+
+def check_clock_closure(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A day's own numbers must fit in the day's own clock.
+
+    The run this was written for ended a promenade at 14:00, started the next activity at 15:00,
+    and put a lunch in a third neighbourhood plus 35 minutes of its OWN segment durations in
+    between. Every gate passed: the route totals summed correctly, the timeline read forwards, and
+    nothing compared the arithmetic against the hours available. A day that does not close on
+    paper does not close on the ground -- the traveller finds out standing in a station."""
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        number = day.get("number")
+        timed = []
+        for activity in [_obj(a) for a in _seq(day.get("activities"))]:
+            duration = activity.get("duration_minutes")
+            if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration < 0:
+                # The same shape as the negative-segment rule below: the day's clock is summed from
+                # these, so one negative entry buys back time the day never had and every rule here
+                # goes quiet on a day that is genuinely overpacked.
+                errors.append(
+                    f"day {number}: activity '{activity.get('name')}' has "
+                    f"duration_minutes={duration}, which is negative. Write the real length, or "
+                    f"leave the field out if it is unknown.")
+            stamp = _parse_hhmm(str(activity.get("time") or ""))
+            if stamp is None:
+                continue  # an untimed stop has no clock to close; judging it would be guesswork
+            timed.append((stamp, int(_num(duration)), activity))
+        if len(timed) < 2:
+            continue
+
+        overlapped = False
+        for (start, length, first), (next_start, _, second) in zip(timed, timed[1:]):
+            if start <= next_start < start + length:
+                errors.append(
+                    f"day {number}: '{second.get('name')}' starts at {_fmt_hhmm(next_start)} while "
+                    f"'{first.get('name')}' is still running -- it begins {first.get('time')} and "
+                    f"lasts {length} min, to {_fmt_hhmm(start + length)}. Two stops cannot hold the "
+                    f"same minutes: move one later, or shorten its duration_minutes.")
+                overlapped = True
+                break
+        if overlapped:
+            continue
+        # A backwards list is check_day_internals' finding ("time travel"). Measuring a span across
+        # it would only add a second, more confusing error for one defect.
+        if any(later[0] < earlier[0] for earlier, later in zip(timed, timed[1:])):
+            continue
+
+        span = (timed[-1][0] + timed[-1][1]) - timed[0][0]
+        activity_total = sum(length for _, length, _ in timed)
+        segment_total = int(sum(_num(s.get("duration_minutes")) for s in _segments(day)))
+        needed = activity_total + segment_total
+        if needed > span:
+            errors.append(
+                f"day {number}: the day does not close. Between {_fmt_hhmm(timed[0][0])} and "
+                f"{_fmt_hhmm(timed[-1][0] + timed[-1][1])} there are {span} minutes, but the day's "
+                f"own numbers need {needed}: {activity_total} min of timed activities plus "
+                f"{segment_total} min of route segments (every segment counts, including the legs "
+                f"before the first stop and after the last). Cut a stop, shorten a "
+                f"duration_minutes, or move the last activity later -- do not leave the arithmetic "
+                f"for the traveller to discover in a station.")
 
 
 def check_day_internals(plan: dict, errors: list[str], notes: list[str]) -> None:
@@ -283,6 +569,32 @@ def check_cross_references(plan: dict, errors: list[str], notes: list[str]) -> N
                     f"'{ref}', which no attraction_tickets entry defines.")
 
 
+def _english_weekday_claim(day: dict, date: dt.date, blob: str) -> str | None:
+    """The first English weekday assertion in this day's text that the calendar contradicts.
+
+    A claim counts only when it names this day: "today"/"this day", or a day number or ISO date
+    equal to this day's own. A sentence about day 3 sitting inside day 1's text is judged against
+    day 3, or not at all -- charging it to the wrong day would be a false accusation, and the first
+    of those teaches an author to stop reading this gate's output."""
+    for pattern in (_EN_DAY_CLAIM, _EN_DAY_PAREN):
+        for match in pattern.finditer(blob):
+            number = match.group("daynum")
+            if number is not None and str(day.get("number")) != str(int(number)):
+                continue
+            iso = match.group("date")
+            if iso is not None and iso != date.isoformat():
+                continue
+            index = _EN_WEEKDAY_INDEX.get(match.group("weekday").lower())
+            if index is None or index == date.weekday():
+                continue
+            quoted = re.sub(r"\s+", " ", match.group(0)).strip()
+            return (
+                f"day {day.get('number')} ({date}) is a {WEEKDAYS[date.weekday()][2].title()} but its "
+                f"text asserts '{quoted}'. A weekday-gated venue or service will be wrong. Recompute "
+                f"the weekday from the date, or fix the date.")
+    return None
+
+
 def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
     trip = _obj(plan.get("trip"))
     try:
@@ -326,14 +638,19 @@ def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
         except (TypeError, ValueError):
             continue
         blob = json.dumps(day, ensure_ascii=False)
+        problem = None
         for match in _DAY_CLAIM.finditer(blob):
             token = match.group(1)
             index = _CN_WEEKDAY.get(token)
             if index is not None and index != date.weekday():
-                errors.append(
+                problem = (
                     f"day {day.get('number')} ({date}) is a {WEEKDAYS[date.weekday()][0]} but its text "
                     f"asserts '{match.group(0)}'. A weekday-gated venue or service will be wrong.")
                 break
+        if problem is None:
+            problem = _english_weekday_claim(day, date, blob)
+        if problem:
+            errors.append(problem)
 
 
 def check_accommodation_coverage(plan: dict, errors: list[str], notes: list[str]) -> None:
@@ -365,12 +682,18 @@ def check_accommodation_coverage(plan: dict, errors: list[str], notes: list[str]
 
 
 def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
-    """Two failures that shipped once: a dinner 2.5 km off the day's route with no leg to
-    reach it, and meals scheduled at venues that had already closed."""
+    """Three failures that shipped once: a dinner 2.5 km off the day's route with no leg to
+    reach it, meals scheduled at venues that had already closed, and -- once this check existed --
+    opening hours written the realistic way ("周二至周日 15:00-21:00"), which parsed as nothing and
+    turned the hours check off in silence."""
     for day in [_obj(d) for d in _seq(plan.get("days"))]:
         number = day.get("number")
         route_blob = _route_text(day)
         stops = [str(s) for s in _seq(_route(day).get("stops_in_order"))]
+        try:
+            date = dt.date.fromisoformat(str(day.get("date")))
+        except (TypeError, ValueError):
+            date = None  # check_dates owns that finding; reporting it twice helps nobody
         for raw in _seq(day.get("dining")):
             if not isinstance(raw, dict):
                 errors.append(f"day {number}: a dining entry is {type(raw).__name__}, not an object.")
@@ -407,12 +730,110 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
                     f"gets booked at a venue that closes at 17:00.")
                 continue
             window = _parse_window(card.get("time_window"))
-            opening = _parse_window(hours) if hours else None
-            if window and opening:
-                if window[0] < opening[0] or window[1] > opening[1]:
-                    errors.append(
-                        f"day {number}: '{venue}' is scheduled {card.get('time_window')} but its hours "
-                        f"are {hours}.")
+            if not isinstance(hours, str) or not hours.strip():
+                continue
+
+            # Until this rewrite the hours check rewarded the *less* informative string: the
+            # realistic "Tue-Sun 15:00-21:00" parsed as nothing and silently skipped, while the
+            # information-losing "15:00-21:00" turned the check on. So an unreadable string is now
+            # a finding rather than a free pass, and the format is spelled out here rather than
+            # left for the author to guess.
+            open_days, opening = _parse_venue_hours(hours)
+            if not opening:
+                errors.append(
+                    f"day {number}: dining venue '{venue}' has venue_hours {hours!r}, which contains "
+                    f"no readable time window, so the opening-hours check would skip it in silence. "
+                    f"Write it machine-checkably -- '15:00-21:00', '11:00-15:00, 17:00-21:00', "
+                    f"'Tue-Sun 15:00-21:00', '周二至周日 15:00-21:00' -- or drop venue_hours and set "
+                    f"hours_status='unverified' to say plainly that nobody checked.")
+                continue
+            if window and not any(window[0] >= start and window[1] <= end for start, end in opening):
+                errors.append(
+                    f"day {number}: '{venue}' is scheduled {card.get('time_window')} but its hours "
+                    f"are {hours}.")
+            if open_days is not None and date is not None and date.weekday() not in open_days:
+                errors.append(
+                    f"day {number} ({date}) is a {WEEKDAYS[date.weekday()][0]}/"
+                    f"{WEEKDAYS[date.weekday()][2].title()}, but '{venue}' has venue_hours {hours!r}, "
+                    f"which only cover "
+                    f"{', '.join(f'{WEEKDAYS[i][0]}({WEEKDAYS[i][2][:3].title()})' for i in sorted(open_days))}. "
+                    f"Move the meal to a day the venue opens, choose the backup venue, or correct "
+                    f"the weekday prefix -- a closed door at 19:00 is a missed dinner, not a note.")
+
+
+def check_meal_reachability(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A meal must be reachable, not merely well-placed on the map.
+
+    `check_dining` already proves a meal hangs off a real stop, and `check_clock_closure` proves
+    the day's activities do not overlap. Neither notices the case in between: a lunch window that
+    opens while the traveller is still at the previous stop, because the leg that carries them to
+    the meal's anchor takes time the window never accounts for.
+
+    That shipped. A Sunday lunch was written 13:00-14:30 anchored at a stop the traveller could
+    not reach before 14:15 -- the preceding activity ran to 14:00 and the plan's own segment to
+    that stop costs 15 minutes -- leaving fifteen minutes of a ninety-minute window. Every gate
+    passed: the anchor was real, the hours contained the window, the activities did not overlap,
+    and the day had 142 minutes of slack overall, so no span check could see it either.
+
+    Deliberately narrow, because a noisy gate gets switched off. It fires only when the arrival
+    is computed from data the plan already carries, and only when what is left of the window is
+    too short to be a meal at all."""
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        number = day.get("number")
+        segments = _segments(day)
+        if not segments:
+            continue
+
+        # Latest end of any activity that finishes before this point in the day.
+        timed: list[tuple[int, int]] = []
+        for activity in [_obj(a) for a in _seq(day.get("activities"))]:
+            start = _parse_hhmm(str(activity.get("time") or ""))
+            if start is None:
+                continue
+            timed.append((start, start + int(_num(activity.get("duration_minutes")))))
+        if not timed:
+            continue
+
+        for raw in _seq(day.get("dining")):
+            card = _obj(raw)
+            anchor = str(card.get("route_anchor") or "").strip()
+            window = _parse_window(card.get("time_window"))
+            if not anchor or not window:
+                continue
+            leg = next((s for s in segments if str(s.get("to") or "").strip() == anchor), None)
+            if leg is None:
+                continue  # no modelled leg to that stop; nothing to compute from
+            travel = int(_num(leg.get("duration_minutes")))
+
+            # Only activities that finish before the window OPENS count. The first draft used
+            # "before the window closes", which swept in the meal's own activity slot -- a dinner
+            # scheduled 19:00-20:30 with a matching 19:00-20:30 activity was read as needing to
+            # travel 25 minutes after that activity ended, and the gate reported a real dinner as
+            # impossible. Three false positives on a four-day plan, which is how a gate gets
+            # switched off.
+            #
+            # The cost of the narrower rule, stated plainly: an activity that starts before the
+            # window and runs into it is no longer counted, so a meal overlapping a *different*
+            # stop's activity is not caught here. Distinguishing "this activity IS the meal" from
+            # "this activity conflicts with the meal" needs a link the plan does not carry; adding
+            # dining[].activity_ref would close it. Until then this gate is deliberately narrow
+            # and silent rather than broad and wrong.
+            prior_ends = [end for _, end in timed if end <= window[0]]
+            if not prior_ends:
+                continue
+            earliest = max(prior_ends) + travel
+            if earliest <= window[0]:
+                continue
+            remaining = window[1] - earliest
+            if remaining >= MEAL_MINIMUM_MINUTES:
+                continue
+            errors.append(
+                f"day {number}: '{card.get('venue_name')}' is booked {card.get('time_window')} at "
+                f"'{anchor}', but the traveller cannot arrive before {_fmt_hhmm(earliest)} -- the "
+                f"previous activity ends at {_fmt_hhmm(max(prior_ends))} and this day's own leg to "
+                f"that stop takes {travel} min. That leaves {max(remaining, 0)} min of the window, "
+                f"under the {MEAL_MINIMUM_MINUTES} min a meal needs. Move the window later, shorten "
+                f"the activity before it, or give the meal its own activity slot.")
 
 
 def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
@@ -475,6 +896,7 @@ def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
 # --------------------------------------------------------------------------------------
 
 REQUIRED_DOMAINS = {"entry", "transport", "sights_and_hours", "booking_and_lodging", "seasonality"}
+REQUIRED_AUDITS = {"consistency", "completeness"}
 VERDICTS = {"confirmed", "wrong", "misleading", "unverifiable"}
 
 
@@ -543,15 +965,69 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
                 continue
             if verdict in {"wrong", "misleading"} and not finding.get("resolved"):
                 unresolved.append(f"[{domain.get('domain')}] {finding.get('claim')}")
+    # The two network-free auditors carry the same weight as a domain and are checked the same
+    # way. They are separate from `domains` because the five domains are truth checks against the
+    # outside world and these two are checks of the plan against itself -- but keeping them out of
+    # the artifact entirely, which is what this gate used to do, was worse: references/
+    # verification.md tells the operator to run seven agents, the schema accepted five, and the
+    # cheapest way past the failure was to delete the two extra blocks. In the run that prompted
+    # this, those two produced 27 of 55 findings and 5 of the 6 criticals.
+    audits = [_obj(a) for a in _seq(report.get("audits"))]
+    audited = {str(a.get("audit")) for a in audits}
+    if missing_audits := REQUIRED_AUDITS - audited:
+        errors.append(
+            "verification report is missing required audits: " + ", ".join(sorted(missing_audits))
+            + ". Both run without network and cost little; a missing one is an invisible gap.")
+    if unknown_audits := audited - REQUIRED_AUDITS:
+        errors.append(
+            "verification report contains audits that are not part of the protocol: "
+            + ", ".join(sorted(unknown_audits)) + ".")
+    for audit in audits:
+        name = audit.get("audit")
+        if name not in REQUIRED_AUDITS:
+            continue
+        checked = audit.get("claims_checked")
+        if not isinstance(checked, int) or checked <= 0:
+            errors.append(
+                f"verification audit '{name}' does not report claims_checked > 0. An audit with no "
+                f"findings and no count is indistinguishable from one nobody ran.")
+        for finding in [_obj(f) for f in _seq(audit.get("findings"))]:
+            verdict = str(finding.get("verdict") or "").lower()
+            if verdict not in VERDICTS:
+                errors.append(f"verification finding in audit '{name}' has invalid verdict '{verdict}'.")
+                continue
+            if verdict in {"wrong", "misleading"} and not finding.get("resolved"):
+                unresolved.append(f"[{name}] {finding.get('claim')}")
+
     if unresolved:
         errors.append(
             "verification found defects that were never resolved in the plan:\n    - "
             + "\n    - ".join(unresolved))
-    notes.append(f"verification covered {len(covered)} domains, checked {checked_at}.")
+    notes.append(
+        f"verification covered {len(covered)} domains and {len(audited & REQUIRED_AUDITS)} audits, "
+        f"checked {checked_at}.")
     # KNOWN LIMIT, stated rather than hidden: nothing here can prove a finding marked resolved
     # actually changed the plan. Code cannot diff an edit it never saw. That one relies on the
     # protocol in references/verification.md, and it is the reason the report records a
     # resolution string a reader can check by eye.
+
+
+# Every plan check this script runs, in report order. A check that is written but never added
+# here does nothing at all, which is the one failure mode worse than not writing it.
+# save_trip_deliverables.py keeps its own copy of this list; extend it there too, or the save
+# path -- the only path that writes files a traveller keeps -- silently skips the new check.
+PLAN_CHECKS = (
+    check_routes,
+    check_walking_budget,
+    check_clock_closure,
+    check_day_internals,
+    check_cross_references,
+    check_dates,
+    check_accommodation_coverage,
+    check_dining,
+    check_meal_reachability,
+    check_budget,
+)
 
 
 def main() -> int:
@@ -576,13 +1052,16 @@ def main() -> int:
     if args.emit_walking:
         for day in [_obj(d) for d in _seq(plan.get("days"))]:
             minutes, km = walking_totals(day)
-            print(f"day {day.get('number')} ({day.get('date')}): {minutes} min / {km} km")
+            on_foot = activity_on_foot_minutes(day)
+            # Appended only when the plan carries it, so the line an existing plan prints is
+            # byte-for-byte what it printed before.
+            extra = f" (+{on_foot} min on foot inside activities)" if on_foot else ""
+            print(f"day {day.get('number')} ({day.get('date')}): {minutes} min / {km} km{extra}")
         return 0
 
     errors: list[str] = []
     notes: list[str] = []
-    for check in (check_routes, check_walking, check_day_internals, check_cross_references,
-                  check_dates, check_accommodation_coverage, check_dining, check_budget):
+    for check in PLAN_CHECKS:
         check(plan, errors, notes)
 
     if args.verification:

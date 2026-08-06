@@ -15,15 +15,8 @@ from datetime import datetime
 from pathlib import Path
 
 from check_plan_consistency import (
-    check_accommodation_coverage,
-    check_budget,
-    check_cross_references,
-    check_dates,
-    check_day_internals,
-    check_dining,
-    check_routes,
+    PLAN_CHECKS,
     check_verification,
-    check_walking,
 )
 from render_final_trip_html import read_json, render, validate_plan
 from validate_trip_html import validate as validate_html
@@ -31,16 +24,10 @@ from validate_trip_html import validate as validate_html
 
 DEFAULT_WORKSPACE = Path.home() / "Travel Buddy"
 
-CONSISTENCY_CHECKS = (
-    check_routes,
-    check_walking,
-    check_day_internals,
-    check_cross_references,
-    check_dates,
-    check_accommodation_coverage,
-    check_dining,
-    check_budget,
-)
+# Import the list rather than restating it. This file used to keep its own copy, and a copy is a
+# gate that silently falls behind: two checks added upstream never ran here, on the one path that
+# writes the files a traveller actually keeps. A shared tuple cannot drift.
+CONSISTENCY_CHECKS = PLAN_CHECKS
 
 
 def safe_slug(value: object) -> str:

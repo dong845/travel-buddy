@@ -20,16 +20,35 @@ from pathlib import Path
 ASSISTANTS = {"auto", "codex", "claude", "none"}
 
 
+# Set by a running Codex/Claude CLI. Their presence proves an assistant is ALREADY driving
+# this workspace and is waiting on the form -- it is the one situation where starting another
+# one is wrong, not the trigger for it.
+ASSISTANT_ALREADY_DRIVING = ("CLAUDECODE", "CLAUDE_CODE", "CODEX_THREAD_ID")
+
+
 def resolve_assistant(requested: str) -> str:
+    """Decide whether to spawn a continuation assistant, and which one.
+
+    This used to read CLAUDECODE and answer "claude" -- using the proof that an assistant was
+    already handling this trip as the reason to launch a second, competing one. In the measured
+    run the orphan produced a whole plan from a stale reading of the intake: wrong origin city,
+    a superseded budget cap, no allergy data at all, and a Brauhaus dinner for a traveller with a
+    severe dairy allergy, saved with verification_status "verified". The two assistants never saw
+    each other's work, so nothing flagged the contradiction.
+
+    So the env markers now mean "stand down". Auto-continuation exists only for the bare-terminal
+    case, where the traveller submits the form with no assistant listening and would otherwise be
+    left holding a saved JSON file and no next step; that case has no marker set, and the
+    shutil.which fallback below still serves it. An explicit --assistant or TRAVEL_BUDDY_ASSISTANT
+    still wins, because a caller who names an assistant has decided on purpose.
+    """
     if requested != "auto":
         return requested
     configured = os.environ.get("TRAVEL_BUDDY_ASSISTANT", "").strip().casefold()
     if configured in ASSISTANTS - {"auto"}:
         return configured
-    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE"):
-        return "claude"
-    if os.environ.get("CODEX_THREAD_ID"):
-        return "codex"
+    if any(os.environ.get(name) for name in ASSISTANT_ALREADY_DRIVING):
+        return "none"
     if shutil.which("codex"):
         return "codex"
     if shutil.which("claude"):
@@ -140,7 +159,13 @@ def main() -> int:
 
     assistant = resolve_assistant(args.assistant)
     if assistant == "none":
-        print("AUTOMATIC DESTINATION DISCOVERY SKIPPED: assistant mode is none.", flush=True)
+        print("AUTOMATIC DESTINATION DISCOVERY SKIPPED: no continuation assistant was started.", flush=True)
+        print(
+            f"The saved intake is at {intake}. If an assistant is already open in this workspace, "
+            "hand it that path and continue there. To start one from a bare terminal instead, rerun "
+            "with --assistant codex or --assistant claude.",
+            flush=True,
+        )
         return 0
     command, stdin_text = command_for(assistant, project_root, workspace, intake, profile, result_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)

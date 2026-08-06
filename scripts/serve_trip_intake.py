@@ -7,11 +7,14 @@ Usage: python serve_trip_intake.py [--workspace PATH] [--port PORT] [--profile P
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import re
+import secrets
 import subprocess
 import sys
 import threading
+import urllib.parse
 from datetime import date, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +28,106 @@ FORM = Path(__file__).resolve().parents[1] / "assets" / "trip-intake-form.html"
 MAX_BODY_BYTES = 256 * 1024
 DISCOVERY_RUNNER = Path(__file__).resolve().with_name("run_destination_discovery.py")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+# --------------------------------------------------------------------------------------
+# Request guards shared by both intake forms
+# --------------------------------------------------------------------------------------
+# "Bound to 127.0.0.1" was being read as "private". It is not: every page open in the
+# traveller's browser can reach a loopback port, so while this server is up, any tab could POST
+# a complete trip intake into the workspace and start an assistant on it, and the traveller
+# would see a plan they never asked for. The one-time token minted at startup is what actually
+# distinguishes the page this process printed a link to from every other page on the machine.
+#
+# The traveller's experience is unchanged: they still click the link the terminal prints, and
+# the token rides along in it. The form needed no edit because it already builds its POST URL
+# from the injected `submit_url`, so the token travels with that.
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def mint_token() -> str:
+    return secrets.token_urlsafe(16)
+
+
+def request_route(path: str) -> str:
+    """Return the path without its query string, so `/?token=…` still routes to `/`."""
+    return urllib.parse.urlsplit(path).path
+
+
+def token_rejection(path: str, expected: str) -> str | None:
+    """Return a Chinese refusal when a request does not carry this session's token."""
+    supplied = (urllib.parse.parse_qs(urllib.parse.urlsplit(path).query).get("token") or [""])[0]
+    if not supplied:
+        return "链接缺少本次会话的一次性令牌。请回到终端，使用它打印的完整链接（含 ?token=…）重新打开本页。"
+    # Compare as bytes: compare_digest rejects non-ASCII str outright, and the supplied value is
+    # attacker-controlled text, not necessarily a token this process ever minted.
+    if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+        return "本次会话的一次性令牌不正确。请回到终端，使用它最新打印的完整链接重新打开本页。"
+    return None
+
+
+def origin_rejection(origin: str | None) -> str | None:
+    """Refuse a submission a browser labelled as coming from somewhere other than this machine.
+
+    Any loopback host passes rather than this exact host:port, because the traveller may open
+    `localhost:PORT` when the terminal printed `127.0.0.1:PORT` and that is not an attack. The
+    token above is the real gate; this only closes the case where a foreign page still manages
+    to send the request.
+    """
+    if origin is None:
+        return None
+    if urllib.parse.urlsplit(origin).hostname in LOOPBACK_HOSTS:
+        return None
+    return f"拒绝来自 {origin} 的跨站提交：本表单只接受终端打印的本机链接所打开的页面。请用该链接重新打开本页再提交。"
+
+
+def content_type_rejection(value: str | None) -> str | None:
+    """Require a JSON body, which is also what forces a browser to ask permission first.
+
+    A cross-site page can POST a form body without any preflight, but it cannot set
+    application/json without one -- and this server answers no OPTIONS request, so that
+    preflight fails and the submission never arrives.
+    """
+    if (value or "").split(";", 1)[0].strip().casefold() == "application/json":
+        return None
+    return "提交必须使用 Content-Type: application/json。请通过终端打印的本机链接打开表单后再提交。"
+
+
+class IntakeRequestGuard:
+    """Token/origin/content-type guards mixed into both loopback intake handlers.
+
+    Defined once and shared because the profile form hands the browser straight on to the trip
+    form: a guard present on one and missing on the other leaves the same session half open.
+    """
+
+    def send_text(self, status: HTTPStatus, text: str) -> None:
+        body = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def get_is_allowed(self) -> bool:
+        """Answer a page load only for the link this process printed."""
+        rejection = token_rejection(self.path, self.server.token)
+        if rejection:
+            self.send_text(HTTPStatus.FORBIDDEN, rejection)
+            return False
+        return True
+
+    def post_is_allowed(self) -> bool:
+        """Answer a submission only when it could have come from this session's own page."""
+        rejection = (
+            token_rejection(self.path, self.server.token)
+            or origin_rejection(self.headers.get("Origin"))
+            or content_type_rejection(self.headers.get("Content-Type"))
+        )
+        if rejection:
+            self.send_json(HTTPStatus.FORBIDDEN, {"error": rejection})
+            return False
+        return True
 
 
 # The scope question now asks about visa burden rather than geography, because
@@ -218,13 +321,35 @@ def launch_destination_discovery(
         )
     except OSError as exc:
         return {"status": "failed_to_start", "assistant": assistant, "reason": str(exc)}
-    return {
+    # `start_new_session=True` deliberately lets the child outlive this server, which also means
+    # that once the server exits nothing on the machine knows what it is. The orphan in the
+    # measured run kept planning a trip nobody wanted and could not be stopped, because nobody
+    # could name it. Record the PID next to the run log so stopping it is a command to copy
+    # rather than a hunt through `ps`. The negative PID is the process group: start_new_session
+    # makes the child its own group leader, so that one signal also stops the assistant CLI the
+    # runner launched.
+    stop_command = f"kill -TERM -{process.pid}"
+    pid_path = plans / f"destination-discovery-{timestamp}-{safe_origin}.pid.json"
+    started = {
         "status": "started",
         "assistant": assistant,
         "pid": process.pid,
+        "process_group": process.pid,
+        "started_at": datetime.now().astimezone().isoformat(),
+        "command": command,
         "result_path": str(result_path),
         "log_path": str(log_path),
+        "stop_command": stop_command,
     }
+    try:
+        pid_path.write_text(json.dumps(started, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        # Not fatal: the PID is still printed and returned below. Say so, so a reader who goes
+        # looking for the file knows why it is missing instead of assuming nothing was started.
+        started["pid_record_error"] = str(exc)
+    else:
+        started["pid_path"] = str(pid_path)
+    return started
 
 
 def validate_intake(value: object) -> list[str]:
@@ -404,15 +529,27 @@ def validate_intake(value: object) -> list[str]:
 
 
 class TripIntakeServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], workspace: Path, profile_path: Path | None, profile_defaults: dict[str, object], assistant_mode: str = "auto") -> None:
+    def __init__(self, address: tuple[str, int], workspace: Path, profile_path: Path | None, profile_defaults: dict[str, object], assistant_mode: str = "auto", token: str | None = None) -> None:
         super().__init__(address, TripIntakeHandler)
         self.workspace = workspace
         self.profile_path = profile_path
         self.profile_defaults = profile_defaults
         self.assistant_mode = assistant_mode
+        self.token = token or mint_token()
+        # The page and the terminal both promise "one submission", and nothing used to enforce
+        # it: `shutdown()` is asynchronous, so the server kept accepting POSTs after answering
+        # the first. Two that arrived together -- a double-clicked submit button is enough --
+        # each wrote their own intake JSON under a distinct timestamp and each launched their own
+        # discovery child, leaving two assistants planning two trips from one traveller.
+        self.submit_lock = threading.Lock()
+        self.submitted = False
+
+    def submit_url(self) -> str:
+        # token_urlsafe output is already URL-safe, so it needs no escaping here.
+        return f"/submit?token={self.token}"
 
 
-class TripIntakeHandler(BaseHTTPRequestHandler):
+class TripIntakeHandler(IntakeRequestGuard, BaseHTTPRequestHandler):
     server: TripIntakeServer
 
     def log_message(self, format: str, *args: object) -> None:
@@ -428,11 +565,13 @@ class TripIntakeHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path not in {"/", "/index.html"}:
+        if request_route(self.path) not in {"/", "/index.html"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
+        if not self.get_is_allowed():
+            return
         page = FORM.read_text(encoding="utf-8")
-        config = json.dumps({"submit_url": "/submit", "profile_defaults": self.server.profile_defaults}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+        config = json.dumps({"submit_url": self.server.submit_url(), "profile_defaults": self.server.profile_defaults}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
         page = page.replace("<head>", f'<head><script>window.TRAVEL_BUDDY_TRIP_INTAKE={config};</script>', 1)
         body = page.encode("utf-8")
         self.send_response(HTTPStatus.OK)
@@ -443,8 +582,10 @@ class TripIntakeHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
-        if self.path != "/submit":
+        if request_route(self.path) != "/submit":
             self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if not self.post_is_allowed():
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -454,50 +595,60 @@ class TripIntakeHandler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": f"提交内容无法解析：{exc}"})
             return
-        errors = validate_intake(intake)
-        if errors:
-            self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": " ".join(errors)})
-            return
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        origin = intake["origin"]["home_city"]
-        destination = self.server.workspace / "plans" / f"intake-{timestamp}-{safe_name(origin)}.json"
-        event_destination = self.server.workspace / "plans" / f"next-action-{timestamp}-{safe_name(origin)}.json"
-        try:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with destination.open("x", encoding="utf-8") as file:
-                json.dump(intake, file, ensure_ascii=False, indent=2)
-                file.write("\n")
-            next_action = (
-                "trip_construction" if intake.get("mode") == "construction" else "destination_discovery"
+        # Claim the single submission before writing anything, and only mark it claimed once a
+        # file actually exists: a rejected submission must leave the slot open so the traveller
+        # can fix the field the page just complained about and send it again.
+        with self.server.submit_lock:
+            if self.server.submitted:
+                self.send_json(HTTPStatus.CONFLICT, {"error": "本次表单只接受一次提交，已经保存过一份本次旅行需求。如需再填一份，请回到终端重新启动表单。"})
+                return
+            errors = validate_intake(intake)
+            if errors:
+                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": " ".join(errors)})
+                return
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            origin = intake["origin"]["home_city"]
+            destination = self.server.workspace / "plans" / f"intake-{timestamp}-{safe_name(origin)}.json"
+            event_destination = self.server.workspace / "plans" / f"next-action-{timestamp}-{safe_name(origin)}.json"
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with destination.open("x", encoding="utf-8") as file:
+                    json.dump(intake, file, ensure_ascii=False, indent=2)
+                    file.write("\n")
+                next_action = (
+                    "trip_construction" if intake.get("mode") == "construction" else "destination_discovery"
+                )
+                event = {
+                    "event_version": "1.0",
+                    "event_type": "travel_buddy.trip_intake_saved",
+                    "next_action": next_action,
+                    "work_mode": intake.get("mode"),
+                    "intake_path": str(destination),
+                    "profile_path": str(self.server.profile_path) if self.server.profile_path else None,
+                    "profile_id": self.server.profile_defaults.get("profile_id") if self.server.profile_defaults else None,
+                    "created_at": datetime.now().astimezone().isoformat(),
+                    "user_action_required": False,
+                }
+                with event_destination.open("x", encoding="utf-8") as file:
+                    json.dump(event, file, ensure_ascii=False, indent=2)
+                    file.write("\n")
+            except FileExistsError:
+                self.send_json(HTTPStatus.CONFLICT, {"error": "已存在同名的本次旅行记录。请重新打开表单以创建新的一份。"})
+                return
+            except OSError as exc:
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"无法在本机保存本次旅行需求：{exc}"})
+                return
+            # Set before launching, so a failure to start the assistant cannot let a second POST
+            # write a second intake for the same trip.
+            self.server.submitted = True
+            continuation = launch_destination_discovery(
+                self.server.workspace,
+                destination,
+                self.server.profile_path,
+                timestamp,
+                origin,
+                self.server.assistant_mode,
             )
-            event = {
-                "event_version": "1.0",
-                "event_type": "travel_buddy.trip_intake_saved",
-                "next_action": next_action,
-                "work_mode": intake.get("mode"),
-                "intake_path": str(destination),
-                "profile_path": str(self.server.profile_path) if self.server.profile_path else None,
-                "profile_id": self.server.profile_defaults.get("profile_id") if self.server.profile_defaults else None,
-                "created_at": datetime.now().astimezone().isoformat(),
-                "user_action_required": False,
-            }
-            with event_destination.open("x", encoding="utf-8") as file:
-                json.dump(event, file, ensure_ascii=False, indent=2)
-                file.write("\n")
-        except FileExistsError:
-            self.send_json(HTTPStatus.CONFLICT, {"error": "已存在同名的本次旅行记录。请重新打开表单以创建新的一份。"})
-            return
-        except OSError as exc:
-            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"无法在本机保存本次旅行需求：{exc}"})
-            return
-        continuation = launch_destination_discovery(
-            self.server.workspace,
-            destination,
-            self.server.profile_path,
-            timestamp,
-            origin,
-            self.server.assistant_mode,
-        )
         print(f"TRIP INTAKE SAVED: {destination}", flush=True)
         print(f"TRAVEL BUDDY NEXT STEP: {next_action.upper()}", flush=True)
         print(f"TRAVEL BUDDY TRIP INPUT: {destination}", flush=True)
@@ -506,8 +657,12 @@ class TripIntakeHandler(BaseHTTPRequestHandler):
         print(f"TRAVEL BUDDY WORKFLOW EVENT: {event_destination}", flush=True)
         if continuation["status"] == "started":
             print(f"AUTOMATIC DESTINATION DISCOVERY: STARTED ({continuation['assistant']})", flush=True)
+            # The child outlives this server, so print how to stop it while the terminal that
+            # started it is still the one the traveller is looking at.
+            print(f"AUTOMATIC DESTINATION DISCOVERY PID: {continuation['pid']} — stop it with: {continuation['stop_command']}", flush=True)
         else:
             print(f"AUTOMATIC DESTINATION DISCOVERY: {continuation['status'].upper()}", flush=True)
+            print(f"Nothing was launched. Continue in the assistant you already have open, using {destination}.", flush=True)
         self.send_json(HTTPStatus.CREATED, {"saved": True, "intake_path": str(destination), "next_action": next_action, "work_mode": intake.get("mode"), "workflow_event_path": str(event_destination), "automatic_discovery": continuation})
         threading.Thread(target=self.server.shutdown, daemon=True).start()
 
@@ -536,8 +691,8 @@ def main() -> int:
         print(f"ERROR: Could not start local trip intake server: {exc}", file=sys.stderr)
         return 2
     host, port = server.server_address
-    print(f"OPEN THIS LOCAL LINK: http://{host}:{port}/", flush=True)
-    print("WAITING FOR ONE TRIP INTAKE SUBMISSION. The server accepts only this computer's loopback requests.", flush=True)
+    print(f"OPEN THIS LOCAL LINK: http://{host}:{port}/?token={server.token}", flush=True)
+    print("WAITING FOR ONE TRIP INTAKE SUBMISSION. The server accepts only this computer's loopback requests, and only through the whole link above: the token in it is what proves the page is the one this terminal opened. Copy the link in full.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

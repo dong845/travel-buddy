@@ -51,7 +51,37 @@ MEAL_TYPES = ("breakfast", "lunch", "dinner", "snack")
 ARRIVAL_MODES = ("flight", "rail", "road", "other")
 # What the traveller's own status means for getting into this destination. Nationality
 # alone cannot answer it: a permit holder may need no visa where their passport would.
-ENTRY_STATUSES = ("no_visa_required", "visa_required", "unverified")
+#
+# Six spellings, three of them newer: the intake contract words the same question as
+# not_required / required_held / required_to_apply, splitting "visa required" into
+# already-held versus still-to-apply -- the difference between a trip that can be booked
+# now and one that cannot. Both vocabularies are accepted because a plan written before
+# the split must keep validating and rendering exactly as it did.
+ENTRY_STATUSES = (
+    "no_visa_required",
+    "visa_required",
+    "unverified",
+    "not_required",
+    "required_held",
+    "required_to_apply",
+)
+ALLERGY_SEVERITIES = ("none", "preference", "intolerance", "severe")
+# Opening-hours provenance, as recorded by the dining research. Anything that is not an
+# explicit "verified" is shown in the warning treatment: "researched" means somebody read
+# a website once, which is not the same as somebody confirming the venue is open on the
+# evening this plan sends the traveller there.
+HOURS_STATUS_ENGLISH = {
+    "verified": "verified",
+    "researched": "researched",
+    "unverified": "not verified",
+    "closed_unknown": "opening status unknown",
+}
+HOURS_STATUS_LABEL_KEYS = {
+    "verified": "hours_verified",
+    "researched": "hours_researched",
+    "unverified": "hours_unverified",
+    "closed_unknown": "hours_closed_unknown",
+}
 TRANSPORT_MODES = ("self-drive", "public-transit")
 CURRENCY_SYMBOLS = {
     "AUD": "A$", "BRL": "R$", "CAD": "C$", "CNY": "¥", "DKK": "kr", "EUR": "€", "GBP": "£",
@@ -283,6 +313,15 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "entry_no_visa_required": "无需另办签证",
             "entry_visa_required": "需要提前办理签证",
             "entry_unverified": "待核验",
+            "entry_not_required": "无需另办签证",
+            "entry_required_held": "需要签证（已持有）",
+            "entry_required_to_apply": "需要签证（尚未办理）",
+            "budget_cap": "人均预算上限",
+            "venue_hours_label": "营业时间：",
+            "hours_verified": "已核验",
+            "hours_researched": "已调研（未核验）",
+            "hours_unverified": "未核验",
+            "hours_closed_unknown": "营业状态未知",
             "group_flight": "机票选项",
             "group_hotel": "住宿选项",
             "group_ticket": "门票选项",
@@ -299,7 +338,21 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
 # Keys added after custom ui_labels became a supported input. Requiring them would reject every
 # label set authored before they existed, silently dropping that page back to English -- so they
 # are optional, and localize_static_page falls back to the English source string when absent.
-OPTIONAL_UI_LABEL_KEYS = frozenset({"unverified_banner_title", "unverified_banner_body"})
+OPTIONAL_UI_LABEL_KEYS = frozenset({
+    "unverified_banner_title",
+    "unverified_banner_body",
+    # Added with the booking-page fixes: the stated budget cap, dining opening hours and
+    # their provenance, and the three intake spellings of entry status.
+    "budget_cap",
+    "venue_hours_label",
+    "hours_verified",
+    "hours_researched",
+    "hours_unverified",
+    "hours_closed_unknown",
+    "entry_not_required",
+    "entry_required_held",
+    "entry_required_to_apply",
+})
 REQUIRED_UI_LABEL_KEYS = frozenset(labels_for("zh-CN")) - OPTIONAL_UI_LABEL_KEYS
 
 
@@ -361,6 +414,11 @@ def localize_enum_values(page: str, labels: dict[str, str]) -> str:
         "no_visa_required": labels["entry_no_visa_required"],
         "visa_required": labels["entry_visa_required"],
         "unverified": labels["entry_unverified"],
+        # Optional keys, so a ui_labels set authored before the intake spellings existed keeps
+        # validating instead of failing the whole page back to English.
+        "not_required": labels.get("entry_not_required", "No visa required"),
+        "required_held": labels.get("entry_required_held", "Visa required — already held"),
+        "required_to_apply": labels.get("entry_required_to_apply", "Visa required — not yet applied for"),
     }
     page = re.sub(
         r'(<strong class="entry-status">)(' + "|".join(ENTRY_STATUSES) + r')(</strong>)',
@@ -398,6 +456,7 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         ">Open this segment in maps<": f">{labels['segment_map']}<",
         ">Budget at a glance<": f">{labels['budget']}<",
         ">Comparable cost per person<": f">{labels['total']}<",
+        ">Cap per person<": f">{labels.get('budget_cap', 'Cap per person')}<",
         ">Included assumptions<": f">{labels['included']}<",
         ">Ground-mobility plan<": f">{labels['ground']}<",
         ">Browse options — no purchase made<": f">{labels['browse']}<",
@@ -450,6 +509,15 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         "Current researched options only. Opening a link never creates a reservation.": labels["no_reservation"],
         "No meal recommendation was researched.": labels["no_meal_recommendation"],
         "Check current opening hours before switching.": labels["opening_hours_recheck"],
+        # The hours provenance word is anchored inside its own span: bare "researched" also
+        # appears as a source-confidence default, and a loose replacement would translate that
+        # unrelated word too.
+        **{
+            f'<span class="dining-hours-status">{english}</span>':
+                f'<span class="dining-hours-status">{labels.get(HOURS_STATUS_LABEL_KEYS[status], english)}</span>'
+            for status, english in HOURS_STATUS_ENGLISH.items()
+        },
+        "Opening hours: ": labels.get("venue_hours_label", "Opening hours: "),
         " per person · ": f" {labels['per_person_suffix']} · ",
         ">Not fact-checked<": f">{labels.get('unverified_banner_title', 'Not fact-checked')}<",
         ("This plan skipped the five-domain verification pass. Its fares, opening hours, "
@@ -1193,6 +1261,32 @@ def route_segment_links(route: dict, currency: object) -> str:
     return f'<ol class="segment-list">{"".join(rows)}</ol>'
 
 
+def dining_hours_line(item: dict) -> str:
+    """Show the researched opening hours, and say plainly when nobody verified them.
+
+    The plan collected `venue_hours` and `hours_status` and the page printed neither, so a
+    dinner card looked identical whether its hours had been confirmed with the venue or
+    guessed -- which is how a 20:00 dinner survives at a place that closes at 17:00 on that
+    weekday. Anything other than "verified" gets the warning treatment, because a quiet meta
+    line at the bottom of a card is exactly the presentation that let this go unnoticed.
+    """
+    hours = item.get("venue_hours")
+    raw_status = str(item.get("hours_status") or "").strip()
+    if not hours and not raw_status:
+        return ""
+    status = raw_status.casefold()
+    # An unrecognised status word is not evidence that anyone checked, so it reads as
+    # unverified rather than being trusted or silently dropped.
+    status_text = HOURS_STATUS_ENGLISH.get(status, HOURS_STATUS_ENGLISH["unverified"])
+    treatment = "meta" if status == "verified" else "warning"
+    window = f"{esc(hours)} · " if hours else ""
+    return (
+        f'<p class="{treatment} dining-hours" data-hours-status="{attr(raw_status)}">'
+        f'<strong>Opening hours: </strong>{window}'
+        f'<span class="dining-hours-status">{status_text}</span></p>'
+    )
+
+
 def dining_cards(value: object) -> str:
     if not isinstance(value, list) or not value:
         return '<p class="meta">No meal recommendation was researched.</p>'
@@ -1214,6 +1308,7 @@ def dining_cards(value: object) -> str:
             f'<p>{esc(item.get("cuisine_or_style"))} · {esc(item.get("neighborhood"))}</p>'
             f'<p>{esc(item.get("why_this_stop"))}</p>'
             f'<p class="meta">{esc(money(item.get("price_per_person_low"), item.get("price_per_person_high"), item.get("currency")))} per person · {esc(item.get("reservation_or_queue_note"))}</p>'
+            f'{dining_hours_line(item)}'
             f'<a class="dining-link" data-dining-provider="{attr(provider)}" data-verified-at="{attr(item.get("checked_at"))}" href="{attr(item.get("venue_url"))}" target="_blank" rel="noopener noreferrer">View restaurant in {esc(provider)}</a>'
             f'{reservation}{backup}</article>'
         )
@@ -1260,7 +1355,7 @@ def validate_plan(plan: dict) -> list[str]:
             errors.append("entry_context must be an object when present.")
         else:
             if entry_context.get("status") not in ENTRY_STATUSES:
-                errors.append("entry_context.status must be no_visa_required, visa_required, or unverified.")
+                errors.append("entry_context.status must be one of: " + ", ".join(ENTRY_STATUSES) + ".")
             for field in ("summary", "traveler_basis", "source_url", "checked_at"):
                 if not entry_context.get(field):
                     errors.append(f"entry_context.{field} is required when entry_context is present.")
@@ -1285,6 +1380,27 @@ def validate_plan(plan: dict) -> list[str]:
             ]
             if missing or invalid:
                 errors.append("ui_labels must provide every renderer label for a non-English/Chinese plan: " + ", ".join(sorted(missing | set(invalid))) + ".")
+    # Optional, and only checked when it is there: every plan authored before intake started
+    # carrying constraints has no such key and must validate exactly as it did. What is checked
+    # is the shape the downstream gates read -- a severity outside the enum or a walking cap
+    # written as prose does not fail loudly, it fails silently, by leaving the mobility and
+    # dietary checks with nothing to compare against.
+    constraints = trip.get("traveler_constraints")
+    if constraints is not None:
+        if not isinstance(constraints, dict):
+            errors.append("trip.traveler_constraints must be an object with the traveller's dietary, allergy, and mobility fields, or be omitted entirely.")
+        else:
+            severity = constraints.get("allergy_severity")
+            if severity is not None and severity not in ALLERGY_SEVERITIES:
+                errors.append("trip.traveler_constraints.allergy_severity must be one of: " + ", ".join(ALLERGY_SEVERITIES) + ".")
+            walking_cap = constraints.get("max_continuous_walking_minutes")
+            if walking_cap is not None and (
+                not isinstance(walking_cap, int) or isinstance(walking_cap, bool) or walking_cap <= 0
+            ):
+                errors.append("trip.traveler_constraints.max_continuous_walking_minutes must be a positive whole number of minutes (for example 20), or null when the traveller stated no limit.")
+            for field in ("dietary_or_religious_needs", "mobility_notes"):
+                if constraints.get(field) is not None and not isinstance(constraints[field], list):
+                    errors.append(f"trip.traveler_constraints.{field} must be a list of strings, so each need stays separately readable.")
     if trip.get("arrival_transport_mode") not in set(ARRIVAL_MODES):
         errors.append("trip.arrival_transport_mode must be flight, rail, road, or other.")
     if trip.get("destination_type") not in {"city", "region", "multi-stop", "other"}:
@@ -1375,6 +1491,17 @@ def validate_plan(plan: dict) -> list[str]:
             errors.append(f"day {expected} needs at least one timed activity.")
         elif day.get("day_type") == "full" and len(activities) < 2:
             errors.append(f"day {expected} is a full day and needs at least two meaningful activities, or must be marked as a deep single-site day with its reason.")
+        if isinstance(activities, list):
+            # Optional: an activity that never states its on-foot time is left out of the
+            # walking figure rather than assumed to be zero. But a value of the wrong type is
+            # worse than none at all -- "90 min" as prose reads as present, sums as nothing,
+            # and hands the walking-budget check a total it will report with confidence.
+            for activity_number, activity in enumerate(activities, 1):
+                if not isinstance(activity, dict) or activity.get("on_foot_minutes") is None:
+                    continue
+                on_foot = activity["on_foot_minutes"]
+                if not isinstance(on_foot, int) or isinstance(on_foot, bool) or on_foot < 0:
+                    errors.append(f"day {expected} activity {activity_number}.on_foot_minutes must be a whole number of minutes of 0 or more (the time spent on foot or standing during that activity), or be omitted.")
         day_date = parse_iso_date(day.get("date"), f"day {expected} date", errors)
         if day_date:
             day_dates[expected] = day_date
@@ -1765,7 +1892,14 @@ def render_unlocalized(plan: dict) -> str:
     options = plan.get("booking_options", {})
     sources = plan["sources"]
     accommodations = {item.get("id"): item for item in options.get("accommodations", []) if item.get("id")}
-    tickets = {item.get("id"): item for item in options.get("attraction_tickets", []) if item.get("id")}
+    # Kept as a list, in `attraction_tickets` order, because a day's tickets are joined on two
+    # keys, not one: the day card used to read only activities[].ticket_option_id, so a ticket
+    # that carried `day_number` and was never referenced by an activity reached the booking
+    # panel and vanished from the day. The measured run printed "no ticket required" on all
+    # four days of a plan holding three paid tickets -- an affirmative false statement on the
+    # page the traveller books from, and the reason the empty-state line below is now gated on
+    # the union rather than on one of its two halves.
+    ticket_options = [item for item in options.get("attraction_tickets", []) if isinstance(item, dict)]
     # Grouped by type: a single grid put flight cards and hotel cards side by side in one
     # row, inviting a comparison between things that are not comparable.
     groups = []
@@ -1786,12 +1920,18 @@ def render_unlocalized(plan: dict) -> str:
         route = day["route"]
         stay = accommodations.get(day.get("accommodation_option_id"))
         activities = []
-        day_tickets = []
+        referenced_ticket_ids = set()
         for activity in day.get("activities", []):
-            ticket = tickets.get(activity.get("ticket_option_id"))
             activities.append(f'<li><time>{esc(activity.get("time"), "Flexible")}</time><div><strong>{esc(activity.get("name"))}</strong><p>{esc(activity.get("detail"))} {esc(activity.get("meal_or_rest_buffer"), "")}</p></div></li>')
-            if ticket:
-                day_tickets.append(link_for_ticket(ticket))
+            if isinstance(activity, dict) and activity.get("ticket_option_id"):
+                referenced_ticket_ids.add(activity["ticket_option_id"])
+        # One pass over the ordered options is the de-duplication: a ticket both referenced by
+        # an activity and dated to this day is listed once, where `attraction_tickets` puts it.
+        day_tickets = [
+            link_for_ticket(ticket)
+            for ticket in ticket_options
+            if ticket.get("id") in referenced_ticket_ids or ticket.get("day_number") == day.get("number")
+        ]
         transport_bits = [as_text(route.get("mode")), minutes(route.get("duration_minutes")), money(route.get("cost_low"), route.get("cost_high"), route.get("currency", trip["currency"])), as_text(route.get("fare_basis_or_fuel_toll_parking_note"), "")]
         transport_line = " · ".join(bit for bit in transport_bits if bit)
         segment_links = route_segment_links(route, trip["currency"])
@@ -1818,6 +1958,17 @@ def render_unlocalized(plan: dict) -> str:
     overview = plan["transport_overview"]
     source_rows = "".join(f'<li class="source-item" data-source-type="{attr(source["source_type"])}" data-accessed-at="{attr(source["accessed_at"])}" data-source-url="{attr(source["url"])}"><a class="source-link" href="{attr(source["url"])}" target="_blank" rel="noopener noreferrer">{esc(source["name"])}</a> — {esc(source.get("claim_or_decision_supported"), "Plan evidence")} · {esc(source.get("confidence"), "researched")}</li>' for source in sources)
     total = money(budget.get("estimated_per_person_low"), budget.get("estimated_per_person_high"), trip["currency"])
+    # The traveller's own stated ceiling belongs next to the number it constrains. It reached
+    # check_plan_consistency and stopped there, so a page could show a per-person total well
+    # over the cap the traveller gave at intake and read as though nothing were wrong -- the
+    # one figure that makes the total judgeable was the one figure the page withheld.
+    cap = budget.get("cap_per_person")
+    cap_fact = (
+        f'<div class="fact budget-cap" data-budget-cap="{attr(cap)}">'
+        f'<strong>{esc(money(cap, cap, trip["currency"]))}</strong><span>Cap per person</span></div>'
+        if cap is not None
+        else ""
+    )
     budget_breakdown = budget_breakdown_cards(budget.get("breakdown"), trip["currency"])
     recheck = "<br>".join(esc(value) for value in plan.get("recheck_before_purchase", []) if value) or "Recheck price, availability, entry requirements, and operating conditions before purchase."
     anchors = destination_anchor_cards(plan.get("destination_experience_anchors"))
@@ -1854,8 +2005,12 @@ def render_unlocalized(plan: dict) -> str:
         else ""
     )
     assumption_rows = "".join(f"<li>{esc(value)}</li>" for value in plan.get("assumptions", []) if value)
+    # Open by default, like the sources list above it. A closed <details> prints as a heading
+    # with nothing under it, and in print it prints as a heading with nothing under it
+    # permanently -- so the assumptions the numbers rest on, and the recheck list further
+    # down, read as empty sections rather than as the safety content they are.
     assumptions_block = (
-        f'<details class="plan-assumptions"><summary>Planning assumptions</summary><ul>{assumption_rows}</ul></details>'
+        f'<details class="plan-assumptions" open><summary>Planning assumptions</summary><ul>{assumption_rows}</ul></details>'
         if assumption_rows
         else ""
     )
@@ -1887,7 +2042,7 @@ def render_unlocalized(plan: dict) -> str:
         if regional.get("booking_platform_selection_note")
         else ""
     )
-    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{unverified_banner}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div><div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div></section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(" · ".join(part for part in (as_text(plan["transport_preference"]["mode"]), minutes(overview.get("overall_duration_minutes")), as_text(overview.get("overall_distance_km"), "") + " km" if overview.get("overall_distance_km") is not None else "", money(overview.get("cost_low"), overview.get("cost_high"), trip["currency"]), " · ".join(as_text(note) for note in overview.get("notes", []) if note)) if part))}</p><a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details><summary>Recheck before purchase</summary><p>{recheck}</p></details></section></main></body></html>'''
+    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{unverified_banner}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div>{cap_fact}<div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div></section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(" · ".join(part for part in (as_text(plan["transport_preference"]["mode"]), minutes(overview.get("overall_duration_minutes")), as_text(overview.get("overall_distance_km"), "") + " km" if overview.get("overall_distance_km") is not None else "", money(overview.get("cost_low"), overview.get("cost_high"), trip["currency"]), " · ".join(as_text(note) for note in overview.get("notes", []) if note)) if part))}</p><a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details open><summary>Recheck before purchase</summary><p>{recheck}</p></details></section></main></body></html>'''
 
 
 def render(plan: dict) -> str:

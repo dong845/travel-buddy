@@ -1,4 +1,37 @@
 {
+  "_contract": [
+    "Notes on the three blocks a real run shipped without. All three are OPTIONAL -- a plan that",
+    "omits them passes every gate exactly as before -- so nothing warns you when they are absent.",
+    "That is the whole reason they are written out here.",
+
+    "trip.traveler_constraints -- what the traveller's body and diet require, carried from intake.",
+    "dietary_or_religious_needs and mobility_notes are free text lists. allergy_severity is one of",
+    "none | preference | intolerance | severe, and it is the difference between a dish the traveller",
+    "would rather skip and one that ends the trip. allergy_card_text is the literal sentence handed",
+    "to restaurant staff, in the local language. max_continuous_walking_minutes is a hard number the",
+    "walking check reads: with it set, any single segment or activity that exceeds it fails the gate,",
+    "and without it nothing measures the constraint the traveller actually stated.",
+
+    "entry_context -- the entry conclusion, on the page. SKILL.md's own quality gate requires that",
+    "the conclusion reach the page through this block, and this template, the skeleton and the HTML",
+    "template all omitted it, so a real cross-border plan shipped with no entry section at all during",
+    "reintroduced Schengen border checks. status is one of not_required | required_held |",
+    "required_to_apply | unverified. traveler_basis is a status CATEGORY -- 'EU long-term residence",
+    "permit holder' -- and never a document number or expiry date: it goes onto a page the traveller",
+    "may share, and a category is what makes the conclusion rereadable a month later anyway.",
+    "Delete the whole block when the trip never crosses a border; an unverified entry panel on a",
+    "domestic trip is noise, and SKILL.md says not to raise entry as a blocker for a traveller",
+    "staying home.",
+
+    "days[].activities[].on_foot_minutes -- minutes of THIS activity spent on foot or standing,",
+    "an integer >= 0. Segment walking_minutes covers only travel between stops, so a page can",
+    "truthfully print '42 minutes on foot' for a day that schedules three and a half hours of it",
+    "inside museums and markets. That happened, against a stated mobility limit, and the walking",
+    "gate certified the number. Authoring it turns the second half of the day's walking on.",
+
+    "Delete this _contract key before saving the real plan."
+  ],
+
   "plan_status": "researched",
   "verification_status": null,
   "verification_report": null,
@@ -16,13 +49,27 @@
     "traveler_count": null,
     "pace": null,
     "budget_basis": null,
-    "arrival_transport_mode": null
+    "arrival_transport_mode": null,
+    "traveler_constraints": {
+      "dietary_or_religious_needs": [],
+      "allergy_severity": "none",
+      "allergy_card_text": null,
+      "max_continuous_walking_minutes": null,
+      "mobility_notes": []
+    }
   },
   "profile_context": {
     "profile_id": null,
     "profile_last_reviewed_at": null,
     "applied_saved_fields": [],
     "excluded_places_checked": []
+  },
+  "entry_context": {
+    "status": "unverified",
+    "summary": null,
+    "traveler_basis": null,
+    "source_url": null,
+    "checked_at": null
   },
   "regional_service_context": {
     "destination_service_market": null,
@@ -268,7 +315,8 @@
           "name": null,
           "detail": null,
           "ticket_option_id": null,
-          "meal_or_rest_buffer": null
+          "meal_or_rest_buffer": null,
+          "on_foot_minutes": 0
         }
       ],
       "dining": [

@@ -15,6 +15,7 @@ So these tests assert two properties that must both hold, because either one alo
      to ship a hollow itinerary.
 
 Run:  python tests/test_plan_skeleton.py
+      python -m pytest tests/test_plan_skeleton.py
 """
 
 from __future__ import annotations
@@ -93,6 +94,13 @@ def main() -> int:
         return 1
     print("OK: skeleton renders first try in every shape, and stays unshippable until filled.")
     return 0
+
+
+def test_plan_skeleton_renders_and_stays_unshippable() -> None:
+    """Pytest surface: with no test_* function pytest collects nothing from this file and prints
+    "no tests ran", which a contributor or CI reads as green. Running the file directly is
+    unchanged."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

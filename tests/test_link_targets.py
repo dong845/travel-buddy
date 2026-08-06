@@ -11,6 +11,7 @@ Google Flights URL returns 200 with no redirect under a Chrome agent. Reporting 
 accused a working link, so the rule now returns `unverified` and the test pins that down.
 
 Run:  python tests/test_link_targets.py
+      python -m pytest tests/test_link_targets.py
 """
 
 from __future__ import annotations
@@ -94,6 +95,14 @@ def main() -> int:
         return 1
     print("OK: link-target verdicts hold, and an agent-dependent landing is never called broken.")
     return 0
+
+
+def test_link_target_verdicts() -> None:
+    """Pytest surface. This file is a main()-style script, so before this function existed
+    `python -m pytest tests/` collected zero tests and printed "no tests ran" -- which a
+    contributor or a CI job reads as green while the suite is in fact never executed. One
+    assertion per file keeps both entry points honest without restructuring the checks above."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

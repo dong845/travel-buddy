@@ -13,6 +13,7 @@ not updated with them, so anyone following the template would have walked straig
 gate with no hint why.
 
 Run:  python tests/test_packaging.py
+      python -m pytest tests/test_packaging.py
 """
 
 from __future__ import annotations
@@ -160,6 +161,13 @@ def main() -> int:
         return 1
     print("packaging and contract integrity OK")
     return 0
+
+
+def test_packaging_and_contract_integrity() -> None:
+    """Pytest surface: with no test_* function pytest collects nothing from this file and prints
+    "no tests ran", which a contributor or CI reads as green. Running the file directly is
+    unchanged."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

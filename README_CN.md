@@ -280,7 +280,7 @@ rm "~/Travel Buddy/profiles/<你点名的那个>.json"
 
 **提交时报「不支持的本次旅行需求格式」。** 表单的工作模式必须和目的地状态一致（`fixed` → `construction`，`anchored` → `constrained_discovery`，其余 → `discovery`）。服务端是**故意**拒绝矛盾组合的，免得存下来的文件一边说目的地已定、一边说还需要帮你找目的地。
 
-**自动接续没反应。** 看 `plans/destination-discovery-*.log`。如果 CLI 不在 `PATH` 里，runner 会明说。用 `--assistant none` 可以关掉自动接续、改为手动继续。
+**自动接续没反应。** 在 `--assistant auto` 下这通常是**正确行为**而不是故障：当本 skill 跑在 Claude Code 或 Codex **内部**时，runner 会主动让位，把保存好的意向文件路径打印出来，交给你正在对话的那个助手继续。它以前会在这种情况下另起一个无人看管的 agent，结果是同一个工作区里出现两份互相矛盾的方案。从裸终端运行时它仍会启动；日志在 `plans/destination-discovery-*.log`，PID 和停止命令在 `plans/destination-discovery-*.pid.json`。如果 CLI 不在 `PATH` 里，runner 会明说。想强制后台运行用 `--assistant codex` 或 `--assistant claude`。
 
 **`--edit-profile` 好像没生效。** 它只在已经存在档案时起作用；`profiles/` 为空时，流程会直接去创建新档案。
 

@@ -13,6 +13,7 @@ honest in both directions: it must fire on the shipped defects, and it must not 
 legitimate pages, including non-Latin provider names where a host cannot be matched by tokens.
 
 Run:  python tests/test_link_provider_match.py
+      python -m pytest tests/test_link_provider_match.py
 """
 
 from __future__ import annotations
@@ -103,6 +104,13 @@ def main() -> int:
         return 1
     print("OK: provider/target match rule holds in both directions.")
     return 0
+
+
+def test_link_provider_match() -> None:
+    """Pytest surface: with no test_* function pytest collects nothing from this file and prints
+    "no tests ran", which a contributor or CI reads as green. Running the file directly is
+    unchanged."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

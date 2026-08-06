@@ -162,5 +162,7 @@
   "entry_basis": "Basis: ",
   "entry_no_visa_required": "no visa required",
   "entry_visa_required": "visa required in advance",
-  "entry_unverified": "unverified"
+  "entry_unverified": "unverified",
+  "unverified_banner_title": "Not fact-checked",
+  "unverified_banner_body": "This plan skipped the five-domain verification pass. Its fares, opening hours, entry rules, and availability have not been checked against operators or official sources. Treat every figure as an estimate and verify before booking."
 }

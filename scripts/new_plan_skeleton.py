@@ -6,6 +6,8 @@ Usage:
       --origin "阿姆斯特丹" --destination "马拉加" --language zh --currency EUR \
       --travellers 1 --mode public-transit --stops-per-day 4 > plan.json
 
+  python new_plan_skeleton.py --from-intake <workspace>/plans/intake-<stamp>-<slug>.json > plan.json
+
 WHY THIS EXISTS
 ---------------
 `templates/final-trip-plan.json` lists every field but cannot express the rules that relate them,
@@ -34,8 +36,21 @@ authoring without becoming a way to deliver a hollow page.
 Typed fields cannot hold that prose, so they take type-valid sentinels. URLs keep the property:
 https://example.invalid/TODO-... is HTTPS enough for the renderer, still trips the TODO scan,
 and can never resolve, so `check_link_targets.py` objects too. Dates do not: 1970-01-01 is
-conspicuous on the page but no gate rejects it. That is the one hole in this design, and it is
-stated rather than papered over -- check every `checked_at` before delivery.
+conspicuous on the page but no gate rejects it. Neither does `on_foot_minutes: 0`, which is
+indistinguishable from an author who measured the day and found no walking in it. Those two are
+the holes in this design, and they are stated rather than papered over -- check every
+`checked_at`, and every activity's on-foot minutes, before delivery.
+
+--from-intake
+-------------
+The traveller already answered these questions once. Copying their answers by hand is where they
+get lost: the measured run planned from the wrong origin city and a superseded budget cap while
+both sat correct in the intake file, and `budget.cap_per_person` -- hardcoded None here until now
+-- meant the cap-overrun check silently passed every skeleton-produced plan, so nothing objected.
+`--from-intake` copies the mapped fields and prints every one of them to stderr, because a copy
+nobody sees is how the wrong city survived a whole planning run. Command-line flags still win: an
+operator naming a value on the command line is correcting the file, which is the one case where
+the file is not the authority.
 """
 
 from __future__ import annotations
@@ -44,6 +59,7 @@ import argparse
 import datetime as dt
 import json
 import sys
+from pathlib import Path
 
 TODO = "TODO: "
 # Typed fields cannot hold prose, so they get type-valid sentinels instead. The URL sentinel is
@@ -53,6 +69,84 @@ TODO = "TODO: "
 # merely conspicuous on the page -- and that is a stated limit, not an oversight.
 URL = "https://example.invalid/TODO-replace-with-a-researched-url"
 DATE = "1970-01-01"
+
+# Which intake flag each required trip field can arrive from, named in the error when neither the
+# flag nor the file carries it. "--start is required" sends the operator back to the command line;
+# naming the intake key sends them to the file that already has the answer.
+REQUIRED_FROM_INTAKE = {
+    "--start": "travel_window.start_date",
+    "--end": "travel_window.end_date",
+    "--origin": "origin.home_city",
+    "--destination": "destination_scope.named_places[0]",
+}
+
+
+class IntakeError(Exception):
+    """A --from-intake file that cannot be used. Carries the sentence the operator reads."""
+
+
+def dig(node, *path):
+    """Read intake[a][b]. A missing key, a null, and a wrongly-shaped parent all mean 'absent'.
+
+    Intake is written by a form the traveller may leave half-answered, so almost every key is
+    optional and many that exist are null. Collapsing those three cases into one is what stops
+    a partial intake -- the normal kind -- from turning --from-intake into a traceback.
+    """
+    for key in path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def read_intake(path: str) -> dict:
+    """Load an intake file, or raise IntakeError with something the operator can act on."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise IntakeError(
+            f"could not read --from-intake file '{path}': {exc.strerror or exc}. Pass the saved "
+            f"intake JSON, which start_intake_workflow.py writes to "
+            f"<workspace>/plans/intake-<stamp>-<slug>.json.") from exc
+    try:
+        intake = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise IntakeError(
+            f"--from-intake file '{path}' is not valid JSON: {exc}. Open it at that line, or "
+            f"re-run the intake form to write a fresh one.") from exc
+    if not isinstance(intake, dict):
+        raise IntakeError(
+            f"--from-intake file '{path}' holds a {type(intake).__name__}, not an object. Pass an "
+            f"intake JSON, not a plan or a list of them.")
+    # A plan, a profile, or a verification report handed here by mistake is valid JSON in which
+    # every copy below skips silently, and the run then looks exactly like a traveller who answered
+    # nothing -- the same silence this flag exists to end. Refuse instead. The blocks named here
+    # are the ones only an intake has: a plan also carries a top-level `budget`, so sniffing for
+    # that would wave a plan file straight through.
+    if not any(isinstance(intake.get(block), dict)
+               for block in ("origin", "travel_window", "party", "destination_scope")):
+        raise IntakeError(
+            f"'{path}' is valid JSON but does not look like a trip intake: none of origin, "
+            f"travel_window, party or destination_scope is an object. Check the path -- an intake "
+            f"file is named intake-<stamp>-<slug>.json.")
+    return intake
+
+
+def is_text(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def is_count(value) -> bool:
+    # bool is an int in Python and True would silently become 1 traveller.
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def is_amount(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def text_list(value) -> list[str]:
+    return [item.strip() for item in value if is_text(item)] if isinstance(value, list) else []
 
 
 def stop_name(day_number: int, index: int, total: int, day_type: str) -> str:
@@ -129,11 +223,17 @@ def build_day(number: int, date: dt.date, day_type: str, stops_per_day: int, mod
         "focus": f"{TODO}what this day is for",
         "base_location": f"{TODO}base location",
         "accommodation_option_id": "acc-1",
+        # on_foot_minutes is the time THIS activity is spent on foot or standing. Segment
+        # walking_minutes covers only the walk between stops, so a page can truthfully print
+        # "42 minutes on foot" for a day that schedules three and a half hours of it inside
+        # museums and markets -- that shipped, against a stated mobility limit, and the walking
+        # gate certified the number. 0 is the type-valid sentinel and is also a real answer,
+        # so unlike a TODO it cannot be detected; measure it before delivery.
         "activities": [
             {"time": "09:00", "name": f"{TODO}day {number} first activity", "detail": f"{TODO}detail",
-             "ticket_option_id": None, "meal_or_rest_buffer": None},
+             "ticket_option_id": None, "meal_or_rest_buffer": None, "on_foot_minutes": 0},
             {"time": "14:00", "name": f"{TODO}day {number} second activity", "detail": f"{TODO}detail",
-             "ticket_option_id": None, "meal_or_rest_buffer": None},
+             "ticket_option_id": None, "meal_or_rest_buffer": None, "on_foot_minutes": 0},
         ],
         "dining": [dining_card(meal, stops[min(1, len(stops) - 1)]) for meal in meals],
         "route": {
@@ -146,7 +246,10 @@ def build_day(number: int, date: dt.date, day_type: str, stops_per_day: int, mod
             "duration_minutes": 0,
             "distance_km": 0,
             "transfer_count": 0,
-            "walking_burden": f"{TODO}quote the computed walking total in digits",
+            # Both totals, in digits: the segments' walking_minutes and the activities'
+            # on_foot_minutes. One number for both is how a 3.5-hour day got printed as 42 minutes.
+            "walking_burden": f"{TODO}quote both computed walking totals in digits "
+                              f"(between stops, and on foot at stops)",
             "cost_low": 0,
             "cost_high": 0,
             "currency": f"{TODO}currency",
@@ -167,26 +270,140 @@ def build_day(number: int, date: dt.date, day_type: str, stops_per_day: int, mod
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--start", required=True)
-    parser.add_argument("--end", required=True)
-    parser.add_argument("--origin", required=True)
-    parser.add_argument("--destination", required=True)
+    # These four were required flags. They stay required as values -- the check moved below, so
+    # --from-intake can supply them -- and the error names the intake key as well as the flag.
+    parser.add_argument("--start")
+    parser.add_argument("--end")
+    parser.add_argument("--origin")
+    parser.add_argument("--destination")
     parser.add_argument("--language", default="zh")
-    parser.add_argument("--currency", default="EUR")
-    parser.add_argument("--travellers", type=int, default=1)
+    # No argparse default: it has to stay possible to tell "the operator asked for EUR" from
+    # "nobody said", or the default would silently outrank the currency the traveller stated.
+    parser.add_argument("--currency", default=None,
+                        help="default: EUR, or the intake's budget.currency")
+    parser.add_argument("--travellers", type=int, default=None,
+                        help="default: 1, or the intake's party.traveler_count")
     parser.add_argument("--mode", choices=("public-transit", "self-drive"), default="public-transit")
     parser.add_argument("--stops-per-day", type=int, default=4)
+    parser.add_argument("--from-intake", default=None, metavar="INTAKE.JSON",
+                        help="copy the traveller's own answers out of a saved intake file")
     args = parser.parse_args()
 
-    try:
-        start = dt.date.fromisoformat(args.start)
-        end = dt.date.fromisoformat(args.end)
-    except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+    intake: dict = {}
+    if args.from_intake:
+        try:
+            intake = read_intake(args.from_intake)
+        except IntakeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+
+    report: list[str] = []
+
+    def pick(field: str, source: str, cli_value, valid, expected: str):
+        """Resolve one field from the intake and record, for the operator, what happened to it.
+
+        Every outcome except 'the intake never carried it' prints. A silent copy is what let a
+        plan get built on the wrong origin city while the right one sat in the file.
+        """
+        value = dig(intake, *source.split("."))
+        if value is None:
+            return cli_value
+        if not valid(value):
+            report.append(f"  {source} -> {field}: NOT copied, expected {expected}, found "
+                          f"{value!r}. Fill {field} by hand.")
+            return cli_value
+        if cli_value is not None and cli_value != value:
+            report.append(f"  {source} -> {field}: NOT copied, {cli_value!r} came from the command "
+                          f"line and wins (the intake says {value!r}).")
+            return cli_value
+        report.append(f"  {source} -> {field}: {value!r}")
+        return value
+
+    origin = pick("trip.origin", "origin.home_city", args.origin, is_text, "a non-empty string")
+    start_text = pick("trip.start_date", "travel_window.start_date", args.start, is_text, "a YYYY-MM-DD string")
+    end_text = pick("trip.end_date", "travel_window.end_date", args.end, is_text, "a YYYY-MM-DD string")
+    travellers = pick("trip.traveler_count", "party.traveler_count", args.travellers, is_count, "a positive integer")
+    currency = pick("trip.currency", "budget.currency", args.currency, is_text, "a currency code")
+    cap_per_person = pick("budget.cap_per_person", "budget.hard_cap_amount", None, is_amount, "a positive number")
+
+    def pick_list(field: str, source: str) -> list[str]:
+        """Copy a list of free-text constraints. An empty list is silence; anything else is not.
+
+        A dietary need written as a bare string instead of a list is the shape that must never
+        pass quietly -- dropping it produces a plan that asserts the traveller has no allergy.
+        """
+        value = dig(intake, *source.split("."))
+        items = text_list(value)
+        if items:
+            report.append(f"  {source} -> {field}: {items!r}")
+        elif value is not None and value != []:
+            report.append(f"  {source} -> {field}: NOT copied, expected a list of strings, found "
+                          f"{value!r}. Fill {field} by hand.")
+        return items
+
+    # destination_scope.named_places is a list, so it cannot go through pick()'s dotted path.
+    destination = args.destination
+    named_places = dig(intake, "destination_scope", "named_places")
+    places = text_list(named_places)
+    if places:
+        first = places[0]
+        if destination is not None and destination != first:
+            report.append(f"  destination_scope.named_places[0] -> trip.destination: NOT copied, "
+                          f"{destination!r} came from the command line and wins (the intake says {first!r}).")
+        else:
+            destination = first
+            report.append(f"  destination_scope.named_places[0] -> trip.destination: {first!r}")
+        if len(places) > 1:
+            report.append(f"  destination_scope.named_places: {len(places)} places named; only the "
+                          f"first became trip.destination. Plan the rest by hand, or run one "
+                          f"skeleton per place.")
+    elif named_places is not None and named_places != []:
+        report.append(f"  destination_scope.named_places[0] -> trip.destination: NOT copied, expected "
+                      f"a list of place names, found {named_places!r}. Pass --destination.")
+
+    dietary = pick_list("trip.traveler_constraints.dietary_or_religious_needs",
+                        "feasibility.dietary_or_religious_needs")
+    mobility = pick_list("trip.traveler_constraints.mobility_notes",
+                         "party.mobility_or_access_needs")
+
+    # Printed before the checks below, so that a run which then fails on a bad date still shows
+    # the operator what was read out of the file and what the file said.
+    if args.from_intake:
+        print(f"--from-intake {args.from_intake}", file=sys.stderr)
+        for line in report or ["  nothing copied: the intake carried none of the mapped keys."]:
+            print(line, file=sys.stderr)
+
+    missing = [flag for flag, value in (("--start", start_text), ("--end", end_text),
+                                        ("--origin", origin), ("--destination", destination))
+               if not value]
+    if missing:
+        print("ERROR: no value for " + ", ".join(
+            f"{flag} (intake {REQUIRED_FROM_INTAKE[flag]})" for flag in missing)
+            + ". Pass the flag, or point --from-intake at an intake file that carries the key.",
+            file=sys.stderr)
+        return 2
+
+    # Name which date and where it came from: a date can now arrive from the intake file, and
+    # "month must be in 1..12" alone leaves the operator hunting through two possible sources.
+    def as_date(flag: str, text: str):
+        try:
+            return dt.date.fromisoformat(text)
+        except ValueError as exc:
+            source = flag if text == getattr(args, flag.lstrip("-")) else \
+                f"the intake's {REQUIRED_FROM_INTAKE[flag]}"
+            print(f"ERROR: {flag} value {text!r} is not a YYYY-MM-DD date ({exc}). "
+                  f"Fix it in {source}.", file=sys.stderr)
+            return None
+
+    start, end = as_date("--start", start_text), as_date("--end", end_text)
+    if start is None or end is None:
         return 2
     if end < start:
-        print("ERROR: --end is before --start.", file=sys.stderr)
+        print(f"ERROR: --end {end.isoformat()} is before --start {start.isoformat()}.", file=sys.stderr)
         return 2
+
+    travellers = travellers if travellers is not None else 1
+    currency = currency if currency is not None else "EUR"
 
     span = (end - start).days + 1
     days = []
@@ -202,15 +419,41 @@ def main() -> int:
         "generated_at": DATE,
         "ui_labels": None,
         "trip": {
-            "title": f"{TODO}trip title", "language": args.language, "currency": args.currency,
-            "origin": args.origin, "destination": args.destination, "destination_type": "city",
+            "title": f"{TODO}trip title", "language": args.language, "currency": currency,
+            "origin": origin, "destination": destination, "destination_type": "city",
             "start_date": start.isoformat(), "end_date": end.isoformat(),
-            "traveler_count": args.travellers, "pace": f"{TODO}pace",
+            "traveler_count": travellers, "pace": f"{TODO}pace",
             "budget_basis": f"{TODO}what the per-person total includes",
             "arrival_transport_mode": "flight",
+            # Empty is a claim here, not a placeholder: it says the traveller stated no dietary,
+            # allergy or mobility constraint. Leave it empty only when that is true. A TODO would
+            # be worse -- these are the fields the dining and walking gates read, and a gate that
+            # reads a sentence measures nothing. --from-intake fills the two list fields; the
+            # severity, the card text and the walking cap have no intake key and are authored here.
+            "traveler_constraints": {
+                "dietary_or_religious_needs": dietary,
+                "allergy_severity": "none",
+                "allergy_card_text": None,
+                "max_continuous_walking_minutes": None,
+                "mobility_notes": mobility,
+            },
         },
         "profile_context": {"profile_id": None, "profile_last_reviewed_at": None,
                             "applied_saved_fields": [], "excluded_places_checked": []},
+        # SKILL.md's quality gate requires the entry conclusion to reach the page through
+        # entry_context, and the template, this skeleton and the HTML template all omitted it --
+        # so a real cross-border plan shipped with no entry section at all while Schengen border
+        # checks were reintroduced. Emitting it means the author deletes it deliberately on a
+        # domestic trip instead of never meeting it. traveler_basis is the status CATEGORY the
+        # conclusion rests on: it lands on a page the traveller may forward, where a document
+        # number is unsafe and, a month later, less use than the category anyway.
+        "entry_context": {
+            "status": "unverified",
+            "summary": f"{TODO}what the entry rules mean for this traveller on these dates",
+            "traveler_basis": f"{TODO}status category the conclusion rests on, never a document number or expiry",
+            "source_url": URL,
+            "checked_at": DATE,
+        },
         "regional_service_context": {
             "destination_service_market": f"{TODO}service market",
             "selection_basis": f"{TODO}why these providers suit this market",
@@ -232,13 +475,16 @@ def main() -> int:
             ],
         },
         "budget": {
-            "calculation_basis": "per_person", "cap_per_person": None, "overrun_acknowledged": None,
+            # cap_per_person was hardcoded None, so the cap-overrun check no-opped on every plan
+            # this script produced and the traveller's own stated cap never reached the page.
+            "calculation_basis": "per_person", "cap_per_person": cap_per_person,
+            "overrun_acknowledged": None,
             "estimated_per_person_low": 0, "estimated_per_person_high": 0,
             "included_categories": ["flight", "accommodation"],
             "unverified_categories": [],
             "breakdown": [
                 {"category": category, "description": f"{TODO}what this covers",
-                 "per_person_low": 0, "per_person_high": 0, "currency": args.currency,
+                 "per_person_low": 0, "per_person_high": 0, "currency": currency,
                  "price_status": "estimate", "checked_at": DATE,
                  "note": f"{TODO}basis for this figure"}
                 for category in ("flight", "accommodation")
@@ -270,7 +516,7 @@ def main() -> int:
                                       "arrival_local": f"{TODO}local time", "duration_minutes": 0, "stops": 0,
                                       "connection_or_terminal_note": f"{TODO}connection note"},
                  "cabin": f"{TODO}cabin", "baggage_assumption": f"{TODO}baggage assumption",
-                 "connection_summary": f"{TODO}connection summary", "fare_currency": args.currency,
+                 "connection_summary": f"{TODO}connection summary", "fare_currency": currency,
                  "fare_low": 0, "fare_high": 0, "price_basis": "per_person_round_trip",
                  "price_status": "estimate", "material_conditions": f"{TODO}fare conditions",
                  "availability_status": "unknown", "price_checked_at": DATE,
@@ -285,13 +531,13 @@ def main() -> int:
                  "direct_provider": None, "direct_review_url": None, "source_type": "comparison_platform",
                  "checked_at": DATE, "review_url": f"{URL}-property-{n}",
                  "check_in": start.isoformat(), "check_out": end.isoformat(),
-                 "guest_count": args.travellers, "room_count": 1,
+                 "guest_count": travellers, "room_count": 1,
                  "comparison_searches": [{"platform": f"{TODO}platform", "search_url": URL,
                                           "checked_at": DATE,
                                           "prefilled_fields": ["destination", "check_in", "check_out", "guests", "rooms"]}],
                  "room_basis": f"{TODO}room basis", "nightly_cost_low": 0, "nightly_cost_high": 0,
                  "price_basis": "per_room_per_night", "price_status": "estimate",
-                 "trip_cost_low": 0, "trip_cost_high": 0, "currency": args.currency,
+                 "trip_cost_low": 0, "trip_cost_high": 0, "currency": currency,
                  "price_checked_at": DATE, "availability_status": "unknown",
                  "taxes_and_fees_status": f"{TODO}taxes and fees", "cancellation_terms": f"{TODO}cancellation",
                  "accessibility_or_location_note": f"{TODO}access note", "arrival_access_note": f"{TODO}arrival access",
@@ -311,7 +557,7 @@ def main() -> int:
                  "pickup_time": f"{TODO}YYYY-MM-DD HH:MM", "dropoff_time": f"{TODO}YYYY-MM-DD HH:MM",
                  "vehicle_class": f"{TODO}vehicle class", "transmission": f"{TODO}transmission",
                  "capacity_note": f"{TODO}luggage and party capacity",
-                 "price_low": 0, "price_high": 0, "currency": args.currency,
+                 "price_low": 0, "price_high": 0, "currency": currency,
                  "price_basis": "per_vehicle_per_day", "price_status": "estimate",
                  "price_checked_at": DATE, "availability_status": "unknown",
                  "rental_search_prefilled_fields": ["pickup_location", "dropoff_location",
@@ -344,6 +590,20 @@ def main() -> int:
 
     json.dump(plan, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
+
+    # Two constraints arrive from intake as prose and stay unmeasured until someone turns them
+    # into the typed fields the gates read. Both are named because both went missing in the
+    # measured run: a severe dairy allergy that reached no dining card, and a 20-30 minute
+    # walking limit against a day that scheduled hours of it.
+    if mobility:
+        print("  NOTE: trip.traveler_constraints.max_continuous_walking_minutes is still null. "
+              "Set it to the number those mobility notes state, or no gate measures the limit.",
+              file=sys.stderr)
+    if dietary:
+        print("  NOTE: trip.traveler_constraints.allergy_severity is still 'none' and "
+              "allergy_card_text is null. Set the severity (preference | intolerance | severe) "
+              "and write the card, or the plan asserts there is nothing to avoid.",
+              file=sys.stderr)
     return 0
 
 
