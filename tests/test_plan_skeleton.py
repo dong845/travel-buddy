@@ -41,8 +41,47 @@ def generate(tmp: Path, name: str, *args: str) -> Path:
     return path
 
 
+def size_limit_cases(failures: list[str]) -> None:
+    """A skeleton nobody can fill is not a favour.
+
+    `--start 2027-03-01 --end 2027-05-30 --stops-per-day 12` used to emit 91 days, 181 dining cards,
+    1001 route segments and 1.4 MB, exit 0, silently -- and every value in it is a TODO the page
+    validator refuses to ship, so the operator had to research all of it before anything rendered.
+    The verification pass then scales with the number of claims rather than the number of nights, so
+    the real cost lands later and larger than anyone expects at the prompt. These cases pin the four
+    behaviours: quiet when normal, a note when large, a refusal past the limit that says what it
+    would cost, and --oversize for the author who means it."""
+    base = ["--origin", "a", "--destination", "b"]
+
+    def run_size(args: list[str]) -> tuple[int, str]:
+        proc = subprocess.run([sys.executable, str(SCRIPTS / "new_plan_skeleton.py"), *base, *args],
+                              capture_output=True, text=True)
+        return proc.returncode, proc.stderr
+
+    code, err = run_size(["--start", "2027-03-01", "--end", "2027-03-04", "--stops-per-day", "3"])
+    if code != 0 or err.strip():
+        failures.append(f"size: an ordinary 4-day plan must be silent, got exit {code} / {err[:120]!r}")
+
+    code, err = run_size(["--start", "2027-03-01", "--end", "2027-03-10", "--stops-per-day", "3"])
+    if code != 0 or "NOTE:" not in err:
+        failures.append(f"size: a 10-day plan should warn but succeed, got exit {code} / {err[:120]!r}")
+
+    code, err = run_size(["--start", "2027-03-01", "--end", "2027-05-30", "--stops-per-day", "12"])
+    if code != 2 or "--oversize" not in err:
+        failures.append(f"size: 91 days x 12 stops must be refused and name --oversize, got exit {code}")
+    for token in ("dining cards", "route segments"):
+        if code == 2 and token not in err:
+            failures.append(f"size: the refusal must say what it would cost -- no {token!r} in the message")
+
+    code, err = run_size(["--start", "2027-03-01", "--end", "2027-05-30",
+                          "--stops-per-day", "12", "--oversize"])
+    if code != 0 or "--oversize accepted" not in err:
+        failures.append(f"size: --oversize must let it through and say so, got exit {code}")
+
+
 def main() -> int:
     failures: list[str] = []
+    size_limit_cases(failures)
 
     shapes = [
         ("zh 4 days, 4 stops", ["--start", "2026-09-11", "--end", "2026-09-14",

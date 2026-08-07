@@ -344,6 +344,105 @@ def main() -> int:
     ]
     expect_ok("verification defect resolved", copy.deepcopy(base), report)
 
+    # 10a. The verification tier is read off the plan, never declared by the run. A two-night rail
+    # city break with no allergy and no walking cap was paying the same seven-block pass as a
+    # multi-city flight itinerary, and three of those blocks had no subject on it -- which is how
+    # an operator learns to reach for --unverified instead. The danger runs the other way too, so
+    # the absence cases below matter more than the qualifying one: every plan written before
+    # entry_context and traveler_constraints existed lacks both, and treating a missing block as
+    # "no constraint" would silently downgrade exactly the plans nobody has re-examined.
+    def light_plan() -> dict:
+        p = copy.deepcopy(base)
+        p["entry_context"] = {"status": "not_required"}
+        p["trip"]["traveler_constraints"] = constraints()
+        p["trip"]["arrival_transport_mode"] = "rail"
+        p["booking_options"]["flights"] = []
+        p["booking_options"]["rental_cars"] = []
+        p["budget"]["breakdown"] = [r for r in p["budget"]["breakdown"]
+                                    if r.get("category") not in {"flight", "ferry", "rental_car"}]
+        for d in p["days"]:
+            d["base_location"] = "One City"
+        p["booking_options"]["accommodations"] = [{"stay_group_id": "only-stay"}]
+        return p
+
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location("_cpc", CHECKER)
+    _cpc = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_cpc)
+
+    def tier(plan: dict) -> str:
+        required, _ = _cpc.required_domains_for(plan)
+        return "light" if required == {"sights_and_hours"} else "full"
+
+    if tier(light_plan()) != "light":
+        failures.append("tier: a short single-city rail plan with no constraints should qualify as light")
+    for label, mutate in (
+        ("a flight", lambda p: p["booking_options"]["flights"].append({})),
+        ("a rental car", lambda p: p["booking_options"]["rental_cars"].append({})),
+        ("arrival by air", lambda p: p["trip"].update(arrival_transport_mode="flight")),
+        ("an entry requirement", lambda p: p["entry_context"].update(status="required_to_apply")),
+        ("a severe allergy", lambda p: p["trip"]["traveler_constraints"].update(allergy_severity="severe")),
+        ("a walking cap", lambda p: p["trip"]["traveler_constraints"].update(max_continuous_walking_minutes=30)),
+        # Absence is the dangerous direction and the easy one to get wrong twice: the first pass
+        # covered entry_context and traveler_constraints and left booking_options, days and the
+        # arrival mode reading as "nothing to declare". Every top-level block a condition depends
+        # on is listed here, so a later refactor that adds a condition has somewhere obvious to
+        # add its absence case too.
+        ("NO entry_context at all", lambda p: p.pop("entry_context")),
+        ("NO traveler_constraints at all", lambda p: p["trip"].pop("traveler_constraints")),
+        ("NO booking_options at all", lambda p: p.pop("booking_options")),
+        ("NO budget at all", lambda p: p.pop("budget")),
+        # A ferry cannot be expressed in arrival_transport_mode, whose enum is
+        # flight/rail/road/other, so a budget row is the only place it appears. SKILL.md says a
+        # ferry needs the full pass -- sailings are seasonal, weather-cancelled and often the
+        # single point of failure in a day -- and without this the doc promised a check the code
+        # could not see.
+        ("a ferry priced in the budget",
+         lambda p: p["budget"]["breakdown"].append({"category": "ferry"})),
+        ("a flight priced in the budget",
+         lambda p: p["budget"]["breakdown"].append({"category": "flight"})),
+        # allergy_severity was a DENYLIST -- `in {"intolerance", "severe"}` with an `or "none"`
+        # default -- so every value the code did not recognise bought the cheap tier: null, an
+        # absent key, "Severe" with a capital S, "anaphylactic". new_plan_skeleton.py hardcodes
+        # "none" and --from-intake has no source for the field, so the DEFAULT of a plan built the
+        # documented way was the value that skipped four verification domains, on a traveller who
+        # had written "anaphylactic peanut allergy, I carry an EpiPen" on the form.
+        ("a null allergy_severity",
+         lambda p: p["trip"]["traveler_constraints"].update(allergy_severity=None)),
+        ("an absent allergy_severity",
+         lambda p: p["trip"]["traveler_constraints"].pop("allergy_severity")),
+        ("allergy_severity 'anaphylactic' (not in the enum)",
+         lambda p: p["trip"]["traveler_constraints"].update(allergy_severity="anaphylactic")),
+        ("allergy_severity 'Severe' (wrong case)",
+         lambda p: p["trip"]["traveler_constraints"].update(allergy_severity="Severe")),
+        # A need stated in prose while the typed field sits at its default is a constraint nobody
+        # can measure, and dropping four domains on the strength of an unconverted note is backwards.
+        ("dietary needs in prose while severity is 'none'",
+         lambda p: p["trip"]["traveler_constraints"].update(
+             dietary_or_religious_needs=["Anaphylactic peanut allergy - carries an EpiPen"])),
+        ("mobility notes in prose while the cap is null",
+         lambda p: p["trip"]["traveler_constraints"].update(
+             mobility_notes=["Cannot walk more than 15 minutes at a stretch"])),
+        # The reason string claimed "single-city" and nothing tested it: four days across Ghent and
+        # Bruges with a coach between them read as light, dropping the transport domain -- so nobody
+        # checked the one leg whose failure strands the traveller between two hotels.
+        # The fixture is a single day, so a second base has to be added rather than edited in --
+        # which is also the honest shape of the defect: a second city arrives as a second day.
+        ("two base_locations",
+         lambda p: p["days"].append(dict(p["days"][0], number=2, date="2026-09-29",
+                                         base_location="A Second City"))),
+        ("two stay groups",
+         lambda p: p["booking_options"]["accommodations"].append(
+             {"stay_group_id": "a-second-stay-group"})),
+        ("NO days at all", lambda p: p.pop("days")),
+        ("an empty days list", lambda p: p.update(days=[])),
+        ("no arrival_transport_mode", lambda p: p["trip"].pop("arrival_transport_mode")),
+        ("an unset entry status", lambda p: p["entry_context"].clear()),
+    ):
+        p = light_plan()
+        mutate(p)
+        if tier(p) != "full":
+            failures.append(f"tier: a plan carrying {label} must need the full pass, not the light tier")
+
     # 10b. The two network-free auditors are part of the protocol, not an optional extra. The gate
     # used to accept a five-domain report silently, so a run that followed references/
     # verification.md and produced seven blocks failed, while a run that skipped the two cheapest
@@ -535,12 +634,25 @@ def main() -> int:
     # minutes it leaves for them.
     p = copy.deepcopy(base)
     acts = day(p, 1)["activities"]
-    acts[0]["duration_minutes"] = 330
-    acts[1]["duration_minutes"] = 45                        # needs 448 min, spans 405
-    # 448 = 330 + 45 activity minutes + 73 of segments, which is the contract's own arithmetic
-    # rather than a phrasing; the wording around it is free. The passing case below is what proves
-    # this is a real inequality and not a check that fires on any day carrying durations at all.
-    expect_fail_naming("day's own numbers do not fit its clock", p, ["day 1", "448"])
+    acts[0]["duration_minutes"] = 355
+    acts[1]["duration_minutes"] = 45                        # needs 418 min, spans 405
+    # 418 = 355 + 45 activity minutes + the 18-minute A->B leg. Only the INTERIOR segments count:
+    # this case originally asserted 448, charging all 73 segment minutes, and that was wrong in a
+    # way that rejected correct plans. The span runs from the first activity's start to the last
+    # one's end, so the 25-minute hotel->A leg happens before it opens and the 30-minute B->hotel
+    # leg after it closes -- 55 of the 73 were load the window never carries. A day at A
+    # 09:00-14:00 and at B 15:00-16:00 (leave 08:35, home 16:30, entirely feasible) was reported as
+    # needing 433 minutes out of 420. This case passed then only because the fixture happened to
+    # have 47 minutes of slack, which is exactly how a test can green-light a broken check.
+    expect_fail_naming("day's own numbers do not fit its clock", p, ["day 1", "418"])
+
+    # The mirror case, and the reason the number above had to be recomputed rather than nudged:
+    # a day whose bounding legs are long must still pass when its interior fits.
+    p = copy.deepcopy(base)
+    acts = day(p, 1)["activities"]
+    acts[0]["duration_minutes"] = 300                       # at A 09:00-14:00
+    acts[1]["duration_minutes"] = 60                        # at B 15:00-16:00, 18-min leg between
+    expect_ok("bounding legs outside the span do not count against it", p)
 
     p = copy.deepcopy(base)
     acts = day(p, 1)["activities"]
@@ -610,9 +722,24 @@ def main() -> int:
 
     p = copy.deepcopy(base)
     card = day(p, 1)["dining"][1]
-    card["venue_hours"] = "Di-Sa 15:00-21:00"   # Ruhetag Sonntag+Montag, the common German pattern
+    # Fixture day 1 is a Monday. "Mittwoch-Samstag" shuts Sun+Mon, the common German Ruhetag
+    # pattern, so the meal is booked on a closed day and the gate must say so.
+    card["venue_hours"] = "Mittwoch-Samstag 15:00-21:00"
     card["hours_status"] = "verified"
     expect_fail_naming("German weekday prefix is parsed too", p, ["Fixture Dinner"])
+
+    # The three two-letter abbreviations that mean different days in different languages must be
+    # REFUSED, not guessed. French "Ma-Sa" is mardi-samedi; read as Dutch maandag-zaterdag it says
+    # the venue opens Mondays, and the gate would then approve a dinner on the one day the kitchen
+    # is shut. Refusing lands on the "hours are not machine-checkable" error, which tells the
+    # author what to write instead -- a wrong answer would tell them nothing.
+    for ambiguous in ("Ma-Sa 15:00-21:00", "Di-Sa 15:00-21:00", "Do-Sa 15:00-21:00"):
+        p = copy.deepcopy(base)
+        card = day(p, 1)["dining"][1]
+        card["venue_hours"] = ambiguous
+        card["hours_status"] = "verified"
+        expect_fail_naming(f"ambiguous weekday abbreviation is refused, not guessed ({ambiguous[:5]})",
+                           p, ["Fixture Dinner", "different days in different languages"])
 
     # The three shapes that must stay silent, because a gate that fires on correct authoring gets
     # switched off: a range that wraps past Sunday, a list, and hours that simply include Monday.
@@ -627,7 +754,7 @@ def main() -> int:
                          ("German short range", "Mo-So 15:00-21:00"),
                          ("German long range", "Montag-Sonntag 15:00-21:00"),
                          ("German täglich", "täglich 15:00-21:00"),
-                         ("Dutch short range", "ma-zo 15:00-21:00"),
+                         ("Dutch, written out", "maandag-zondag 15:00-21:00"),
                          ("Dutch dagelijks", "dagelijks 15:00-21:00")]:
         p = copy.deepcopy(base)
         card = day(p, 1)["dining"][1]

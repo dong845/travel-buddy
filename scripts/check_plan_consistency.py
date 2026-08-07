@@ -157,14 +157,53 @@ def _weekday_tokens() -> dict[str, int]:
     # perfectly honest string. The two-letter forms are safe here because a weekday prefix is only
     # ever matched at the head of an hours string, never inside prose.
     tokens.update({
-        "montag": 0, "mo": 0, "dienstag": 1, "di": 1, "mittwoch": 2, "mi": 2,
-        "donnerstag": 3, "do": 3, "freitag": 4, "fr": 4,
-        "samstag": 5, "sonnabend": 5, "sa": 5, "sonntag": 6, "so": 6,
-        "maandag": 0, "ma": 0, "dinsdag": 1, "woensdag": 2, "wo": 2,
-        "donderdag": 3, "vrijdag": 4, "vr": 4,
-        "zaterdag": 5, "za": 5, "zondag": 6, "zo": 6,
+        "montag": 0, "dienstag": 1, "mittwoch": 2,
+        "donnerstag": 3, "freitag": 4,
+        "samstag": 5, "sonnabend": 5, "sonntag": 6,
+        "maandag": 0, "dinsdag": 1, "woensdag": 2,
+        "donderdag": 3, "vrijdag": 4,
+        "zaterdag": 5, "zondag": 6,
+        # Two-letter forms, but only the ones that mean the same day in every language likely to
+        # appear on a European venue's own opening-hours page. AMBIGUOUS_WEEKDAY_TOKENS below
+        # holds the three that do not, and they are refused rather than guessed.
+        "mo": 0, "mi": 2, "wo": 2, "fr": 4, "vr": 4, "sa": 5, "za": 5, "so": 6, "zo": 6,
+        # ma/di/do MUST stay in the tokenizer even though they are ambiguous, because removing them
+        # did not make them refuse -- it made them invisible. "Mo-Do 11:00-23:00", the most ordinary
+        # German brewpub string there is, then tokenized as "Mo" with unparsed trailing text and the
+        # gate reported the venue as open on Mondays only, blocking a correct Wednesday dinner while
+        # stating the opposite of the truth. The AMBIGUOUS_WEEKDAY_TOKENS guards below are what
+        # refuse them; they can only run on tokens the tokenizer still sees.
+        "ma": 0, "di": 1, "do": 3,
     })
     return tokens
+
+
+# Three two-letter abbreviations mean different days depending on the language, and a venue writes
+# its hours in its own. Reading French "Ma-Sa" (mardi-samedi) as Dutch maandag-zaterdag hands the
+# gate a set that says the place opens Mondays, and it then approves a dinner booked on the one day
+# the kitchen is shut -- a confidently wrong answer, which is worse than no answer, because the
+# "hours are not machine-checkable" error already tells the author exactly what to write instead.
+#   ma  nl maandag = Mon   |  fr mardi, es martes, it martedì = Tue
+#   di  de Dienstag = Tue  |  fr dimanche = Sun
+#   do  de/nl donderdag = Thu | es domingo, it domenica = Sun
+AMBIGUOUS_WEEKDAY_TOKENS = frozenset({"ma", "di", "do"})
+# An ambiguous token anywhere in the weekday PREFIX makes the whole prefix unusable, not just one
+# at the head: "Mo-Do 11:00-23:00" is the most ordinary German brewpub string there is, and its
+# ambiguity is in the second half. Bounded to the text before the first time so a venue called
+# "Do Forno" or a note reading "Mar 2026" is never mistaken for a weekday.
+_AMBIGUOUS_TOKEN = re.compile(
+    r"(?<![A-Za-z])(?:{})\.?(?![A-Za-z])".format("|".join(sorted(AMBIGUOUS_WEEKDAY_TOKENS))),
+    re.IGNORECASE)
+_FIRST_TIME = re.compile(r"\d{1,2}[:：]\d{2}")
+
+
+def has_ambiguous_weekday(hours: str) -> bool:
+    """True when the weekday prefix contains ma/di/do, which name different days per language."""
+    if not isinstance(hours, str):
+        return False
+    match = _FIRST_TIME.search(hours)
+    prefix = hours[:match.start()] if match else hours
+    return bool(prefix.strip()) and bool(_AMBIGUOUS_TOKEN.search(prefix))
 
 
 _WEEKDAY_TOKENS = _weekday_tokens()
@@ -214,14 +253,20 @@ def _parse_weekday_prefix(text: str) -> tuple[frozenset[int] | None, str]:
         first = _WEEKDAY_TOKEN.match(text, position)
         if not first:
             break
-        start = _WEEKDAY_TOKENS[first.group(0).rstrip(".").lower()]
+        first_token = first.group(0).rstrip(".").lower()
+        if first_token in AMBIGUOUS_WEEKDAY_TOKENS:
+            return None, text  # see AMBIGUOUS_WEEKDAY_TOKENS: refuse rather than guess a language
+        start = _WEEKDAY_TOKENS[first_token]
         position = first.end()
         end = start
         dash = _WEEKDAY_RANGE_SEP.match(text, position)
         if dash:
             last = _WEEKDAY_TOKEN.match(text, dash.end())
             if last:
-                end = _WEEKDAY_TOKENS[last.group(0).rstrip(".").lower()]
+                last_token = last.group(0).rstrip(".").lower()
+                if last_token in AMBIGUOUS_WEEKDAY_TOKENS:
+                    return None, text
+                end = _WEEKDAY_TOKENS[last_token]
                 position = last.end()
         cursor = start
         days.add(cursor)
@@ -481,6 +526,26 @@ def check_clock_closure(plan: dict, errors: list[str], notes: list[str]) -> None
                 break
         if overlapped:
             continue
+
+        # NOT CHECKED, and stated rather than left as a silent gap: whether the gap between two
+        # consecutive activities is long enough for the leg between them. A real plan had a museum
+        # ending 12:45, its own 20-minute leg to the station, and a 12:49 train -- the traveller
+        # arrives sixteen minutes after departure and nothing objects, because the overlap rule
+        # compares clock times only and the span rule is inflated by the 193-minute train ride it
+        # counts as an activity.
+        #
+        # Two attempts failed for the same reason, so the reason is worth recording. Pairing gap i
+        # with segments[i+1] is wrong: activities and segments are different sequences (5 and 4 on
+        # that day, the first activity being the arrival), and it invented a 10-minute shortfall on
+        # a correct plan. Matching the leg by endpoints instead is exact but never fires: measured
+        # on the real plan, 0 of 15 gaps matched, because `activities[].area_or_venue` is prose
+        # ("Kölner Dom, Domplatte") while segments name stops ("科隆大教堂 Kölner Dom").
+        #
+        # The plan carries no key joining an activity to the leg that reaches it. Adding
+        # `activities[].arrives_via_segment` (an index) would close this properly, and until then a
+        # check that cannot fire is worse than none: it reads as coverage in the source and reports
+        # nothing on real input.
+
         # A backwards list is check_day_internals' finding ("time travel"). Measuring a span across
         # it would only add a second, more confusing error for one defect.
         if any(later[0] < earlier[0] for earlier, later in zip(timed, timed[1:])):
@@ -488,17 +553,57 @@ def check_clock_closure(plan: dict, errors: list[str], notes: list[str]) -> None
 
         span = (timed[-1][0] + timed[-1][1]) - timed[0][0]
         activity_total = sum(length for _, length, _ in timed)
-        segment_total = int(sum(_num(s.get("duration_minutes")) for s in _segments(day)))
+
+        # Only the legs BETWEEN the first and last timed activity compete for that span: the leg
+        # that carries the traveller to the first stop happens before the span opens, and the leg
+        # home after it closes. Charging both rejected a feasible day on this repo's own fixture --
+        # hotel->A 25 min and B->hotel 30 min are 55 of that day's 73 segment minutes, so A
+        # 09:00-14:00 then B 15:00-16:00 (leave 08:35, home 16:30) was reported as needing 433 out
+        # of 420.
+        #
+        # But `segments[1:-1]` is the wrong way to find them, because position is not meaning. On a
+        # departure day the route runs hotel -> museum -> station in TWO segments, and slicing drops
+        # both -- including the 20-minute leg to the platform, which is the one that decides whether
+        # the train is caught. That shipped: a museum extended to 12:45 with a 12:49 train was
+        # reported as fine. Bound by the stops instead: drop a leg only when it lies outside the
+        # window the timed activities actually span.
+        stops = [str(s) for s in _seq(_route(day).get("stops_in_order"))]
+        first_stop = str(_route(day).get("start") or "").strip()
+        last_stop = str(_route(day).get("end") or "").strip()
+        # One rule: a leg is outside the window when it connects the day's lodging to the itinerary
+        # and the traveller is not there during the timed activities. `route.start` / `route.end`
+        # are the anchors, not `base_location` -- the contract lets base_location name an area
+        # ("Central Chengdu") while segments name the property ("Fixture Hotel A"), so comparing
+        # against it silently matches nothing and charges every leg.
+        #
+        # The test is "does the day return to where it started". A round trip hotel -> ... -> hotel
+        # has both ends outside the window. A one-way day (hotel -> museum -> station, the shape of
+        # every departure day) has only the first, and the leg to the station stays counted -- it is
+        # the one whose overrun means a missed train, and slicing by list position dropped it.
+        segments = _segments(day)
+        start_point = str(_route(day).get("start") or "").strip()
+        end_point = str(_route(day).get("end") or "").strip()
+        returns_home = bool(start_point) and start_point == end_point
+        interior = []
+        for index, segment in enumerate(segments):
+            leaves_lodging = index == 0 and start_point and \
+                str(segment.get("from") or "").strip() == start_point
+            returns_lodging = returns_home and index == len(segments) - 1 and \
+                str(segment.get("to") or "").strip() == end_point
+            if leaves_lodging or returns_lodging:
+                continue
+            interior.append(segment)
+        segment_total = int(sum(_num(s.get("duration_minutes")) for s in interior))
         needed = activity_total + segment_total
         if needed > span:
             errors.append(
                 f"day {number}: the day does not close. Between {_fmt_hhmm(timed[0][0])} and "
                 f"{_fmt_hhmm(timed[-1][0] + timed[-1][1])} there are {span} minutes, but the day's "
                 f"own numbers need {needed}: {activity_total} min of timed activities plus "
-                f"{segment_total} min of route segments (every segment counts, including the legs "
-                f"before the first stop and after the last). Cut a stop, shorten a "
-                f"duration_minutes, or move the last activity later -- do not leave the arithmetic "
-                f"for the traveller to discover in a station.")
+                f"{segment_total} min of route legs between the first and last of them (the leg in "
+                f"and the leg home fall outside this window and are not counted). Cut a stop, "
+                f"shorten a duration_minutes, or move the last activity later -- do not leave the "
+                f"arithmetic for the traveller to discover in a station.")
 
 
 def check_day_internals(plan: dict, errors: list[str], notes: list[str]) -> None:
@@ -739,6 +844,20 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
             # a finding rather than a free pass, and the format is spelled out here rather than
             # left for the author to guess.
             open_days, opening = _parse_venue_hours(hours)
+            if open_days is None and has_ambiguous_weekday(hours):
+                # The string opens with Ma/Di/Do, which name different days in different languages
+                # (see AMBIGUOUS_WEEKDAY_TOKENS). Guessing one would hand the weekday check a set
+                # that can be wrong by a whole day; saying nothing would silently drop the check,
+                # which is the failure this rewrite exists to end. So ask, and say what to write.
+                errors.append(
+                    f"day {number}: dining venue '{venue}' has venue_hours {hours!r}, which starts "
+                    f"with a weekday abbreviation that means different days in different languages "
+                    f"-- 'Ma' is Monday in Dutch but Tuesday in French, Spanish and Italian; 'Di' "
+                    f"is Tuesday in German but Sunday in French; 'Do' is Thursday in German and "
+                    f"Dutch but Sunday in Spanish and Italian. Write the day in full "
+                    f"('Mittwoch-Samstag', 'mardi-samedi') or in English ('Tue-Sat'), so the "
+                    f"closed-day check can run instead of quietly skipping this venue.")
+                continue
             if not opening:
                 errors.append(
                     f"day {number}: dining venue '{venue}' has venue_hours {hours!r}, which contains "
@@ -775,9 +894,23 @@ def check_meal_reachability(plan: dict, errors: list[str], notes: list[str]) -> 
     passed: the anchor was real, the hours contained the window, the activities did not overlap,
     and the day had 142 minutes of slack overall, so no span check could see it either.
 
-    Deliberately narrow, because a noisy gate gets switched off. It fires only when the arrival
-    is computed from data the plan already carries, and only when what is left of the window is
-    too short to be a meal at all."""
+    REPORTS AS A NOTE, NOT AN ERROR, and that demotion is the honest position rather than a
+    softening. The arithmetic needs one fact the plan does not carry: whether the traveller is
+    already standing at the anchor when the window opens. Charging the leg unconditionally --
+    which is what the first two versions did -- rejects the most ordinary shape `route_anchor`
+    produces: a lunch at the stop the morning activity happened at, billed for the ride that
+    brought them there hours earlier. On this repo's own fixture, three hours at 'Fixture activity
+    A' followed by lunch at 'Fixture activity A' was reported unreachable before 12:25.
+
+    Nothing available distinguishes the two cases. `activities[].area_or_venue` is empty in the
+    fixture and free text in real plans ('Belgisches Viertel' against an anchor of '比利时区
+    Belgisches Viertel'), so matching it is locale-dependent guessing. A `dining[].activity_ref`
+    would settle it and is the right fix when someone next touches the contract.
+
+    Until then the number is worth printing and not worth enforcing: it caught a real defect (a
+    departure-day meal with ten minutes of its window actually reachable) and it produced two
+    distinct shapes of false positive. A gate that fails correct work gets switched off, and then
+    the true positives go too."""
     for day in [_obj(d) for d in _seq(plan.get("days"))]:
         number = day.get("number")
         segments = _segments(day)
@@ -827,13 +960,14 @@ def check_meal_reachability(plan: dict, errors: list[str], notes: list[str]) -> 
             remaining = window[1] - earliest
             if remaining >= MEAL_MINIMUM_MINUTES:
                 continue
-            errors.append(
+            notes.append(
                 f"day {number}: '{card.get('venue_name')}' is booked {card.get('time_window')} at "
-                f"'{anchor}', but the traveller cannot arrive before {_fmt_hhmm(earliest)} -- the "
-                f"previous activity ends at {_fmt_hhmm(max(prior_ends))} and this day's own leg to "
-                f"that stop takes {travel} min. That leaves {max(remaining, 0)} min of the window, "
-                f"under the {MEAL_MINIMUM_MINUTES} min a meal needs. Move the window later, shorten "
-                f"the activity before it, or give the meal its own activity slot.")
+                f"'{anchor}'. If the traveller is not already at that stop, they cannot arrive "
+                f"before {_fmt_hhmm(earliest)} -- the previous activity ends at "
+                f"{_fmt_hhmm(max(prior_ends))} and this day's leg to that stop takes {travel} min "
+                f"-- leaving {max(remaining, 0)} min of the window, under the "
+                f"{MEAL_MINIMUM_MINUTES} min a meal needs. Check this one by eye: the plan cannot "
+                f"say whether that leg is still ahead of them.")
 
 
 def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
@@ -958,6 +1092,124 @@ def check_replan_context(plan: dict, errors: list[str], notes: list[str]) -> Non
 
 REQUIRED_DOMAINS = {"entry", "transport", "sights_and_hours", "booking_and_lodging", "seasonality"}
 REQUIRED_AUDITS = {"consistency", "completeness"}
+# The light tier keeps the domain whose facts are weekday-keyed and close a door in the traveller's
+# face when wrong. The two audits are never optional at any tier: they need no network and, in the
+# run that made them mandatory, produced 27 of 55 findings and 5 of the 6 criticals.
+LIGHT_TIER_DOMAINS = {"sights_and_hours"}
+
+
+def required_domains_for(plan: dict | None) -> tuple[set[str], str]:
+    """Which truth domains this specific plan must carry, read off the plan rather than asserted.
+
+    A two-night rail trip inside the traveller's own country, with no allergy and no walking cap,
+    was paying the same seven-block pass as a multi-city flight itinerary with an anaphylactic
+    traveller -- and three of those blocks had no subject: `entry` re-litigates a fact the research
+    budget forbids re-litigating, `booking_and_lodging`'s airline-window and codeshare checks apply
+    to a trip with no flight, and `seasonality` matters where a sunset or a seasonal service is
+    scheduled. Charging for them anyway teaches operators to reach for --unverified, which costs
+    far more than it saves.
+
+    Deliberately conservative: every condition must hold, anything unknown counts as not holding,
+    and the tier is computed here rather than declared in the report, because a tier the report
+    asserts is a tier the run grades itself on."""
+    plan = _obj(plan)
+    if not plan:
+        return set(REQUIRED_DOMAINS), "Every domain must be checked, or the gap is invisible."
+
+    disqualifiers: list[str] = []
+
+    if not isinstance(plan.get("booking_options"), dict):
+        disqualifiers.append("no booking_options (flights and cars unexamined)")
+    else:
+        booking = _obj(plan.get("booking_options"))
+        for field, label in (("flights", "a flight"), ("rental_cars", "a rental car")):
+            if _seq(booking.get(field)):
+                disqualifiers.append(label)
+    arrival = str(_obj(plan.get("trip")).get("arrival_transport_mode") or "")
+    if arrival == "flight":
+        disqualifiers.append("a flight arrival")
+    elif not arrival:
+        disqualifiers.append("no arrival_transport_mode (how they get there is unexamined)")
+
+    # A ferry is not expressible in arrival_transport_mode, whose enum is flight/rail/road/other,
+    # so the only place it shows up is a budget row. SKILL.md says a ferry needs the full pass --
+    # sailings are seasonal, weather-cancelled and often the single point of failure in a day --
+    # and without this the doc would promise a check the code cannot see. Same for the two other
+    # scheduled-vehicle categories a light-tier trip should not quietly contain.
+    if not isinstance(plan.get("budget"), dict):
+        disqualifiers.append("no budget (what the trip contains is unexamined)")
+    priced = {str(row.get("category")) for row in _seq(_obj(plan.get("budget")).get("breakdown"))
+              if isinstance(row, dict)}
+    for category, label in (("ferry", "a ferry crossing"), ("flight", "a priced flight"),
+                            ("rental_car", "a rental car")):
+        if category in priced:
+            disqualifiers.append(label)
+
+    # An ABSENT block is not a clean bill of health, it is an unanswered question -- and every plan
+    # written before these fields existed lacks both, so treating absence as "no constraint" would
+    # silently downgrade exactly the plans nobody has re-examined.
+    if not isinstance(plan.get("entry_context"), dict):
+        disqualifiers.append("no entry_context (entry unexamined)")
+    else:
+        entry_status = str(_obj(plan.get("entry_context")).get("status") or "")
+        if entry_status != "not_required":
+            disqualifiers.append(f"entry_context.status={entry_status or 'unset'!r}")
+
+    trip = _obj(plan.get("trip"))
+    if not isinstance(trip.get("traveler_constraints"), dict):
+        disqualifiers.append("no traveler_constraints (allergy and mobility unexamined)")
+    else:
+        constraints = _obj(trip.get("traveler_constraints"))
+
+        # Allowlist, not denylist, and the difference is the whole finding. Written as
+        # `if severity in {"intolerance", "severe"}` with an `or "none"` default, every value the
+        # code did not recognise passed as safe: null, an absent key, "Severe" with a capital S,
+        # "anaphylactic". Worse, new_plan_skeleton.py hardcodes "none" and --from-intake has no
+        # source for this field, so the DEFAULT of a plan built the documented way was the value
+        # that bought the cheap tier. A traveller who wrote "anaphylactic peanut allergy, I carry
+        # an EpiPen" on the form got a plan whose gate printed "no severe allergy".
+        severity = constraints.get("allergy_severity")
+        if severity not in {"none", "preference"}:
+            disqualifiers.append(f"allergy_severity={severity!r} (not a settled 'none'/'preference')")
+        elif _seq(constraints.get("dietary_or_religious_needs")):
+            disqualifiers.append(
+                "dietary needs stated in prose while allergy_severity is still 'none'/'preference' "
+                "-- type the severity before claiming the light tier")
+
+        # Same shape for mobility: a prose note nobody converted into a number is a constraint
+        # nobody can measure, and dropping four verification domains on the strength of an
+        # unconverted note is exactly backwards.
+        if constraints.get("max_continuous_walking_minutes") is not None:
+            disqualifiers.append("a stated walking cap")
+        elif _seq(constraints.get("mobility_notes")):
+            disqualifiers.append(
+                "mobility notes stated in prose while max_continuous_walking_minutes is null")
+
+    # The reason string claimed "single-city" and nothing tested it. Four days across Ghent and
+    # Bruges with a coach between them read as light, dropping `transport` -- so nobody checked
+    # whether the intercity service runs on that weekday, in that direction, at that fare, which is
+    # the one leg whose failure strands the traveller between two hotels. Both fields below are
+    # already required by the renderer, so this costs nothing to read.
+    bases = {str(_obj(d).get("base_location") or "").strip() for d in _seq(plan.get("days"))} - {""}
+    stays = {str(_obj(a).get("stay_group_id") or "").strip()
+             for a in _seq(_obj(plan.get("booking_options")).get("accommodations"))} - {""}
+    if len(bases) > 1 or len(stays) > 1:
+        disqualifiers.append(
+            f"{max(len(bases), len(stays))} bases/stay groups (the light tier is single-city)")
+
+    if not isinstance(plan.get("days"), list) or not plan.get("days"):
+        disqualifiers.append("no days (length unexamined)")
+    elif len(_seq(plan.get("days"))) > 4:
+        disqualifiers.append(f"{len(_seq(plan.get('days')))} days")
+
+    if disqualifiers:
+        return set(REQUIRED_DOMAINS), (
+            "This plan needs the full pass because it carries " + ", ".join(disqualifiers)
+            + ". A missing domain is a gap nobody can see.")
+    return set(LIGHT_TIER_DOMAINS), (
+        "This plan qualifies for the light tier (short, single-city, no flight, no entry question, "
+        "no severe allergy or walking cap), so only sights_and_hours is required among the truth "
+        "domains -- but both audits are still mandatory and cost no network.")
 VERDICTS = {"confirmed", "wrong", "misleading", "unverifiable"}
 # A dining card whose hours_status is one of these says a human went and looked. Anything else
 # ("unverified", "closed_unknown", an unrecognised word) claims nothing, so nothing is demanded.
@@ -1164,11 +1416,12 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
 
     domains = [_obj(d) for d in _seq(report.get("domains"))]
     covered = {str(d.get("domain")) for d in domains}
-    missing = REQUIRED_DOMAINS - covered
+    required, tier_reason = required_domains_for(plan)
+    missing = required - covered
     if missing:
         errors.append(
             "verification report is missing required domains: " + ", ".join(sorted(missing))
-            + ". Every domain must be checked, or the gap is invisible.")
+            + f". {tier_reason}")
     unknown = covered - REQUIRED_DOMAINS
     if unknown:
         errors.append(

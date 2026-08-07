@@ -268,6 +268,12 @@ def build_day(number: int, date: dt.date, day_type: str, stops_per_day: int, mod
     }
 
 
+# Where a plan stops being one itinerary and starts being a project. Warn at the first pair,
+# refuse past the second unless --oversize says the author means it.
+WARN_DAYS, WARN_STOPS = 7, 6
+OVERSIZE_DAYS, OVERSIZE_STOPS = 21, 10
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     # These four were required flags. They stay required as values -- the check moved below, so
@@ -287,6 +293,8 @@ def main() -> int:
     parser.add_argument("--stops-per-day", type=int, default=4)
     parser.add_argument("--from-intake", default=None, metavar="INTAKE.JSON",
                         help="copy the traveller's own answers out of a saved intake file")
+    parser.add_argument("--oversize", action="store_true",
+                        help="Allow a plan past the size limits (see the refusal message for what that costs)")
     args = parser.parse_args()
 
     intake: dict = {}
@@ -406,6 +414,39 @@ def main() -> int:
     currency = currency if currency is not None else "EUR"
 
     span = (end - start).days + 1
+
+    # A skeleton nobody can fill is not a favour. `--start 2027-03-01 --end 2027-05-30
+    # --stops-per-day 12` emitted 91 days, 181 dining cards, 1001 segments and 1.4 MB, exit 0, no
+    # word of warning -- and every value in it is a TODO that validate_trip_html.py refuses to
+    # ship, so the operator must research all of it before anything renders. The verification pass
+    # scales with the number of claims, not with nights, so the cost lands later and larger than
+    # anyone expects at this prompt. Warn where it starts to hurt, refuse where it is certainly a
+    # mistake, and let --oversize through for the person who genuinely means it.
+    dining_estimate = max(0, span - 2) * 2 + 2
+    if span > OVERSIZE_DAYS or args.stops_per_day > OVERSIZE_STOPS:
+        if not args.oversize:
+            print(
+                f"ERROR: {span} days x {args.stops_per_day} stops/day is past the point where a "
+                f"skeleton can be filled honestly (limits: {OVERSIZE_DAYS} days, {OVERSIZE_STOPS} "
+                f"stops/day).\n"
+                f"  It would carry about {dining_estimate} dining cards and "
+                f"{span * (args.stops_per_day + 1)} route segments, each needing researched hours, "
+                f"a fare basis and a map link, and the mandatory verification pass scales with all "
+                f"of them.\n"
+                f"  Split it into one plan per city or per leg -- that is also how a traveller "
+                f"reads it -- or pass --oversize if you really mean one file.",
+                file=sys.stderr)
+            return 2
+        print(f"NOTE: --oversize accepted: {span} days x {args.stops_per_day} stops/day.",
+              file=sys.stderr)
+    elif span > WARN_DAYS or args.stops_per_day > WARN_STOPS:
+        print(
+            f"NOTE: {span} days x {args.stops_per_day} stops/day is a large plan -- roughly "
+            f"{dining_estimate} dining cards and {span * (args.stops_per_day + 1)} route segments "
+            f"to research, and the verification pass scales with the number of claims rather than "
+            f"the number of nights. Consider one plan per city.",
+            file=sys.stderr)
+
     days = []
     for offset in range(span):
         date = start + dt.timedelta(days=offset)

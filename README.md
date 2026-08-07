@@ -117,7 +117,7 @@ start_intake_workflow.py
                     ↓
         Discovery → shortlist          Construction → new_plan_skeleton.py → plan JSON
                                               ↓
-                          five-domain parallel verification  (references/verification.md)
+                    parallel verification: 5 domains + 2 auditors  (references/verification.md)
                                               ↓
                                 check_plan_consistency.py   (plan vs. itself)
                                               ↓
@@ -142,7 +142,7 @@ All four run automatically inside `save_trip_deliverables.py`. The first two pro
 
 A 2.0 audit found three of its own blind spots: a reversed trip window (which made the day-coverage loop iterate nothing, silently disabling every date check downstream), negative segment numbers (a −25 minute leg cancels a real one while the arithmetic still balances), and a day claiming fewer interchanges than its own segments declare.
 
-**The verification stage** ([`references/verification.md`](references/verification.md)) covers what only the world can answer: entry rules, fares, timetables, opening hours, whether the dates are sellable yet, and seasonal facts. It splits into five domains because one pass asked to check all of them at once gives each a fifth of its attention — which is how a dinner gets scheduled at a closed restaurant. Fan them out where the runtime allows; where it does not, run five *separate* sequential passes. The benefit is concentration, not wall-clock.
+**The verification stage** ([`references/verification.md`](references/verification.md)) covers what only the world can answer: entry rules, fares, timetables, opening hours, whether the dates are sellable yet, and seasonal facts. It splits into five domains — plus two auditors that need no network — because one pass asked to check all of them at once gives each a fifth of its attention, which is how a dinner gets scheduled at a closed restaurant. Fan them out where the runtime allows; where it does not, run *separate* sequential passes. The benefit is concentration, not wall-clock. The gate rejects a report missing any of the seven blocks: the two cheapest agents found 27 of 55 defects in the run that made them mandatory.
 
 ### Two more scripts
 
@@ -232,7 +232,12 @@ For a first trip, let it run the guided form:
 python scripts/start_intake_workflow.py --assistant auto
 ```
 
-It prints a `http://127.0.0.1:<random-port>/` link. Open it, fill the form, save — the same browser tab moves on to the current-trip form, and when you submit that, a fresh CLI task starts on the shortlist automatically. You never download, move, upload, or paste JSON, and you never have to type "continue".
+It prints a `http://127.0.0.1:<random-port>/?token=…` link. Open it, fill the form, save — the same browser tab moves on to the current-trip form. What happens when you submit that depends on where you ran the command, and the difference is deliberate:
+
+- **From a bare terminal**, a fresh CLI task starts on the shortlist automatically.
+- **Inside Claude Code or Codex**, `--assistant auto` stands down and prints `TRAVEL BUDDY TRIP INPUT: <path>` for the assistant you are already talking to. It used to spawn a second, unattended agent there — the environment variable that says "an assistant is already driving this workspace" was being read as the signal to start another one — and that produced two conflicting plans in one folder. Force the old behaviour with `--assistant codex` or `--assistant claude` if you actually want a detached run.
+
+Either way you never download, move, upload, or paste JSON, and you never have to type "continue".
 
 ```bash
 # review/edit saved stable preferences first, then continue to the trip form
@@ -286,7 +291,7 @@ Never remove the whole workspace to satisfy a profile deletion.
 
 **The validator rejects your page for English text.** On a non-English page, every renderer-owned string must be translated, and machine values printed as visible text count. Use the closed enums rather than inventing a category name.
 
-**It refuses to save: "No verification report."** That is the gate working. Run the five-domain pass in [`references/verification.md`](references/verification.md), save the report, and pass `--verification <report.json>`. If you are deliberately saving a draft, `--unverified` saves it and stamps a "not fact-checked" banner on the page so nobody mistakes it for booking-ready.
+**It refuses to save: "No verification report."** That is the gate working. Run the pass in [`references/verification.md`](references/verification.md) — five truth domains plus the two network-free auditors, seven blocks in all — save the report, and pass `--verification <report.json>`. If you are deliberately saving a draft, `--unverified` saves it and stamps a "not fact-checked" banner on the page so nobody mistakes it for booking-ready.
 
 **The consistency gate rejects a plan that looks fine.** Read what it names — it is arithmetic, not taste. `walking_burden` must quote the walking total computed from that day's segments, in digits, so prose cannot drift from the data. Every dining card needs a `route_anchor` naming one of that day's stops (or an `off_route_justification` stating the detour it costs) and either `venue_hours` or `hours_status: "unverified"`. Route totals must equal the sum of their segments. A stated `cap_per_person` cannot be exceeded without `overrun_acknowledged`.
 
@@ -298,7 +303,9 @@ Never remove the whole workspace to satisfy a profile deletion.
 
 The intake forms are served by a temporary HTTP server bound to `127.0.0.1` only, on a random port, accepting exactly one valid submission before shutting down. There is no third-party script, no remote request, no login, no payment step and no upload in the page.
 
-Be aware of the limits of that model: loopback binding is the only barrier — there is no Origin check, CSRF token or authentication, so any local process that guesses the port could POST to it during the seconds it is open. The mitigations are the random port, the single-submission lifetime, and the sensitive-field scan on whatever is saved.
+Loopback binding is not the only barrier. A one-time token is minted at startup and carried in the link the terminal prints, and every page load and every submission without it is refused; a cross-site POST is refused again by an `Origin` check and by requiring `Content-Type: application/json`, which forces a preflight this server never answers; and a lock admits exactly one submission, so a double-click cannot save twice or start two agents. On top of that sit the random port and the sensitive-field scan on whatever is saved.
+
+The honest residual limit: any process running as **you** on **your** machine can read the token out of the terminal or the process list, so this defends against a hostile web page, not against local malware already running under your account.
 
 The skill will not recommend a VPN, proxy, account workaround or credential sharing to make a blocked service work, and it will not perform bookings, payments, or account changes on your behalf.
 

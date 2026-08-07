@@ -133,7 +133,7 @@ and hotels" is a claim about a rule, and that is fair game.
 
 ## 7. What not to economise on
 
-**The five-domain verification in [verification.md](verification.md) earns its cost every time.**
+**The verification pass in [verification.md](verification.md) earns its cost every time.**
 In two measured Construction runs it was the only stage that found trip-breaking defects, and in
 both runs all three deterministic gates were green while those defects were present. Cut research
 breadth, cap searches, bound schemas — but run the verify pass in full.
@@ -141,6 +141,12 @@ breadth, cap searches, bound schemas — but run the verify pass in full.
 ## Rough target
 
 For a single-destination Construction trip of under a week: **feasibility ≈ 3 agents, design ≈ 3
-agents, verification = 5 domains + 2 offline auditors**, total on the order of 600k tokens rather
-than 1.8M. Scale up only when the traveller asks for a genuinely broader search, and say so when
-you do.
+agents, verification = 5 domains + 2 offline auditors**.
+
+Budget it as the sum of its parts, because a target below the mandatory floor is not a target, it
+is an instruction to cut the pass that catches trip-breaking defects. Six research agents cost
+roughly 37k each in the measured run — **≈220k** — and verification measured **≈700k**, so the
+honest figure is **900k–1.1M**. Past about 1.3M, the overrun is research nobody asked for: a second
+agent on a domain the first already covered does not make the answer safer, it makes the same
+answer twice and spends the quota verification needs. Say so when you exceed it rather than
+quietly trimming the pass.

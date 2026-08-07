@@ -363,11 +363,24 @@ def _renumber_days(plan: dict, changes: list[tuple[str, str]]) -> list[str]:
     """
     warnings: list[str] = []
     days = plan.get("days") if isinstance(plan.get("days"), list) else []
+
+    # Build old -> new BEFORE mutating anything. The first version of this function renumbered days
+    # by position and then only range-checked the links, on the reasoning that a pure shift leaves
+    # position -> number identical. That holds only when the source is already numbered 1..n. Given
+    # a plan numbered 2,3,4 -- which every gate accepts, because they check dates and ranges, not
+    # the numbering's origin -- renumbering to 1,2,3 silently rebinds every link: a ticket reading
+    # day_number 3 meant the middle day before and means the last day after. That is the off-by-one
+    # references/research-budget.md records, reintroduced by the tool written to prevent it, while
+    # the change log asserted the links had been re-derived. They had not been touched.
+    renumber: dict[int, int] = {}
     for index, day in enumerate(days):
         if not isinstance(day, dict):
             continue
-        if day.get("number") != index + 1:
-            changes.append((f"days[{index}].number", f"{day.get('number')} -> {index + 1}"))
+        old_number = day.get("number")
+        if old_number != index + 1:
+            if isinstance(old_number, int):
+                renumber[old_number] = index + 1
+            changes.append((f"days[{index}].number", f"{old_number} -> {index + 1}"))
             day["number"] = index + 1
 
     count = len(days)
@@ -379,6 +392,11 @@ def _renumber_days(plan: dict, changes: list[tuple[str, str]]) -> list[str]:
         if not isinstance(ticket, dict):
             continue
         target = ticket.get("day_number")
+        if isinstance(target, int) and target in renumber:
+            ticket["day_number"] = renumber[target]
+            changes.append((f"booking_options.attraction_tickets[{index}].day_number",
+                            f"{target} -> {renumber[target]} (follows its day, which was renumbered)"))
+            continue
         if isinstance(target, int) and not 1 <= target <= count:
             warnings.append(
                 f"booking_options.attraction_tickets[{index}].day_number={target} is outside "
@@ -388,6 +406,11 @@ def _renumber_days(plan: dict, changes: list[tuple[str, str]]) -> list[str]:
         if not isinstance(anchor, dict):
             continue
         target = anchor.get("planned_day")
+        if isinstance(target, int) and target in renumber:
+            anchor["planned_day"] = renumber[target]
+            changes.append((f"destination_experience_anchors[{index}].planned_day",
+                            f"{target} -> {renumber[target]} (follows its day, which was renumbered)"))
+            continue
         if isinstance(target, int) and not 1 <= target <= count:
             warnings.append(
                 f"destination_experience_anchors[{index}].planned_day={target} is outside "

@@ -22,10 +22,12 @@ sequentially costs five times the wall-clock and, worse, spreads one agent's att
 five domains until each gets a fifth of it. That is how a dinner gets scheduled at a closed
 restaurant: not from ignorance, but from attention already spent elsewhere.
 
-## Run the five domains concurrently
+## Run the five domains concurrently — plus the two auditors
 
-Always all five, always in one fan-out. A domain that looks irrelevant still returns
-`findings: []`, which is a claim someone made — silence from a domain nobody ran is not.
+Always all five, always in one fan-out, and always with the two network-free auditors described
+under *Prompt shape* below. A domain that looks irrelevant still returns `findings: []`, which is
+a claim someone made — silence from a domain nobody ran is not. The gate rejects a report missing
+any of the seven blocks.
 
 | Domain | Verify |
 | --- | --- |
@@ -96,7 +98,7 @@ each other and themselves.
 ## Report schema
 
 Start from [templates/verification-report.json](../templates/verification-report.json), which
-carries all five domain blocks and an inline note on each required field. Write the filled copy to
+carries all five domain blocks, both audit blocks, and an inline note on each required field. Write the filled copy to
 `<workspace>/plans/verification-<slug>.json`:
 
 ```json
@@ -106,7 +108,11 @@ carries all five domain blocks and an inline note on each required field. Write 
   "domains": [
     {
       "domain": "entry",
-      "claims_checked": 14,
+      "claims_checked": [
+        "entry_context.status",
+        "entry_context.traveler_basis",
+        "trip.destination"
+      ],
       "findings": [
         {
           "claim": "the plan states a B1/B2 visa is sufficient to board",
@@ -119,21 +125,50 @@ carries all five domain blocks and an inline note on each required field. Write 
         }
       ]
     }
+  ],
+  "audits": [
+    {
+      "audit": "consistency",
+      "claims_checked": ["days[2].route.duration_minutes", "days[2].route.walking_burden"],
+      "findings": []
+    },
+    {
+      "audit": "completeness",
+      "claims_checked": ["budget.cap_per_person", "assumptions[0]"],
+      "findings": []
+    }
   ]
 }
 ```
 
-`domain` must be one of the five names above, all five must appear, and no others are allowed.
+`domain` must be one of the five names above, and no others are allowed. How many must appear is read off the plan by `check_plan_consistency.py`, not chosen: the full pass needs all five, and a plan that qualifies for the light tier (see SKILL.md's work-mode section) needs only `sights_and_hours`. Both audits are required either way. The
+two auditors go in a sibling `audits` array — `{"audit": "consistency"|"completeness",
+"claims_checked": [...], "findings": [...]}` — with exactly those two names, both required, and
+findings in the same shape as a domain's. They are a separate array rather than two more domains
+because the five check the plan against the outside world and these two check it against itself;
+they are *required* because the schema used to accept five while this reference told you to run
+seven, so the cheapest way past the gate was to delete the two highest-yield agents in the pass.
 `verdict` is `confirmed`, `wrong`, `misleading`, or `unverifiable`. `severity` is `critical`,
 `major`, or `minor`. `resolved` is required on `wrong` and `misleading`.
 
 `plan` and `claims_checked` exist to make forgery cost something. `plan` binds the report to one
 itinerary, so a single clean report cannot be handed to every trip; the checker compares it to
-the file it was supplied for. `claims_checked` is the count of individual assertions that domain
-examined, and must be greater than zero — without it, a domain that returns no findings is
-indistinguishable from a domain nobody ran, and "all five clean" is exactly what a skipped pass
-looks like. The checker also rejects a report dated before the plan's `generated_at`, since it
-cannot have inspected a plan that did not exist.
+the file it was supplied for. `claims_checked` is the **list of plan pointers** that block actually
+opened — `days[0].dining[1].venue_hours`, `budget.breakdown[2].per_person_high` — non-empty, unique
+within its block, and every one of them has to resolve against the plan. Without it, a domain that
+returns no findings is indistinguishable from a domain nobody ran, and "all five clean" is exactly
+what a skipped pass looks like.
+
+It was a *count* until that proved to be no evidence at all: an integer is a promise the same run
+writes about itself, so a block whose verifier subagent died — a real failure mode — writes a small
+number and the gate goes green with "verified" on a page someone books a train from. A list that has
+to resolve costs more to fabricate than to earn. Pointing at a field whose value is null is fine;
+examining an empty field is real work. One coverage rule is enforced on top: `sights_and_hours` must
+cite every `days[].dining[]` card whose `hours_status` claims researched or verified, because that is
+exactly where the measured defect lived.
+
+The checker also rejects a report dated before the plan's `generated_at`, since it cannot have
+inspected a plan that did not exist.
 
 **What none of this can prove:** that a finding marked `resolved` was actually fixed. Code cannot
 diff an edit it never saw. That is why every resolved finding carries a `resolution` string
@@ -143,18 +178,29 @@ the honest boundary of the automated gate.
 ## Cost, honestly
 
 A five-domain fan-out plus two auditors on a six-day plan cost about 30 minutes of wall-clock
-and 800k tokens in the measured run. That is worth it for a trip someone will book and fly, and
-it is not worth it for a discovery shortlist nobody has committed to.
+and 800k tokens in the first measured run. A second run, on a 4-day single-city trip, spent 691k
+on verification alone inside a 1.18M total — so treat 700k as the honest figure for the pass and
+do not expect a short trip to be proportionally cheaper. It scales with the number of *claims* in
+the plan, not with the number of nights.
+
+That is worth it for a trip someone will book and fly, and it is not worth it for a discovery
+shortlist nobody has committed to.
+
+**Where the money is not.** `claims_checked` as a pointer list adds roughly 250 tokens to a whole
+report — 0.04% of the pass. Requiring the two auditors adds two agents that need no network at
+all, and in the run that prompted the requirement they produced 27 of 55 findings and 5 of the 6
+criticals. Neither is where a pass gets expensive; the domains that fetch are. If a pass needs to
+be cheaper, narrow what each domain fetches, do not drop blocks.
 
 So the scope depends on what is being delivered, and this is the one place the distinction
 matters:
 
-- **Construction** — all five domains, always. This is the only shape the report schema accepts,
-  because a Construction plan is something the traveller books from.
+- **Construction** — all five domains plus both auditors, always. Seven blocks is the only shape
+  the report schema accepts, because a Construction plan is something the traveller books from.
 - **Discovery** — `entry` and `seasonality` are the two that can eliminate a candidate outright,
   so verify those inline while scoring candidates. Do **not** write a report for them. Discovery
   produces an intermediate shortlist, not a saved plan, so no report is required and a partial
-  one would fail `check_plan_consistency.py --verification`, which requires all five by design.
+  one would fail `check_plan_consistency.py --verification`, which requires all seven by design.
 
 ## Skipping it
 
