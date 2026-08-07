@@ -891,6 +891,67 @@ def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
             notes.append(f"budget high case {stated_high:g} exceeds cap {cap:g} (acknowledged).")
 
 
+def check_replan_context(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A replanned trip carries a list of facts the change invalidated; none may still be open.
+
+    Dates are the dangerous delta, because almost everything researched under a day is keyed to a
+    *weekday* rather than to a date: opening hours, closure days, market days, Sunday retail law,
+    a museum that shuts Mondays. Move the window by one day and all of it quietly becomes a guess
+    while the plan still looks complete and still passes every other check here. replan_trip.py
+    records each such fact in replan_context.must_reverify; this is the gate that refuses to ship
+    the plan while any of them is unresolved -- the same rule, and deliberately the same shape, as
+    an unresolved verification finding in check_verification.
+
+    A plan with no replan_context has nothing to re-verify, and nothing here fires.
+    """
+    context = plan.get("replan_context")
+    if context is None:
+        return
+    if not isinstance(context, dict):
+        errors.append(
+            f"replan_context is {type(context).__name__}, not an object. Its must_reverify list is "
+            f"the only record of what the replan could not recompute, so a block this gate cannot "
+            f"read drops every one of those entries in silence. Write the shape in "
+            f"templates/replan-request.json, or remove replan_context entirely.")
+        return
+
+    entries = context.get("must_reverify")
+    if entries is not None and not isinstance(entries, list):
+        errors.append(
+            f"replan_context.must_reverify is {type(entries).__name__}, not a list. It holds one "
+            f"entry per fact the replan could not carry over: "
+            f'{{"path": "days[2].dining[0].venue_hours", "reason": "...", "resolved": false, '
+            f'"resolution": null}}.')
+        return
+
+    open_entries = 0
+    for position, raw in enumerate(_seq(entries)):
+        if not isinstance(raw, dict):
+            errors.append(
+                f"replan_context.must_reverify[{position}] is {type(raw).__name__}, not an object. "
+                f'Each entry needs at least a "path", a "reason" and "resolved".')
+            continue
+        resolved = raw.get("resolved")
+        if resolved is True:
+            continue
+        open_entries += 1
+        # Anything other than the literal `true` is called out for what it is: "resolved": "yes"
+        # reads as done to a human skimming the JSON and is not done to anything that checks.
+        wording = "" if resolved is None or resolved is False else (
+            f" (resolved is {_short(resolved)}, not the JSON literal true)")
+        errors.append(
+            f"replan_context.must_reverify[{position}] is unresolved{wording}: "
+            f"{raw.get('path')!r} -- {raw.get('reason')}. Re-check that field against the new "
+            f"plan, record what you found in 'resolution', and set 'resolved': true. Until then "
+            f"the plan is shipping a fact that was researched for conditions it no longer has.")
+
+    total = len([e for e in _seq(entries) if isinstance(e, dict)])
+    if total and not open_entries:
+        notes.append(
+            f"replanned from {context.get('replanned_from')}: {total} must_reverify "
+            f"entr{'y' if total == 1 else 'ies'}, all resolved.")
+
+
 # --------------------------------------------------------------------------------------
 # Verification report (produced by the parallel-verify stage; see references/verification.md)
 # --------------------------------------------------------------------------------------
@@ -898,6 +959,178 @@ def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
 REQUIRED_DOMAINS = {"entry", "transport", "sights_and_hours", "booking_and_lodging", "seasonality"}
 REQUIRED_AUDITS = {"consistency", "completeness"}
 VERDICTS = {"confirmed", "wrong", "misleading", "unverifiable"}
+# A dining card whose hours_status is one of these says a human went and looked. Anything else
+# ("unverified", "closed_unknown", an unrecognised word) claims nothing, so nothing is demanded.
+RESEARCHED_HOURS_STATUS = {"verified", "researched"}
+
+# One step of a plan pointer: a key, then any number of [n] subscripts. Split on '.' first, so a
+# key is anything that is not a dot or a bracket -- plan keys are identifiers, never dotted.
+_POINTER_STEP = re.compile(r"^([^.\[\]]+)((?:\[\d+\])*)$")
+_POINTER_INDEX = re.compile(r"\[(\d+)\]")
+
+
+def resolve_pointer(plan: object, pointer: object) -> bool:
+    """Does this pointer name a field the plan actually has? 'days[0].dining[1].venue_hours'.
+
+    "Resolves" means the path EXISTS, null values included -- a verifier who opened a field and
+    found it empty did real work, and demanding a non-null value would push reports toward citing
+    only the fields that happen to be filled in.
+
+    Never raises. A malformed string, an index into something that is not a list, an index past
+    the end, a missing key: all are simply unresolvable, and the caller quotes the pointer back.
+    A traceback here would take the whole gate down over one typo in one report, and a gate that
+    crashes on bad input is a gate the next operator stops running.
+    """
+    if not isinstance(pointer, str):
+        return False
+    text = pointer.strip()
+    if not text:
+        return False
+    current: object = plan
+    for part in text.split("."):
+        step = _POINTER_STEP.match(part)
+        if not step:
+            return False
+        key, subscripts = step.group(1), step.group(2)
+        if not isinstance(current, dict) or key not in current:
+            return False
+        current = current[key]
+        for index in _POINTER_INDEX.findall(subscripts):
+            if not isinstance(current, list):
+                return False
+            position = int(index)
+            if position >= len(current):
+                return False
+            current = current[position]
+    return True
+
+
+def _example_pointer(plan: object) -> str:
+    """A pointer drawn from the plan in front of the operator, for the error messages to quote.
+
+    An example that resolves against their own file is worth several sentences of syntax: it shows
+    the dotted keys, the [n] indexing and a field worth verifying in one line they can paste."""
+    for candidate in ("days[0].dining[0].venue_hours",
+                      "days[0].route.segments[0].duration_minutes",
+                      "booking_options.accommodations[0].price_low",
+                      "trip.start_date"):
+        if resolve_pointer(plan, candidate):
+            return candidate
+    return "days[0].route.segments[0].duration_minutes"
+
+
+def _short(value: object, limit: int = 60) -> str:
+    text = repr(value)
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _claims_pointer_errors(label: str, checked: object, plan: object) -> list[str]:
+    """Validate one block's claims_checked: a non-empty list of pointers into the plan, no repeats.
+
+    This was an integer until a run made the cost of it visible. A count is a promise the same run
+    writes about itself: a model whose verifier subagent died -- which happens -- writes 1, the
+    gate goes green, and the word "verified" lands on a page someone books a train from. A list of
+    pointers costs what it claims, because a fabricated one has to resolve against the plan, and
+    making ten of them resolve means opening the plan ten times.
+    """
+    example = _example_pointer(plan)
+    if isinstance(checked, bool) or isinstance(checked, (int, float)):
+        return [
+            f"verification {label} reports claims_checked={_short(checked)}, a number. "
+            f"claims_checked is now the LIST of plan pointers that block examined -- "
+            f'"claims_checked": ["{example}", ...]. A count is a promise the run writes about '
+            f"itself, so a block that writes 1 is indistinguishable from a block nobody ran. "
+            f"Replace the number with the paths you actually opened."]
+    if not isinstance(checked, list):
+        return [
+            f"verification {label} has claims_checked={_short(checked)}. It must be a list of "
+            f"plan pointers naming what that block examined -- "
+            f'"claims_checked": ["{example}", ...].']
+    if not checked:
+        return [
+            f"verification {label} reports claims_checked: []. A block with no findings and no "
+            f"pointers is indistinguishable from a block nobody ran. List the paths it examined, "
+            f'e.g. "{example}".']
+
+    errors: list[str] = []
+    seen: set[str] = set()
+    repeated: set[str] = set()
+    for entry in checked:
+        if not isinstance(entry, str) or not entry.strip():
+            errors.append(
+                f"verification {label} has a claims_checked entry that is not a pointer string: "
+                f'{_short(entry)}. Every entry names one field of the plan, e.g. "{example}".')
+            continue
+        text = entry.strip()
+        if text in seen:
+            # One finding per repeated pointer, not one per repeat. A list carrying the same path
+            # three times is a single defect, and printing it twice reads as two -- padding the
+            # gate's own output is exactly the inflation this rule exists to refuse.
+            if text not in repeated:
+                repeated.add(text)
+                errors.append(
+                    f"verification {label} lists the pointer {text!r} twice. Repeating a path "
+                    f"inflates the apparent coverage without examining anything new; list each "
+                    f"field once.")
+            continue
+        seen.add(text)
+        # Reported one pointer at a time on purpose: a report can carry dozens, and "a pointer
+        # failed" leaves the author diffing the list by eye to find which.
+        if plan is not None and not resolve_pointer(plan, text):
+            errors.append(
+                f"verification {label} lists the pointer {text!r}, which does not resolve against "
+                f"this plan -- no such key, or an index past the end of a list. Pointers are "
+                f'dotted keys with [n] indexing, e.g. "{example}". Cite the field you really '
+                f"opened; a list nobody can follow back to the plan is the count it replaced.")
+    return errors
+
+
+def _hours_coverage_errors(domains: list[dict], plan: object) -> list[str]:
+    """The one coverage rule: sights_and_hours must cite every dining card that claims research.
+
+    Scoped this narrowly because this is exactly where the shipped defect lived. A restaurant card
+    declared its hours researched while they were wrong by 90 minutes at the front and an hour at
+    the back, and the meal sat on the venue's rest day -- and the report's sights_and_hours block
+    was clean and counted its claims in the double digits. Nothing tied the count to the cards.
+    Naming the card is what turns "we checked the hours" into a lookup someone had to perform.
+
+    No second coverage rule belongs here. Widening it would demand pointers for fields nobody
+    agreed to check, and a gate that fires on honest work is a gate the next author deletes.
+    """
+    if not isinstance(plan, dict):
+        return []
+    blocks = [d for d in domains if str(d.get("domain")) == "sights_and_hours"]
+    if not blocks:
+        return []  # the missing-domain error already names this gap; saying it twice is noise
+    listed = [b.get("claims_checked") for b in blocks]
+    if not any(isinstance(c, list) for c in listed):
+        return []  # the shape is already a finding; stacking coverage on top of it just repeats it
+    # Read every sights_and_hours block, not just the first. Nothing rejects a report that carries
+    # a domain twice -- the required-domain check compares sets -- so an operator who ran the hours
+    # agent in two passes and appended both blocks would have the second one ignored, and this rule
+    # would accuse a card that was in fact cited. One false accusation is what teaches an author to
+    # stop reading a gate, and this gate has exactly one coverage rule to spend that credit on.
+    pointers = [p.strip() for c in listed if isinstance(c, list) for p in c if isinstance(p, str)]
+
+    errors: list[str] = []
+    for day_index, raw_day in enumerate(_seq(plan.get("days"))):
+        day = _obj(raw_day)
+        for card_index, raw_card in enumerate(_seq(day.get("dining"))):
+            card = _obj(raw_card)
+            status = str(card.get("hours_status") or "").strip().lower()
+            if status not in RESEARCHED_HOURS_STATUS:
+                continue
+            prefix = f"days[{day_index}].dining[{card_index}]"
+            if any(p == prefix or p.startswith(prefix + ".") for p in pointers):
+                continue
+            errors.append(
+                f"verification domain 'sights_and_hours' cites nothing under {prefix} -- day "
+                f"{day.get('number')}'s '{card.get('venue_name')}' card, whose hours_status is "
+                f"'{status}'. Either add the pointer that block opened, e.g. "
+                f'"{prefix}.venue_hours", or set hours_status="unverified" to say plainly that '
+                f"nobody checked. A card that claims its hours were researched while no verifier "
+                f"touched it is how a meal gets booked at a venue closed that day.")
+    return errors
 
 
 def check_verification(report: dict, errors: list[str], notes: list[str],
@@ -943,16 +1176,13 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
             + ", ".join(sorted(unknown)) + ".")
 
     # An all-empty report is indistinguishable from one where nothing ran, unless each domain
-    # states how much it actually examined.
+    # states what it actually examined -- by pointer, so the claim can be followed back to a field.
     for domain in domains:
         name = domain.get("domain")
         if name not in REQUIRED_DOMAINS:
             continue
-        checked = domain.get("claims_checked")
-        if not isinstance(checked, int) or checked <= 0:
-            errors.append(
-                f"verification domain '{name}' does not report claims_checked > 0. A domain with "
-                f"no findings and no count is indistinguishable from a domain nobody ran.")
+        errors.extend(_claims_pointer_errors(f"domain '{name}'", domain.get("claims_checked"), plan))
+    errors.extend(_hours_coverage_errors(domains, plan))
 
     unresolved = []
     for domain in domains:
@@ -986,11 +1216,7 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
         name = audit.get("audit")
         if name not in REQUIRED_AUDITS:
             continue
-        checked = audit.get("claims_checked")
-        if not isinstance(checked, int) or checked <= 0:
-            errors.append(
-                f"verification audit '{name}' does not report claims_checked > 0. An audit with no "
-                f"findings and no count is indistinguishable from one nobody ran.")
+        errors.extend(_claims_pointer_errors(f"audit '{name}'", audit.get("claims_checked"), plan))
         for finding in [_obj(f) for f in _seq(audit.get("findings"))]:
             verdict = str(finding.get("verdict") or "").lower()
             if verdict not in VERDICTS:
@@ -1003,12 +1229,14 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
         errors.append(
             "verification found defects that were never resolved in the plan:\n    - "
             + "\n    - ".join(unresolved))
+    cited = {p.strip() for block in domains + audits for p in _seq(block.get("claims_checked"))
+             if isinstance(p, str) and p.strip()}
     notes.append(
         f"verification covered {len(covered)} domains and {len(audited & REQUIRED_AUDITS)} audits, "
-        f"checked {checked_at}.")
+        f"cited {len(cited)} distinct plan pointers, checked {checked_at}.")
     # KNOWN LIMIT, stated rather than hidden: nothing here can prove a finding marked resolved
-    # actually changed the plan. Code cannot diff an edit it never saw. That one relies on the
-    # protocol in references/verification.md, and it is the reason the report records a
+    # actually changed the plan, and a pointer that resolves proves the field exists, not that
+    # anyone read it. Code cannot diff an edit it never saw. That one relies on the
     # resolution string a reader can check by eye.
 
 
@@ -1027,6 +1255,7 @@ PLAN_CHECKS = (
     check_dining,
     check_meal_reachability,
     check_budget,
+    check_replan_context,
 )
 
 

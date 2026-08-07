@@ -58,22 +58,105 @@ def constraints(**overrides) -> dict:
     return block
 
 
+def replan_context(**overrides) -> dict:
+    """plan.replan_context in the shape the contract defines, with one field overridden.
+
+    Same reason as constraints() above: a case that hand-builds the block is free to spell
+    "must_reverify" however it likes, and a gate keyed on a name nothing produces passes every
+    test in this file while never firing on a plan replan_trip.py actually wrote.
+    """
+    block = {
+        "replanned_from": "2026-09-28-fixture-trip.json",
+        "replanned_at": "2026-08-07",
+        "change_request": "Push the whole trip back one day.",
+        "changed_fields": ["trip.start_date", "trip.end_date", "days[0].date"],
+        "retained_note": "Route order, lodging and budget do not depend on the weekday and were kept.",
+        "must_reverify": [],
+    }
+    block.update(overrides)
+    return block
+
+
 def full_verification() -> dict:
+    """A clean seven-block report for the fixture, with claims_checked in its current shape.
+
+    Every pointer below resolves against tests/booking-ready-fixture.json, and it has to: most
+    cases in this file hand this report the pristine fixture, so a pointer that stopped resolving
+    would fail cases that have nothing to do with it. That cost is the point of the field. It used
+    to be an integer -- `"claims_checked": 3` -- which the same run that wrote the plan also wrote
+    about itself, so a model whose verifier subagent died (a real failure mode) wrote a small
+    number, the gate went green, and "verified" landed on a page someone books a train from.
+    Migrating this function is the migration every operator with a saved report now has to do.
+
+    The pointers are the ones each block would really have opened, not the cheapest four that
+    resolve. Writing them the lazy way would pass the gate and teach the wrong habit here, in the
+    file people copy from.
+    """
     return {
         "checked_at": "2026-08-03",
         "plan": "plan.json",
         "domains": [
-            {"domain": name, "claims_checked": 3, "findings": []}
-            for name in ("entry", "transport", "sights_and_hours",
-                         "booking_and_lodging", "seasonality")
+            # The fixture is a domestic trip and carries no entry_context at all, so the entry
+            # block has nothing entry-shaped to cite and points at what it read to reach "no
+            # formalities apply". This is the awkward corner of the new shape and worth knowing
+            # about before it is met on a real plan: a domain whose subject is absent from the
+            # itinerary has no field of its own to cite, and the honest answer is to name what was
+            # read to conclude the domain does not apply -- not to invent a pointer that resolves.
+            {"domain": "entry",
+             "claims_checked": ["trip.origin", "trip.destination", "trip.traveler_count",
+                                "assumptions[0]"],
+             "findings": []},
+            {"domain": "transport",
+             "claims_checked": ["days[0].route.segments[0].fare_basis",
+                                "days[0].route.segments[2].transfer_count",
+                                "days[0].route.duration_minutes",
+                                "transport_overview.overall_route_map_url"],
+             "findings": []},
+            # days[0].dining[0] is the fixture's only hours_status="verified" card, so the coverage
+            # rule demands a pointer under it; the pair of cases at 22f drives both directions.
+            {"domain": "sights_and_hours",
+             "claims_checked": ["days[0].dining[0].venue_hours",
+                                "days[0].dining[0].hours_status",
+                                "days[0].activities[0].time",
+                                "days[0].activities[1].detail"],
+             # Nothing under days[0].dining[1] on purpose: that card's hours_status is
+             # "unverified", so it claims nothing and the coverage rule demands nothing. Citing it
+             # anyway would make the 22f cases pass for the wrong reason.
+             "findings": []},
+            {"domain": "booking_and_lodging",
+             "claims_checked": ["booking_options.accommodations[0].nightly_cost_high",
+                                "booking_options.accommodations[0].check_out",
+                                "booking_options.accommodations[1].direct_review_url",
+                                "budget.breakdown[0].per_person_high"],
+             "findings": []},
+            {"domain": "seasonality",
+             "claims_checked": ["trip.start_date", "days[0].contingency",
+                                "destination_experience_anchors[0].checked_at"],
+             "findings": []},
         ],
         # references/verification.md tells the operator to run seven agents; the report used to
         # accept five, so a run that followed the reference failed the gate and the cheapest escape
         # was to delete the two network-free auditors. In the run that prompted this they had found
         # 27 of 55 findings and 5 of the 6 criticals, so deleting them was the worst possible fix.
         "audits": [
-            {"audit": name, "claims_checked": 4, "findings": []}
-            for name in ("consistency", "completeness")
+            # days[0].route.duration_minutes is deliberately also in the transport domain above:
+            # two blocks opening the same field is honest work, and only repeats *within* one block
+            # are inflation. Case 22c asserts both halves of that.
+            {"audit": "consistency",
+             "claims_checked": ["days[0].route.duration_minutes",
+                                "days[0].route.walking_burden",
+                                "days[0].dining[0].route_anchor",
+                                "budget.estimated_per_person_high"],
+             "findings": []},
+            # single_option_reason is null in the fixture, on purpose: the completeness auditor's
+            # whole job is opening fields that may be empty, and a rule that demanded a non-null
+            # value would push every report toward citing only the fields that happen to be filled.
+            {"audit": "completeness",
+             "claims_checked": ["budget.unverified_categories[0]",
+                                "days[0].route.fallback_plan",
+                                "booking_options.accommodations[0].single_option_reason",
+                                "regional_service_context.booking_platform_selection_note"],
+             "findings": []},
         ],
     }
 
@@ -132,14 +215,15 @@ def main() -> int:
         if code != 1 or needle not in out:
             failures.append(f"{name}: expected failure containing {needle!r}, got exit {code}\n{out}")
 
-    def expect_fail_naming(name: str, plan: dict, needles: list[str]) -> None:
+    def expect_fail_naming(name: str, plan: dict, needles: list[str],
+                           verification: dict | None = None) -> None:
         """For the checks whose contract fixes what the message must NAME rather than how it is
         worded -- both activities and both times, or the leg's minutes and the cap it broke.
 
         Asserting the tokens instead of a sentence lets the wording be improved without breaking
         the test, while still failing a message the author cannot act on: 'day 3 walks too far'
         does not tell anyone which leg to shorten or by how much."""
-        code, out = run(plan)
+        code, out = run(plan, verification)
         missing = [n for n in needles if n not in out]
         if code != 1 or missing:
             failures.append(
@@ -274,12 +358,16 @@ def main() -> int:
     expect_fail("verification report omits one audit", copy.deepcopy(base),
                 "missing required audits", report)
 
+    # An audit that examined nothing is an audit nobody ran, and the old integer shape let it say
+    # so in one character. The rule is the same for audits as for domains; case 22a drives the
+    # message itself, this one only pins that audits are not exempt from it.
     report = full_verification()
     report["audits"][0]["claims_checked"] = 0
     expect_fail("audit reports no claims checked", copy.deepcopy(base), "claims_checked", report)
 
     report = full_verification()
-    report["audits"].append({"audit": "vibes", "claims_checked": 1, "findings": []})
+    report["audits"].append({"audit": "vibes",
+                             "claims_checked": ["trip.title"], "findings": []})
     expect_fail("invented audit name", copy.deepcopy(base), "not part of the protocol", report)
 
     report = full_verification()
@@ -338,6 +426,13 @@ def main() -> int:
                                     "days": [{"number": 1, "date": "2026-01-01", "dining": ["oops"],
                                               "route": {"segments": [], "walking_burden": "0"}}]},
         "plan is a list": [1, 2, 3],
+        # replan_context arrives from a hand edit as often as from replan_trip.py, so its two
+        # plausible malformations belong here rather than in a case that only checks the wording.
+        "replan_context is a string": {"trip": {"start_date": "2026-01-01", "end_date": "2026-01-01"},
+                                       "days": [], "replan_context": "moved the trip a day later"},
+        "must_reverify holds strings": {"trip": {"start_date": "2026-01-01", "end_date": "2026-01-01"},
+                                        "days": [],
+                                        "replan_context": {"must_reverify": ["check the hours"]}},
     }.items():
         code, out = run(broken)
         if "Traceback" in out:
@@ -345,13 +440,14 @@ def main() -> int:
 
     # 15. The verification report is written by the run it vouches for, so cheap forgeries must fail.
     report = full_verification()
-    report["domains"].append({"domain": "made_up", "claims_checked": 1, "findings": []})
+    report["domains"].append({"domain": "made_up",
+                              "claims_checked": ["trip.title"], "findings": []})
     expect_fail("invented domain", copy.deepcopy(base), "not part of the protocol", report)
 
     report = full_verification()
     for domain in report["domains"]:
         domain.pop("claims_checked", None)
-    expect_fail("no claims_checked count", copy.deepcopy(base), "claims_checked", report)
+    expect_fail("no claims_checked at all", copy.deepcopy(base), "claims_checked", report)
 
     report = full_verification()
     report["plan"] = "a-completely-different-trip.json"
@@ -615,6 +711,156 @@ def main() -> int:
         "Derived from segments: 20 minutes of walking between stops, plus 65 minutes on foot at "
         "the stops themselves (0 km on foot). Flat throughout, with seating at each stop.")
     expect_ok("a plan using all three new fields correctly passes", p)
+
+    # 22. claims_checked as plan pointers. The integer it replaced was a promise the run wrote
+    # about itself: the report and the plan were produced by the same run, so "claims_checked: 14"
+    # cost one keystroke more than "claims_checked: 1" and neither cost a lookup. A pointer costs
+    # what it claims -- to make ten of them resolve you have to open the plan ten times.
+
+    # 22a. The shape that shipped. An operator holding an old report needs the message to name the
+    # replacement and show one example, or the only thing they learn is that their report broke.
+    report = full_verification()
+    report["domains"][1]["claims_checked"] = 12
+    # "number" is in the needles because a generic "must be a list" would also fire here, and an
+    # operator holding a report full of counts needs to be told that the count itself is what went
+    # away -- otherwise the obvious repair is to wrap it: "claims_checked": [12].
+    expect_fail_naming("claims_checked is still an integer", copy.deepcopy(base),
+                       ["claims_checked", "12", "number", "days[0].dining[0].venue_hours"], report)
+
+    # ...and that repair, which is the first thing a hurried migration produces.
+    report = full_verification()
+    report["domains"][1]["claims_checked"] = [12, 3]
+    expect_fail_naming("claims_checked wraps the old counts in a list", copy.deepcopy(base),
+                       ["not a pointer string", "12"], report)
+
+    # 22b. A pointer that resolves against nothing. This is the whole mechanism: if a fabricated
+    # list were as cheap as a fabricated number, the migration would have bought nothing. The
+    # message names the offending pointer because a report can carry dozens, and "a pointer failed"
+    # leaves the author diffing the list by eye.
+    report = full_verification()
+    report["domains"][1]["claims_checked"].append("days[3].route.segments[0].fare_basis")
+    expect_fail_naming("claims_checked pointer resolves against nothing", copy.deepcopy(base),
+                       ["days[3].route.segments[0].fare_basis", "does not resolve"], report)
+
+    # The same failure with the shape that reads most plausible: the fixture really has an
+    # attraction_tickets array, it is simply empty, so a block claiming to have checked ticket
+    # prices checked a ticket that does not exist.
+    report = full_verification()
+    report["domains"][3]["claims_checked"].append("booking_options.attraction_tickets[0].price_low")
+    expect_fail_naming("pointer indexes past the end of a real list", copy.deepcopy(base),
+                       ["booking_options.attraction_tickets[0].price_low", "does not resolve"], report)
+
+    # 22c. Repeating a path inflates apparent coverage without opening anything new.
+    report = full_verification()
+    report["domains"][1]["claims_checked"].append("days[0].route.segments[0].fare_basis")
+    expect_fail_naming("same pointer listed twice in one domain", copy.deepcopy(base),
+                       ["days[0].route.segments[0].fare_basis", "twice"], report)
+
+    # ...and the half that keeps that rule from being noise. Uniqueness is scoped to one block on
+    # purpose: transport and the consistency auditor both opening days[0].route.duration_minutes is
+    # two agents doing their job, and a global uniqueness rule would punish the overlap that makes
+    # the fan-out worth running.
+    report = full_verification()
+    report["domains"][4]["claims_checked"].append("days[0].route.duration_minutes")
+    expect_ok("the same pointer in two different blocks is legitimate", copy.deepcopy(base), report)
+
+    # 22d. An empty list says exactly what "claims_checked: 0" said, so it fails for the same
+    # reason. seasonality is used here rather than sights_and_hours because emptying the latter
+    # also trips the coverage rule at 22f, and a case that fires two checks proves neither.
+    report = full_verification()
+    report["domains"][4]["claims_checked"] = []
+    expect_fail_naming("claims_checked is an empty list", copy.deepcopy(base),
+                       ["seasonality", "claims_checked: []"], report)
+
+    # 22e. A pointer whose value is null must PASS. Opening a field and finding it empty is real
+    # verification work -- single_option_reason being null is how the completeness auditor learns
+    # the plan is not hiding a sole-option decision. Demanding a non-null value would quietly
+    # rewrite the rule into "cite only the fields somebody already filled in".
+    report = full_verification()
+    report["domains"][3]["claims_checked"] = [
+        "booking_options.accommodations[0].single_option_reason",
+        "booking_options.accommodations[1].single_option_reason",
+        "regional_service_context.primary_map_exception_reason",
+    ]
+    expect_ok("pointers to fields whose value is null resolve", copy.deepcopy(base), report)
+
+    # 22f. The one coverage rule, both directions. This is where the shipped defect lived: a
+    # restaurant card declared its hours researched while they were wrong by 90 minutes at the
+    # front and an hour at the back, and the meal sat on the venue's rest day -- and the report's
+    # sights_and_hours block was clean, with a claims count in the double digits. Nothing tied the
+    # count to the card, so nothing noticed that no verifier had ever opened it.
+    report = full_verification()
+    report["domains"][2]["claims_checked"] = ["days[0].activities[0].time",
+                                              "days[0].dining[1].venue_url"]
+    expect_fail_naming("sights_and_hours cites no researched dining card", copy.deepcopy(base),
+                       ["days[0].dining[0]", "Fixture Lunch", "verified"], report)
+
+    # Citing the card itself, rather than a field under it, is the same claim and must pass.
+    report = full_verification()
+    report["domains"][2]["claims_checked"] = ["days[0].dining[0]", "days[0].activities[1].name"]
+    expect_ok("citing the dining card itself satisfies coverage", copy.deepcopy(base), report)
+
+    # A card promoted to researched pulls the requirement with it, so the rule cannot be dodged by
+    # adding cards after the report was written.
+    p = copy.deepcopy(base)
+    dinner = day(p, 1)["dining"][1]
+    dinner["venue_hours"] = "17:00-22:00"
+    dinner["hours_status"] = "researched"
+    expect_fail_naming("a newly researched card must be cited too", p,
+                       ["days[0].dining[1]", "Fixture Dinner", "researched"], full_verification())
+
+    # And the boundary that keeps it low-noise: a card whose hours_status claims nothing demands
+    # nothing. A rule that fired on honest "unverified" cards would make every plan with a
+    # not-yet-checked dinner unshippable, and the cheapest escape from that is deleting the rule.
+    p = copy.deepcopy(base)
+    day(p, 1)["dining"][1]["venue_hours"] = "17:00-22:00"      # hours_status stays "unverified"
+    expect_ok("a card that claims nothing is not demanded", p, full_verification())
+
+    # 23. replan_context.must_reverify. A date shift is the one edit that invalidates researched
+    # facts without touching them: opening hours, closure days, market days and Sunday retail law
+    # are keyed to a WEEKDAY, so moving the window by a day makes all of them a guess while the
+    # plan still looks complete and still passes every other check in this file. replan_trip.py
+    # records each such fact; this is the gate that refuses to ship while one is still open.
+    p = copy.deepcopy(base)
+    p["replan_context"] = replan_context(must_reverify=[
+        {"path": "days[0].dining[0].venue_hours",
+         "reason": "weekday moved Monday -> Tuesday; these hours are weekday-keyed",
+         "resolved": False, "resolution": None}])
+    expect_fail_naming("replan leaves a researched fact unre-verified", p,
+                       ["days[0].dining[0].venue_hours", "weekday-keyed"])
+
+    p = copy.deepcopy(base)
+    p["replan_context"] = replan_context(must_reverify=[
+        {"path": "days[0].dining[0].venue_hours",
+         "reason": "weekday moved Monday -> Tuesday; these hours are weekday-keyed",
+         "resolved": True,
+         "resolution": "Rechecked on the venue's own page: Tue 11:00-15:00, unchanged."}])
+    expect_ok("every re-verification resolved passes", p)
+
+    # The forgery this costs nothing to write and a human skimming the JSON reads as done.
+    # "resolved": "yes" is truthy in most languages people reach for and is not the JSON literal
+    # the gate tests, so the message has to say which one it found rather than just "unresolved".
+    p = copy.deepcopy(base)
+    p["replan_context"] = replan_context(must_reverify=[
+        {"path": "days[0].dining[0].venue_hours",
+         "reason": "weekday moved Monday -> Tuesday; these hours are weekday-keyed",
+         "resolved": "yes", "resolution": "looked fine"}])
+    expect_fail_naming("resolved is a truthy string, not the JSON literal true", p,
+                       ["days[0].dining[0].venue_hours", "'yes'", "true"])
+
+    # A shift can genuinely invalidate nothing -- a whole-week move keeps every weekday -- and a
+    # replan that reports that honestly must not be punished for carrying the block at all.
+    p = copy.deepcopy(base)
+    p["replan_context"] = replan_context()
+    expect_ok("a replan with nothing to re-verify passes", p)
+
+    # And the compatibility half: replan_context is optional, so a plan that was never replanned
+    # must pass exactly as it did before this key existed.
+    if "replan_context" in json.dumps(base, ensure_ascii=False):
+        failures.append(
+            "backward compatibility: the fixture now carries replan_context, so the case below no "
+            "longer shows that a plan without it is unaffected. Give it its own stripped copy.")
+    expect_ok("a plan with no replan_context is unaffected", copy.deepcopy(base))
 
     failures += verification_banner_cases(base)
 

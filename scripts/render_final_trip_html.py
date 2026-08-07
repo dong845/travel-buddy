@@ -140,6 +140,7 @@ main{max-width:1180px;padding:42px 22px 74px}h1,h2,h3,h4{color:var(--ink)}h1{max
 .unpriced-list{margin:0 0 5px;padding-left:19px;font-weight:700}.fact.unpriced{padding-top:19px}
 .route-fallback{border-left:3px solid #cfe0dc;padding-left:11px}
 .single-option-reason{border-left:3px solid var(--warm);padding-left:11px}
+.ticket-note{margin:6px 0 0;border-left:3px solid var(--warm);padding-left:11px;color:#744016}
 @media print{body{background:#fff}.page-nav{display:none}.day-card{break-inside:auto}.day-card section,.option,.dining-stop{break-inside:avoid}.hero{color:var(--ink);background:#fff;border:1px solid #d9d9d1}.hero h1{color:var(--ink)}.hero p,.hero .meta,.hero .eyebrow{color:var(--muted)}.hero::before,.hero::after{display:none}.panel,.day-card{box-shadow:none}h2,h3,h4{break-after:avoid}.booking-link,.map-link,.dining-link,.dining-reservation-link{padding:0;border-radius:0;background:none;box-shadow:none;color:#075952;text-decoration:underline}}
 """
 
@@ -302,6 +303,7 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "planning_assumptions": "规划假设",
             "platform_note_label": "平台选择说明：",
             "ticket_state_label": "门票状态：",
+            "ticket_note_label": "门票：",
             "nav_label": "本页导航",
             "nav_budget": "预算",
             "nav_options": "预订选项",
@@ -352,6 +354,11 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "entry_not_required",
     "entry_required_held",
     "entry_required_to_apply",
+    # Added with the per-activity ticket note, and optional for the same reason: making it
+    # required would make REQUIRED_UI_LABEL_KEYS reject every label set written before it
+    # existed, and a rejected set drops the entire page back to English -- trading one
+    # untranslated prefix for a hundred translated ones.
+    "ticket_note_label",
 })
 REQUIRED_UI_LABEL_KEYS = frozenset(labels_for("zh-CN")) - OPTIONAL_UI_LABEL_KEYS
 
@@ -518,6 +525,12 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
             for status, english in HOURS_STATUS_ENGLISH.items()
         },
         "Opening hours: ": labels.get("venue_hours_label", "Opening hours: "),
+        # Anchored on the whole paragraph the renderer emits rather than on the bare word:
+        # "Ticket: " is ordinary prose that an author may well have written inside an activity
+        # detail or a source note, and a loose replacement would translate the traveller's own
+        # text. Same reasoning as the dining hours-status span directly above.
+        '<p class="meta ticket-note"><strong>Ticket: </strong>':
+            f'<p class="meta ticket-note"><strong>{labels.get("ticket_note_label", "Ticket: ")}</strong>',
         " per person · ": f" {labels['per_person_suffix']} · ",
         ">Not fact-checked<": f">{labels.get('unverified_banner_title', 'Not fact-checked')}<",
         ("This plan skipped the five-domain verification pass. Its fares, opening hours, "
@@ -1492,12 +1505,24 @@ def validate_plan(plan: dict) -> list[str]:
         elif day.get("day_type") == "full" and len(activities) < 2:
             errors.append(f"day {expected} is a full day and needs at least two meaningful activities, or must be marked as a deep single-site day with its reason.")
         if isinstance(activities, list):
-            # Optional: an activity that never states its on-foot time is left out of the
-            # walking figure rather than assumed to be zero. But a value of the wrong type is
-            # worse than none at all -- "90 min" as prose reads as present, sums as nothing,
-            # and hands the walking-budget check a total it will report with confidence.
+            # Two optional per-activity fields. Each is rejected only when it is present and
+            # malformed, so a plan that omits it keeps validating exactly as before.
             for activity_number, activity in enumerate(activities, 1):
-                if not isinstance(activity, dict) or activity.get("on_foot_minutes") is None:
+                if not isinstance(activity, dict):
+                    continue
+                # ticket_note is optional -- most activities are free, and no plan carries it
+                # everywhere -- but the day card prints it verbatim under a "Ticket" label the
+                # traveller reads as researched fact. A number, an object, or a blank string
+                # would put "None", "{}" or an empty prefix exactly where an admission price
+                # and a ticketing channel belong.
+                ticket_note = activity.get("ticket_note")
+                if ticket_note is not None and (not isinstance(ticket_note, str) or not ticket_note.strip()):
+                    errors.append(f"day {expected} activity {activity_number}.ticket_note must be a non-empty string naming the admission price and where the official ticket is sold (plus any queue or advance-booking caveat), or be omitted.")
+                # An activity that never states its on-foot time is left out of the walking
+                # figure rather than assumed to be zero. But a value of the wrong type is
+                # worse than none at all -- "90 min" as prose reads as present, sums as nothing,
+                # and hands the walking-budget check a total it will report with confidence.
+                if activity.get("on_foot_minutes") is None:
                     continue
                 on_foot = activity["on_foot_minutes"]
                 if not isinstance(on_foot, int) or isinstance(on_foot, bool) or on_foot < 0:
@@ -1921,8 +1946,22 @@ def render_unlocalized(plan: dict) -> str:
         stay = accommodations.get(day.get("accommodation_option_id"))
         activities = []
         referenced_ticket_ids = set()
+        day_has_ticket_note = False
         for activity in day.get("activities", []):
-            activities.append(f'<li><time>{esc(activity.get("time"), "Flexible")}</time><div><strong>{esc(activity.get("name"))}</strong><p>{esc(activity.get("detail"))} {esc(activity.get("meal_or_rest_buffer"), "")}</p></div></li>')
+            # The activity's own admission line: what it costs and where the official ticket is
+            # actually sold. The plan collected it and the page printed it nowhere -- the measured
+            # run researched "adult EUR 12.00, official ticketing at tickets.koelner-dom.de; book
+            # online to skip the Roncalliplatz queue" and the traveller saw a cathedral with no
+            # price and no channel. It belongs on the activity rather than only in the ticket
+            # panel below, because the panel lists only options with a booking URL, and a note
+            # about buying on site or joining a queue has none. A required field that never
+            # reaches the page is research the traveller paid for and cannot see.
+            ticket_note = activity.get("ticket_note") if isinstance(activity, dict) else None
+            note_line = ""
+            if ticket_note:
+                note_line = f'<p class="meta ticket-note"><strong>Ticket: </strong>{esc(ticket_note)}</p>'
+                day_has_ticket_note = True
+            activities.append(f'<li><time>{esc(activity.get("time"), "Flexible")}</time><div><strong>{esc(activity.get("name"))}</strong><p>{esc(activity.get("detail"))} {esc(activity.get("meal_or_rest_buffer"), "")}</p>{note_line}</div></li>')
             if isinstance(activity, dict) and activity.get("ticket_option_id"):
                 referenced_ticket_ids.add(activity["ticket_option_id"])
         # One pass over the ordered options is the de-duplication: a ticket both referenced by
@@ -1932,6 +1971,15 @@ def render_unlocalized(plan: dict) -> str:
             for ticket in ticket_options
             if ticket.get("id") in referenced_ticket_ids or ticket.get("day_number") == day.get("number")
         ]
+        # The empty state is an affirmative claim, not decoration, so it may only be printed
+        # when the day really shows no admission cost anywhere -- which is why the previous
+        # release widened its condition from one join key to both. A ticket_note is the third
+        # member of that union: an on-site fee or a city card has no bookable option to link,
+        # so the day list stays empty while the activity above it now prints a price, and the
+        # old wording would have told the traveller no ticket was needed on the same screen.
+        ticket_panel = "".join(day_tickets) or (
+            "" if day_has_ticket_note else '<p>No verified ticket is required for the listed activities.</p>'
+        )
         transport_bits = [as_text(route.get("mode")), minutes(route.get("duration_minutes")), money(route.get("cost_low"), route.get("cost_high"), route.get("currency", trip["currency"])), as_text(route.get("fare_basis_or_fuel_toll_parking_note"), "")]
         transport_line = " · ".join(bit for bit in transport_bits if bit)
         segment_links = route_segment_links(route, trip["currency"])
@@ -1954,7 +2002,7 @@ def render_unlocalized(plan: dict) -> str:
         stay_line = "Checkout / no overnight stay" if day.get("day_type") == "departure" else "Arranged independently"
         if stay:
             stay_line = f"{as_text(stay.get('property_name'))} · {as_text(stay.get('stay_location'))} · {as_text(stay.get('room_basis'))}"
-        day_cards.append(f'''<article class="day-card" id="day-{attr(day["number"])}" data-day="{attr(day["number"])}"><div class="day-top"><div><p class="eyebrow">Day {esc(day.get("number"))} · {esc(day.get("date"))}</p><h2>{esc(day.get("title"))}</h2><p>{esc(day.get("focus"))}</p></div><div class="day-number" aria-label="Day {attr(day["number"])}">{esc(day.get("number"))}</div></div><section class="day-accommodation"><h3>Stay</h3><p><strong>{esc(stay_line)}</strong></p></section><section class="day-activities"><h3>Plan</h3><ol class="timeline">{"".join(activities) or '<li><time>Flexible</time><div><strong>Free time</strong></div></li>'}</ol></section><section class="day-dining"><h3>Dining suggestions</h3>{dining}</section><section class="day-route"><h3>Route and mobility</h3><p>{esc(transport_line)}</p><p class="meta">{esc(route.get("route_logic"))}</p><figure class="route-map">{route_diagram(route.get("stops_in_order", []))}<figcaption>Schematic — not for navigation. Stops are shown in visit order; use the live map for directions.</figcaption></figure><a class="map-link" data-map-scope="{attr(route_scope)}" data-verified-at="{attr(route["map_checked_at"])}" href="{attr(route["verified_map_url"])}" target="_blank" rel="noopener noreferrer">{route_map_label}</a><h4>Route by segment</h4>{segment_links}{walking_line}{fallback_line}<p class="meta">{esc(route.get("service_or_driving_caveat"), "Recheck operating conditions before departure.")}</p></section><section class="day-bookings"><h3>Tickets and recheck</h3>{"".join(day_tickets) or '<p>No verified ticket is required for the listed activities.</p>'}<p class="warning">{esc(day.get("contingency"), "Keep a flexible alternative for disruptions.")}</p></section></article>''')
+        day_cards.append(f'''<article class="day-card" id="day-{attr(day["number"])}" data-day="{attr(day["number"])}"><div class="day-top"><div><p class="eyebrow">Day {esc(day.get("number"))} · {esc(day.get("date"))}</p><h2>{esc(day.get("title"))}</h2><p>{esc(day.get("focus"))}</p></div><div class="day-number" aria-label="Day {attr(day["number"])}">{esc(day.get("number"))}</div></div><section class="day-accommodation"><h3>Stay</h3><p><strong>{esc(stay_line)}</strong></p></section><section class="day-activities"><h3>Plan</h3><ol class="timeline">{"".join(activities) or '<li><time>Flexible</time><div><strong>Free time</strong></div></li>'}</ol></section><section class="day-dining"><h3>Dining suggestions</h3>{dining}</section><section class="day-route"><h3>Route and mobility</h3><p>{esc(transport_line)}</p><p class="meta">{esc(route.get("route_logic"))}</p><figure class="route-map">{route_diagram(route.get("stops_in_order", []))}<figcaption>Schematic — not for navigation. Stops are shown in visit order; use the live map for directions.</figcaption></figure><a class="map-link" data-map-scope="{attr(route_scope)}" data-verified-at="{attr(route["map_checked_at"])}" href="{attr(route["verified_map_url"])}" target="_blank" rel="noopener noreferrer">{route_map_label}</a><h4>Route by segment</h4>{segment_links}{walking_line}{fallback_line}<p class="meta">{esc(route.get("service_or_driving_caveat"), "Recheck operating conditions before departure.")}</p></section><section class="day-bookings"><h3>Tickets and recheck</h3>{ticket_panel}<p class="warning">{esc(day.get("contingency"), "Keep a flexible alternative for disruptions.")}</p></section></article>''')
     overview = plan["transport_overview"]
     source_rows = "".join(f'<li class="source-item" data-source-type="{attr(source["source_type"])}" data-accessed-at="{attr(source["accessed_at"])}" data-source-url="{attr(source["url"])}"><a class="source-link" href="{attr(source["url"])}" target="_blank" rel="noopener noreferrer">{esc(source["name"])}</a> — {esc(source.get("claim_or_decision_supported"), "Plan evidence")} · {esc(source.get("confidence"), "researched")}</li>' for source in sources)
     total = money(budget.get("estimated_per_person_low"), budget.get("estimated_per_person_high"), trip["currency"])

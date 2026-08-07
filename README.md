@@ -72,7 +72,7 @@ The mode is decided by what you already know — it is not a separate question:
 | No destination, or just a continent | **Discovery** | 3–5 ranked candidates with trade-offs and an exclusion log |
 | A country/region but no city | **Constrained discovery** | Subregions and cities compared before any planning |
 | A destination you've decided on | **Construction** | A full day-by-day plan + the two deliverables |
-| An existing plan and a new constraint | **Incremental replanning** | Only affected elements recomputed, with a change log |
+| An existing plan and a new constraint | **Incremental replanning** | Only affected elements recomputed, with a change log. A date change runs through `replan_trip.py`, which rewrites what a shift determines and refuses to let the rest pass as still-verified |
 
 Discovery never silently collapses into Construction. A fixed scope that names no actual place is *blocked*, not guessed at.
 

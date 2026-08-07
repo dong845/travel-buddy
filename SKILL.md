@@ -194,7 +194,11 @@ When the user changes a constraint, first restate the delta. Trace dependencies 
 - passport/entry change → destination eligibility and transit;
 - traveler count or preferences → rooms, transport, activity choices, budget allocation.
 
-Keep unaffected, still-feasible choices. Return a concise change log: retained items, replaced items, new total/risk, and any decision that needs user approval. Use [templates/replan-request.json](templates/replan-request.json) to preserve the prior plan and the changed fields.
+Keep unaffected, still-feasible choices. Return a concise change log: retained items, replaced items, new total/risk, and any decision that needs user approval.
+
+**When the change moves the dates, run `python scripts/replan_trip.py <plan.json> --shift-days N --out <new.json>` rather than editing the plan by hand, and read [references/replanning.md](references/replanning.md).** Dates are the dangerous delta because almost every researched fact under them is keyed to a *weekday*, not to a date: opening hours, closure days, market days, Sunday retail law, a museum that shuts Mondays. A one-day shift silently invalidates all of it while the plan still looks complete. That is not hypothetical — a measured run moved the window by one day, redid the weekday map by hand, and introduced an off-by-one in every ticket and every anchor day index. The script rewrites only what is a pure function of the shift (trip and day dates, accommodation windows, dated booking fields, ticket day links), never prose — a sentence like "Saturday is the only full shopping day" becomes false when the dates move, and rewriting the weekday token inside it would turn a stale sentence into a confident lie. Everything it cannot safely recompute lands in `replan_context.must_reverify`, and `check_plan_consistency.py` refuses the plan until each entry is resolved. It also clears `verification_status`, because a plan whose dates moved was never verified on those dates.
+
+Use [templates/replan-request.json](templates/replan-request.json) as the shape of that `replan_context` block.
 
 ## Quality gate
 
@@ -220,5 +224,6 @@ Before delivering a recommendation or plan, verify:
 - the answer preserves choice and makes trade-offs legible;
 - `python scripts/check_plan_consistency.py <plan.json>` exits clean, so no route total, walking figure, meal placement, calendar date, or budget line contradicts the data it is derived from;
 - the five-domain parallel verification in [references/verification.md](references/verification.md) ran concurrently before delivery, its report covers all five domains, and every `wrong` or `misleading` finding is either fixed in the plan or explicitly accepted by the traveller — a plan saved with `--unverified` carries `verification_status: unverified` and renders a "not fact-checked" banner on the page, so never describe such a page as booking-ready;
+- a date change went through `scripts/replan_trip.py` and [references/replanning.md](references/replanning.md) rather than a hand edit, every `replan_context.must_reverify` entry it raised is resolved, and the plan was re-verified — a shifted plan carries the *old* verification, which was never true of the new weekdays;
 - no irreversible action is represented as completed without user approval.
 - a completed Construction task has a paired, validated source JSON and self-contained final HTML saved under the user’s workspace, with both exact paths reported; otherwise it is explicitly labeled as intermediate discovery or blocked pending one essential decision.

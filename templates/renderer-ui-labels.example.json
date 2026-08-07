@@ -148,6 +148,7 @@
   "planning_assumptions": "Planning assumptions",
   "platform_note_label": "Platform selection: ",
   "ticket_state_label": "Ticket status: ",
+  "ticket_note_label": "Ticket: ",
   "nav_label": "On this page",
   "nav_budget": "Budget",
   "nav_options": "Options",

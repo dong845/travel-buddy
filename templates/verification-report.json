@@ -7,8 +7,18 @@
     "All five domains must appear and no others. Copy every block below even when a domain",
     "found nothing -- an absent domain is a gap nobody can see, which is exactly what a skipped",
     "pass looks like.",
-    "claims_checked is the number of individual assertions that domain examined and must be > 0.",
-    "Without it, 'no findings' cannot be told apart from 'nobody ran this'.",
+    "claims_checked is the list of plan pointers that block actually opened, and must be",
+    "non-empty. Every pointer must resolve against the plan -- days[0].dining[1].venue_hours,",
+    "budget.breakdown[2].per_person_high -- and be unique within its block. It was a COUNT",
+    "until a run showed why that cannot work: an integer is a promise the same run writes",
+    "about itself, so a block whose verifier died writes 1 and the gate goes green with",
+    "'verified' on a page someone books a train from. A list that has to resolve costs more",
+    "to fabricate than to earn. Pointing at a field whose value is null is fine -- examining",
+    "an empty field is real work. One coverage rule is enforced: sights_and_hours must cite",
+    "every days[].dining[] card whose hours_status claims researched or verified, because",
+    "that is exactly where the measured defect lived -- a restaurant self-declared",
+    "'researched' while its hours were wrong at both ends and it was scheduled on the",
+    "venue's rest day.",
     "plan binds the report to one itinerary; the checker compares it to the file it is given, so",
     "one clean report cannot certify every trip.",
     "verdict: confirmed | wrong | misleading | unverifiable. Only report the last three --",
@@ -35,7 +45,12 @@
   "domains": [
     {
       "domain": "entry",
-      "claims_checked": 0,
+      "claims_checked": [
+        "trip.origin",
+        "trip.destination",
+        "entry_context.status",
+        "entry_context.traveler_basis"
+      ],
       "findings": [
         {
           "claim": "the plan's own words, quoted, so a reader can find what was wrong",
@@ -50,22 +65,37 @@
     },
     {
       "domain": "transport",
-      "claims_checked": 0,
+      "claims_checked": [
+        "days[0].route.segments[0].fare_basis",
+        "days[0].route.duration_minutes",
+        "transport_overview.overall_route_map_url"
+      ],
       "findings": []
     },
     {
       "domain": "sights_and_hours",
-      "claims_checked": 0,
+      "claims_checked": [
+        "days[0].dining[0].venue_hours",
+        "days[0].dining[0].hours_status",
+        "days[0].activities[0].time"
+      ],
       "findings": []
     },
     {
       "domain": "booking_and_lodging",
-      "claims_checked": 0,
+      "claims_checked": [
+        "booking_options.accommodations[0].check_out",
+        "booking_options.accommodations[0].nightly_cost_high",
+        "budget.breakdown[0].per_person_high"
+      ],
       "findings": []
     },
     {
       "domain": "seasonality",
-      "claims_checked": 0,
+      "claims_checked": [
+        "trip.start_date",
+        "days[0].contingency"
+      ],
       "findings": []
     }
   ],
@@ -73,12 +103,18 @@
   "audits": [
     {
       "audit": "consistency",
-      "claims_checked": 0,
+      "claims_checked": [
+        "days[0].route.walking_burden",
+        "days[0].route.duration_minutes"
+      ],
       "findings": []
     },
     {
       "audit": "completeness",
-      "claims_checked": 0,
+      "claims_checked": [
+        "budget.cap_per_person",
+        "plan.assumptions"
+      ],
       "findings": []
     }
   ]

@@ -99,19 +99,35 @@ def main() -> int:
         failures.append(
             f"templates/verification-report.json covers {sorted(shipped)} but the checker requires "
             f"exactly {sorted(REQUIRED_DOMAINS)}")
-    for domain in report.get("domains", []):
-        if "claims_checked" not in domain:
+    #    claims_checked stopped being a count and became the list of plan pointers each block
+    #    opened, because a count is a promise the same run writes about itself. The template is
+    #    what operators copy, so a template still carrying `"claims_checked": 0` teaches the one
+    #    shape the checker now rejects, and the author's first contact with the change is a failing
+    #    gate on their own trip rather than a line in the file they copied.
+    for block, label in ([(d, f"domain {d.get('domain')!r}") for d in report.get("domains", [])]
+                         + [(a, f"audit {a.get('audit')!r}") for a in report.get("audits", [])]):
+        if "claims_checked" not in block:
             failures.append(
-                f"verification-report template domain {domain.get('domain')!r} omits claims_checked, "
+                f"verification-report template {label} omits claims_checked, "
                 f"which the checker requires — the template would teach the wrong shape")
+        elif not isinstance(block["claims_checked"], list):
+            failures.append(
+                f"verification-report template {label} sets claims_checked to "
+                f"{block['claims_checked']!r}. The checker now requires a list of plan pointers, "
+                f'e.g. ["days[0].dining[0].venue_hours"], and rejects a number outright.')
 
     # 5. Every shipped template must be reachable from SKILL.md or a reference it points at.
     #    A template nobody links to is a template nobody copies, which is the same as not
     #    shipping it -- and the README is not a valid home for that pointer, since it is
     #    documentation for humans browsing GitHub rather than context the model receives.
+    #    Missing files are skipped rather than opened: check 2 above already reports every
+    #    SKILL.md reference that does not exist, and reading one here raised FileNotFoundError
+    #    before any failure was printed -- so a single missing reference replaced the whole
+    #    packaging report with a stack trace naming one file, which is how a checkable failure
+    #    turns into a mystery.
     reachable = skill + "\n".join(
         (ROOT / ref).read_text(encoding="utf-8")
-        for ref in referenced if ref.startswith("references/"))
+        for ref in referenced if ref.startswith("references/") and (ROOT / ref).exists())
     for template in sorted((ROOT / "templates").glob("*.json")):
         name = template.name
         if name.endswith(".example.json"):

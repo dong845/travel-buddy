@@ -72,7 +72,7 @@ travel-buddy 是给 [Claude Code](https://claude.ai/code) 和 [Codex](https://op
 | 没有目的地，或只有一个大洲 | **Discovery（发现）** | 3–5 个排序候选，含取舍说明与淘汰记录 |
 | 有国家/区域但没定城市 | **Constrained discovery（受限发现）** | 先比较子区域与城市，再谈行程 |
 | 目的地已经定了 | **Construction（建行程）** | 完整逐日方案 + 两份交付物 |
-| 已有方案，来了新约束 | **Incremental replanning（增量重排）** | 只重算受影响部分，并给变更日志 |
+| 已有方案，来了新约束 | **Incremental replanning（增量重排）** | 只重算受影响部分，并给变更日志。改日期时走 `replan_trip.py`：它重写位移能决定的部分，并拒绝让其余部分继续冒充「已核实」 |
 
 Discovery 不会悄悄塌缩成 Construction。范围写了 `fixed` 却没点名任何地点，会被判为**阻塞**，而不是替你猜一个。
 
