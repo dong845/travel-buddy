@@ -121,7 +121,15 @@ page and delivers a front door; two flight cards shipped pointing at `transavia.
 Carrying no dates is fine — most carriers cannot be deep-linked — but the page has to be about this
 route or this property. When there is no such page, drop the field so no button is rendered at all.
 
-**Two options that open the same page are one option shown twice.** The same check refuses a
+**A page that gave you today's price also told you whether the dates are sellable.** So a card
+claiming `price_status: "researched_current"` while leaving `availability_status: "unknown"` is
+claiming a page it did not finish reading, and that is refused. "Read it off the platform page" is
+a process nobody can watch; this is its mechanical shadow, and it exists because a delivered plan
+shipped a hotel that was sold out on exactly those dates with its availability left unknown.
+
+**Two options that open the same page are one option shown twice** — whichever `stay_group_id`
+they are filed under. The rule used to be keyed on that label, which the same author writes, so
+relabelling two hotels into separate groups was enough to let them share one link. The same check refuses a
 `review_url` or `round_trip_search_url` shared between candidates in any category. This is not
 tidiness: it shipped on flights as well as hotels, and a comparison whose two buttons land in the
 same place compares nothing.
@@ -189,6 +197,12 @@ A name is not an acceptable substitute even when it looks like one. `Mercado de 
 and `酒店（拉斯坎特拉斯海滨）` resolves to another continent, and no offline check can tell those
 apart — only a geocoder can, and it is not in the gate. Coordinates cost nothing: the place page
 that gave you the venue's rating and opening hours put the pair in its own URL.
+
+Never carry a place id **and** coordinates in the same route URL. The provider resolves the id and
+ignores the numbers, so every distance rule in the gate would be measuring a point the traveller is
+never taken to — and no offline check can read a place id. Pick one: the id names a venue exactly,
+the coordinates can be verified. (A dining `venue_url` is different: it is a place lookup, so an id
+there is the *stronger* form and is accepted in place of the name.)
 
 Per-provider order matters and is not guessable from the numbers alone: Google, Apple and
 OpenStreetMap read `lat,lon`; Amap reads `lon,lat,name`. Declare `trip.destination_coords` once so

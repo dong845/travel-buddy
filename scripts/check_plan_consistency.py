@@ -1721,14 +1721,18 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                     f"button opens a list, not the thing the card is about. Search the property "
                     f"by name with the trip's dates and store the URL that resolves.")
 
+    # Keyed on the whole plan rather than on stay_group_id, because the group label is written by
+    # the same author as the URL: relabelling two hotels into different groups used to be enough
+    # to let them share one link, which is the defect wearing a different hat.
+    seen_urls: dict[str, str] = {}
     for group, entries in stays.items():
-        seen: dict[str, str] = {}
         for name, url in entries:
-            if url in seen and seen[url] != name:
+            if url in seen_urls and seen_urls[url] != name:
                 errors.append(
-                    f"stay group '{group}': '{seen[url]}' and '{name}' share the same comparison "
-                    f"URL. Two options that open the same page are one option shown twice.")
-            seen.setdefault(url, name)
+                    f"accommodation '{seen_urls[url]}' and '{name}' share the same comparison "
+                    f"URL. Two options that open the same page are one option shown twice, "
+                    f"whichever stay groups they are filed under.")
+            seen_urls.setdefault(url, name)
 
     # review_url is deliberately NOT held to the same name test. A property's own site is
     # addressed in its own market's script -- '东京銀座三井ガーデンホテル' lives at
@@ -1880,6 +1884,23 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
             low.append(f"accommodation '{name}' -- {out_of_ten:.1f}/10")
         if count and count < 50:
             thin.append(f"accommodation '{name}' -- only {count:g} reviews")
+
+    # "Read the price off the platform page" is a process rule no code can watch. Its mechanical
+    # shadow can be: if you opened the page far enough to read a current price, you saw whether
+    # the dates were sellable. A card claiming a researched price while leaving availability
+    # unknown is claiming a page it did not finish reading -- and the plan that prompted all of
+    # this shipped a hotel that was sold out on exactly those dates, marked unknown.
+    for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
+        name = str(option.get("property_name") or option.get("id") or "?")
+        if _unfilled(name, option.get("review_url")):
+            continue
+        if (str(option.get("price_status") or "").lower() == "researched_current"
+                and str(option.get("availability_status") or "").lower() == "unknown"):
+            errors.append(
+                f"accommodation '{name}': price_status is 'researched_current' while "
+                f"availability_status is 'unknown'. The page that gave you today's price also "
+                f"said whether these dates are sellable -- record what it said, or mark the price "
+                f"an estimate to match what was actually read.")
 
     unknown = [str(o.get("property_name")) for o in
                [_obj(x) for x in _seq(_obj(plan.get("booking_options")).get("accommodations"))]
@@ -2082,6 +2103,10 @@ def _great_circle_km(a: tuple[float, float], b: tuple[float, float]) -> float:
         + math.cos(a[0] * p) * math.cos(b[0] * p) * math.sin((b[1] - a[1]) * p / 2) ** 2))
 
 
+def located_any(coords: list) -> bool:
+    return any(point is not None for _, point, _ in coords)
+
+
 def _map_endpoints(url: str) -> list[tuple[str, str]]:
     try:
         query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
@@ -2180,6 +2205,19 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
                         f"destination. Check the coordinate order -- 'lat,lon' reversed reads as "
                         f"a point on another continent while staying the right distance from its "
                         f"partner, so the leg-length rule cannot see it.")
+        # A place id beats coordinates at the provider: Google resolves destination_place_id and
+        # ignores the numbers beside it. So a URL carrying both is one this checker cannot judge
+        # -- the arithmetic below measures a point the traveller will never be sent to. The id
+        # cannot be verified offline either, which leaves exactly one honest rule: do not carry
+        # both. Keep the id (it names one venue exactly) or keep the coordinates (they can be
+        # checked), never a pair that disagree silently.
+        if re.search(r"(origin|destination|waypoint)_place_id=", url) and located_any(coords):
+            errors.append(
+                f"{where}: the URL carries both coordinates and a place id. The provider resolves "
+                f"the place id and ignores the coordinates, so every distance rule here is "
+                f"measuring somewhere the traveller will not be taken -- and no offline check can "
+                f"read a place id. Carry one or the other.")
+
         located = [p for _, p, _ in coords if p is not None]
         if len(located) == 2 and declared_km and ratio_check:
             straight_now = _great_circle_km(located[0], located[1])

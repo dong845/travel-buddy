@@ -2290,6 +2290,40 @@ def main() -> int:
     seg["distance_km"] = 2.0
     expect_fail("a point near neither declared base", p, "from the trip's declared destination")
 
+    # 35. The three the self-check listed as minor and left open. Each is small; each is the
+    # shape that has produced every larger defect here -- a rule stated somewhere and measured
+    # nowhere.
+    p = copy.deepcopy(base)
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=30.5723,104.0665"
+                               "&destination=30.6000,104.0700"
+                               "&destination_place_id=ChIJsomewhereelse&travelmode=transit")
+    expect_fail("a URL carrying both coordinates and a place id", p, "place id")
+
+    # "Read the price off the platform page" cannot be watched, but its shadow can: a page that
+    # gave you today's price also said whether the dates were sellable. The plan that prompted
+    # this release shipped a sold-out hotel marked unknown.
+    p = copy.deepcopy(base)
+    option = p["booking_options"]["accommodations"][0]
+    option["price_status"] = "researched_current"
+    option["availability_status"] = "unknown"
+    expect_fail("a researched price beside an unknown availability", p, "sellable")
+
+    p = copy.deepcopy(base)
+    option = p["booking_options"]["accommodations"][0]
+    option["price_status"] = "estimate"
+    option["availability_status"] = "unknown"
+    expect_ok("an estimated price beside an unknown availability, which is consistent", p)
+
+    # The duplicate-URL rule was keyed on stay_group_id, a label the same author writes -- so
+    # filing two hotels under different groups was enough to let them share one link.
+    p = copy.deepcopy(base)
+    first, second = p["booking_options"]["accommodations"][0], p["booking_options"]["accommodations"][1]
+    second["stay_group_id"] = first["stay_group_id"] + "-other"
+    second["comparison_searches"][0]["search_url"] = first["comparison_searches"][0]["search_url"]
+    expect_fail("two hotels in different stay groups sharing one comparison URL", p,
+                "share the same comparison")
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 
