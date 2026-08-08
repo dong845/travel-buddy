@@ -231,7 +231,9 @@ provider's own search box.
   `87.6168,43.8256` was read as latitude 87.6 and reported 4,946 km away, and an author who
   followed the error message and "fixed the order" got a green gate with every button pointing at
   the Arctic. Kashgar and Shigatse were out by 4,439 km and 6,691 km the same way.
-- **Declare `trip.destination_coords` once.** The leg-length rule is *relative*, so it cannot see a
+- **Declare `trip.destination_coords`** — one object, or a **list of them for a multi-city trip**,
+  since each endpoint is judged against the nearest base. New York plus Los Angeles is 3,936 km
+  apart and Beijing plus Ürümqi 2,411, so a single anchor rejected trips that were perfectly real. The leg-length rule is *relative*, so it cannot see a
   consistently reversed pair: writing `lon,lat` at both ends of a Las Palmas leg leaves the points
   4.73 km apart instead of 4.70 while moving every pin to southern Africa. One absolute reference
   turns every endpoint check from "do these two agree" into "is this where the trip is".
@@ -243,6 +245,11 @@ provider's own search box.
 - `route_map_scope: "multi_stop"` prints the button as a full-day route. It is only true when the
   URL carries every intermediate stop as a waypoint. Eight days of one plan claimed it while
   carrying two endpoints; if you have no waypoints, the scope is `primary_leg`.
+
+When geography genuinely forces a long way round, say so in the segment's `detour_reason` and the
+leg passes. The Grand Canyon rims are 18 km apart and 350 km by road; a Norwegian fjord crossing
+runs 5.0x its straight line — and a leg whose endpoints pointed at the wrong pair of stops ran 5.1x.
+No ratio separates those, so the author does, in one field.
 
 `check_plan_consistency.py` now fails on the arithmetic rather than the wording: the straight-line
 distance between a leg's two coordinate endpoints cannot exceed the `distance_km` that leg claims

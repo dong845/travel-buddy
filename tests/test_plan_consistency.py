@@ -2240,6 +2240,56 @@ def main() -> int:
     option["guest_rating_value"] = 6.2
     expect_fail("a hotel floor dodged the same way", p, "how a floor gets dodged")
 
+    # 34. The two boundaries the self-check found, where a rule that was right in the common case
+    # rejected a real trip. Neither is fixed by moving a number: a Norwegian fjord crossing runs
+    # 5.0x its straight line and a leg pointing at the wrong stop ran 5.1x, so the author declares
+    # the detour rather than the checker guessing at it.
+    p = copy.deepcopy(base)
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["distance_km"] = 350.0
+    seg["duration_minutes"] = 270
+    seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=30.5723,104.0665"
+                               "&destination=30.6000,104.0700&travelmode=driving")
+    seg["detour_reason"] = "No road crosses the canyon; the drive rounds it via Marble Canyon."
+    route = day(p, 1)["route"]
+    route["distance_km"] = sum(s["distance_km"] for s in route["segments"])
+    route["duration_minutes"] = sum(s["duration_minutes"] for s in route["segments"])
+    route["detour_reason"] = seg["detour_reason"]
+    expect_ok("a genuine detour declared in detour_reason", p)
+
+    # Without the declaration the same shape is still refused, or the field would be a way to
+    # switch the rule off rather than to answer it.
+    p = copy.deepcopy(base)
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["distance_km"] = 350.0
+    seg["duration_minutes"] = 270
+    seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=30.5723,104.0665"
+                               "&destination=30.6000,104.0700&travelmode=driving")
+    expect_fail("the same detour with nothing said about it", p, "apart (")
+
+    # A trip can have more than one base. New York and Los Angeles are 3,936 km apart, so a
+    # single anchor put one of them outside any useful radius.
+    p = copy.deepcopy(base)
+    p["trip"]["destination_coords"] = [{"lat": 30.5723, "lon": 104.0665},
+                                       {"lat": 39.9042, "lon": 116.4074}]
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=39.9042,116.4074"
+                               "&destination=39.9100,116.4200&travelmode=transit")
+    seg["distance_km"] = 1.8
+    route = day(p, 1)["route"]
+    route["distance_km"] = sum(s["distance_km"] for s in route["segments"])
+    expect_ok("a second city declared as a second anchor", p)
+
+    # And a point near neither base is still wrong.
+    p = copy.deepcopy(base)
+    p["trip"]["destination_coords"] = [{"lat": 30.5723, "lon": 104.0665},
+                                       {"lat": 39.9042, "lon": 116.4074}]
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=28.1395,-15.4366"
+                               "&destination=28.1476,-15.4291&travelmode=transit")
+    seg["distance_km"] = 2.0
+    expect_fail("a point near neither declared base", p, "from the trip's declared destination")
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 

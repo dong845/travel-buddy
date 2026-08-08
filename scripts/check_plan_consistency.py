@@ -2121,12 +2121,22 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
     # two points 4.73 km apart instead of 4.70, so the leg passes -- while every pin has moved to
     # latitude -15.4, longitude 28.1, which is southern Africa. Measured, not imagined. One
     # declared destination coordinate turns every endpoint check from relative into absolute.
-    anchor = _obj(_obj(plan.get("trip")).get("destination_coords"))
-    anchor_point: tuple[float, float] | None = None
-    if anchor:
-        lat, lon = _num(anchor.get("lat")), _num(anchor.get("lon"))
+    # A trip can have more than one destination, and the single-anchor model quietly assumed it
+    # could not: New York plus Los Angeles is 3,936 km apart, so one of the two always fell
+    # outside any radius wide enough to be useful. Beijing plus Ürümqi is 2,411 km and sat one
+    # rounding away from the same fate. Declare every base the trip actually uses -- as one
+    # object or a list of them -- and each endpoint is judged against the nearest.
+    raw_anchor = _obj(_obj(plan.get("trip")).get("destination_coords")) or None
+    anchor_list = _seq(_obj(plan.get("trip")).get("destination_coords")) if isinstance(
+        _obj(plan.get("trip")).get("destination_coords"), list) else ([raw_anchor] if raw_anchor else [])
+    anchor_points: list[tuple[float, float]] = []
+    for item in anchor_list:
+        item = _obj(item)
+        lat, lon = _num(item.get("lat")), _num(item.get("lon"))
         if abs(lat) <= 90 and abs(lon) <= 180 and (lat or lon):
-            anchor_point = (lat, lon)
+            anchor_points.append((lat, lon))
+    anchor = bool(anchor_list)
+    anchor_point = anchor_points[0] if anchor_points else None
     # Derived rather than picked. A reversed pair moves a point 4,300 km (Rome) to 12,000 km
     # (Reykjavik) -- the smallest swap is the floor this has to catch. Legitimate multi-city
     # domestic trips reach 1,067 km (Beijing-Shanghai) and 1,419 km (Sapporo-Fukuoka) -- the
@@ -2135,7 +2145,7 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
     ANCHOR_RADIUS_KM = 2500.0
 
     def endpoints_of(url: str, where: str, declared_km: float | None,
-                     ratio_check: bool = True) -> None:
+                     ratio_check: bool = True, detour_reason: object = None) -> None:
         nonlocal checked
         pairs = _map_endpoints(url)
         if not pairs:
@@ -2159,11 +2169,11 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
                     f"parameter is a geocoder query -- write it as 'lat,lon' (Amap: 'lon,lat,name') "
                     f"so it cannot resolve to the wrong continent and so the distance check can "
                     f"run on it.")
-        if anchor_point is not None:
+        if anchor_points:
             for key, point, raw in coords:
                 if point is None:
                     continue
-                away = _great_circle_km(anchor_point, point)
+                away = min(_great_circle_km(a, point) for a in anchor_points)
                 if away > ANCHOR_RADIUS_KM:
                     errors.append(
                         f"{where}: {key}={raw!r} sits {away:,.0f} km from the trip's declared "
@@ -2181,13 +2191,18 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
             # so the bounding-box and leg-length rules both passed, while segment 1 pointed at
             # stop 3. Only applied above 1 km, because the ratio is noise on a 200 m walk that
             # follows a seafront.
-            if straight_now >= 1.0 and declared_km > straight_now * 3.0:
+            if (straight_now >= 1.0 and declared_km > straight_now * 3.0
+                    and not str(detour_reason or "").strip()):
                 errors.append(
                     f"{where}: declares {declared_km:g} km but its two endpoints are only "
                     f"{straight_now:.1f} km apart ({declared_km / straight_now:.1f}x). A road is "
                     f"1.1-1.6x its straight line, so at this ratio the endpoints are probably not "
                     f"the stops this leg names -- check that the URL matches the segment's own "
-                    f"from/to rather than another pair on the same day.")
+                    f"from/to rather than another pair on the same day. Geography does sometimes "
+                    f"force a detour this large: the Grand Canyon rims are 18 km apart and 350 km "
+                    f"by road. But no ratio separates that from a mis-wired endpoint -- a "
+                    f"legitimate fjord crossing runs 5.0x and a leg pointing at the wrong stop ran "
+                    f"5.1x -- so when the detour is real, say so in detour_reason and this passes.")
         if len(located) == 2:
             checked += 1
             straight = _great_circle_km(located[0], located[1])
@@ -2213,7 +2228,8 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
         segments = _segments(day)
         for index, seg in enumerate(segments):
             endpoints_of(str(seg.get("verified_map_url") or ""),
-                         f"day {number} segment {index + 1}", _num(seg.get("distance_km")))
+                         f"day {number} segment {index + 1}", _num(seg.get("distance_km")),
+                         detour_reason=seg.get("detour_reason"))
             for alt in [_obj(a) for a in _seq(seg.get("alternative_map_links"))]:
                 endpoints_of(str(alt.get("url") or ""),
                              f"day {number} segment {index + 1} alternative "
@@ -2223,9 +2239,13 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
                          f"day {number} route alternative ({alt.get('provider')})",
                          _num(route.get("distance_km")), ratio_check=False)
         multi = len([s for s in _seq(route.get("stops_in_order")) if s]) > 2
+        # A single-leg day inherits its segment's detour note: the route URL and the segment URL
+        # describe the same journey, so a reason good enough for one is good enough for both.
+        route_detour = route.get("detour_reason") or (
+            segments[0].get("detour_reason") if len(segments) == 1 else None)
         endpoints_of(str(route.get("verified_map_url") or ""),
                      f"day {number} route", _num(route.get("distance_km")),
-                     ratio_check=not multi)
+                     ratio_check=not multi, detour_reason=route_detour)
 
         # A walking URL over a distance nobody walks is a mode error the distance rule cannot
         # see, because the distance itself is right: one plan's departure-day button asked
@@ -2292,14 +2312,14 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
                  "transport_overview", _num(overview.get("overall_distance_km")) or None,
                  ratio_check=False)
 
-    declared_anchor = bool(anchor)
-    if checked and anchor_point is None and declared_anchor:
+    declared_anchor = anchor
+    if checked and not anchor_points and declared_anchor:
         errors.append(
             "trip.destination_coords is present but still at its placeholder (0/0 or blank), so "
             "no map endpoint could be checked against it. Replace it with the destination's own "
             "pair -- the skeleton writes zeros precisely so this is a filled-in field rather than "
             "a forgotten one.")
-    elif checked and anchor_point is None:
+    elif checked and not anchor_points:
         # Optional was not good enough: without the anchor the endpoint rule is purely relative,
         # and a consistently reversed lat/lon pair keeps its partner the right distance away while
         # moving every pin to another continent. A plan that uses coordinates must say where the

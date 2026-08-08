@@ -454,6 +454,7 @@
             "arrival_instruction": null,
             "fare_basis": null,
             "fallback_note": null,
+            "detour_reason": null,
             "verified_map_url": null,
             "map_checked_at": null,
             "map_provider": null,
