@@ -30,6 +30,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
+import urllib.parse
 import re
 import sys
 from pathlib import Path
@@ -1582,10 +1584,308 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
     # resolution string a reader can check by eye.
 
 
+def _name_tokens(name: str) -> list[str]:
+    return [t for t in re.split(r"[^0-9A-Za-zÀ-ÿ]+", name or "") if len(t) >= 4]
+
+
+def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A comparison link that opens a city is not a link to the thing being compared.
+
+    Two hotels once shipped with byte-identical Booking.com URLs -- a search for the city, with
+    the trip's dates -- and the cards passed every gate. The cost was not tidiness. Because no
+    button ever opened either property on the platform that actually sells it, nobody saw that
+    one of them cost EUR 1,256 for the week (over the traveller's whole cap, before flights) and
+    the other had no availability on those dates at all. The missing link was the reason two
+    unbookable recommendations survived to delivery.
+
+    So a comparison search has to be scoped to the product: its URL must carry a token of the
+    property's own name, or a property/hotel id. Hand-built property paths are still forbidden
+    elsewhere in the skill for a separate and equally measured reason -- Booking's bare
+    /hotel/<cc>/<slug>.html answers with an error page unless it carries the session parameters
+    this skill will not embed -- which is exactly why the property-scoped *search* is the form
+    that works: it is stable, shareable, tracker-free, and lands on the one property.
+    """
+    stays: dict[str, list[tuple[str, str]]] = {}
+    for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
+        name = str(option.get("property_name") or option.get("id") or "?")
+        tokens = [t.lower() for t in _name_tokens(name)]
+        searches = [_obj(s) for s in _seq(option.get("comparison_searches"))]
+        if not searches:
+            errors.append(f"accommodation '{name}': no comparison_searches. Give the traveller a "
+                          f"way to open this exact property on a platform that sells it.")
+            continue
+        for search in searches:
+            url = str(search.get("search_url") or "")
+            stays.setdefault(str(option.get("stay_group_id") or ""), []).append((name, url))
+            low = url.lower()
+            if tokens and not any(t in low for t in tokens) and not re.search(
+                    r"(hotel_?id|property[_-]?id|dest_id|hotelId)=", url):
+                errors.append(
+                    f"accommodation '{name}': its comparison search URL is not scoped to this "
+                    f"property -- the URL carries none of its name and no property id, so the "
+                    f"button opens a list, not the thing the card is about. Search the property "
+                    f"by name with the trip's dates and store the URL that resolves.")
+
+    for group, entries in stays.items():
+        seen: dict[str, str] = {}
+        for name, url in entries:
+            if url in seen and seen[url] != name:
+                errors.append(
+                    f"stay group '{group}': '{seen[url]}' and '{name}' share the same comparison "
+                    f"URL. Two options that open the same page are one option shown twice.")
+            seen.setdefault(url, name)
+
+    unknown = [str(o.get("property_name")) for o in
+               [_obj(x) for x in _seq(_obj(plan.get("booking_options")).get("accommodations"))]
+               if str(o.get("availability_status") or "").lower() == "unknown"]
+    if unknown:
+        notes.append("note: accommodation whose availability on the selling platform was never "
+                     "checked -- one such card shipped sold out:\n    - " + "\n    - ".join(unknown))
+
+
+def check_venue_quality(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A recommendation with no quality signal is an assertion of taste, not a finding.
+
+    The dining contract used to require venue, style, area, price, queue note, rationale, link
+    and backup -- everything except whether the place is any good, or whether it exists. A
+    measured run shipped a dinner at a venue that returns no listing on any platform, two
+    lunches at restaurants that do not open until 20:00, and a farewell dinner priced at
+    EUR 55-90 that actually bills EUR 100+. Every gate passed, because none of those facts had
+    a field to live in.
+
+    Two rules, and the second is the one that hurts:
+      * every card carries a rating with its scale, count and source, or says plainly that it
+        has none. A 4.8 from 12 reviews and a 4.3 from 2,000 are not the same claim, so the
+        count is required alongside the value rather than optional beside it.
+      * a card may not name a time window while admitting its hours are unverified. Scheduling
+        a meal IS a claim that the venue is open then; 'unverified' beside '13:15-14:30' is that
+        claim with the evidence removed, which reads to the traveller as researched and to the
+        gate as compliant.
+    """
+    low: list[str] = []
+    thin: list[str] = []
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        number = day.get("number")
+        for index, card in enumerate([_obj(c) for c in _seq(day.get("dining"))]):
+            where = f"day {number} {card.get('meal') or 'meal'} ('{card.get('venue_name')}')"
+            status = str(card.get("rating_status") or "").lower()
+            value, count = card.get("rating_value"), card.get("rating_count")
+            if status == "none":
+                if not str(card.get("rating_absence_reason") or "").strip():
+                    errors.append(
+                        f"{where}: rating_status is 'none' but rating_absence_reason is empty. "
+                        f"A venue with no public rating can still be the right call -- a market "
+                        f"stall, a hotel breakfast -- but say which, so the gap reads as a "
+                        f"decision rather than an omission.")
+                continue
+            missing = [k for k in ("rating_value", "rating_scale", "rating_count",
+                                   "rating_source", "rating_url", "rating_checked_at")
+                       if card.get(k) in (None, "")]
+            if missing:
+                errors.append(
+                    f"{where}: missing {', '.join(missing)}. Every recommended venue needs a "
+                    f"quality signal with its scale, its count and where it came from, or "
+                    f"rating_status='none' with a reason. Without it nothing distinguishes a "
+                    f"venue you checked from one a blog listed and no one ever opened.")
+                continue
+            scale = _num(card.get("rating_scale")) or 5
+            if scale not in (5, 10):
+                errors.append(f"{where}: rating_scale must be 5 or 10, got {scale:g}. "
+                              f"TheFork and Booking publish out of 10 and Google out of 5, so a "
+                              f"bare number is not comparable across sources.")
+                continue
+            out_of_five = _num(value) * (5.0 / scale)
+            if out_of_five < 3.5:
+                errors.append(
+                    f"{where}: rating is {_num(value):g}/{scale:g} ({out_of_five:.1f}/5), below "
+                    f"the 3.5/5 floor. Replace it, or state in why_this_stop what makes it worth "
+                    f"the traveller's evening anyway.")
+            elif out_of_five < 4.0:
+                low.append(f"{where} -- {out_of_five:.1f}/5")
+            if _num(count) < 30:
+                thin.append(f"{where} -- only {_num(count):g} reviews")
+
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        number = day.get("number")
+        for card in [_obj(c) for c in _seq(day.get("dining"))]:
+            hours_status = str(card.get("hours_status") or "").lower()
+            window = str(card.get("time_window") or "").strip()
+            if window and hours_status not in {"verified", "researched"}:
+                errors.append(
+                    f"day {number}: '{card.get('venue_name')}' is scheduled at {window} while "
+                    f"hours_status is '{hours_status or 'unset'}'. Putting a meal on the clock is "
+                    f"a claim the venue is open then -- verify the hours for that weekday, or "
+                    f"drop the venue. A measured run scheduled two lunches at restaurants that "
+                    f"open at 20:00 and every gate passed.")
+
+    if low:
+        notes.append("note: venues rated below 4.0/5 -- justified or replaceable, but not "
+                     "invisible:\n    - " + "\n    - ".join(low))
+    if thin:
+        notes.append("note: venues whose rating rests on few reviews (a high score from a "
+                     "handful of people is weaker evidence than a good one from thousands):"
+                     "\n    - " + "\n    - ".join(thin))
+
+
+MAP_ENDPOINT_PARAMS = ("origin", "destination", "from", "to", "saddr", "daddr", "query")
+_LATLON = re.compile(r"^\s*(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*(?:,.*)?$")
+
+
+def _endpoint_coords(value: str) -> tuple[float, float] | None:
+    """Read 'lat,lon' (Google/Apple/OSM) or 'lon,lat,name' (Amap) out of a map URL parameter.
+
+    Amap documents its endpoints the other way round, so the pair is accepted in either order
+    and disambiguated by range: a latitude cannot exceed 90, so '120.51,24.06' can only be
+    lon,lat. A pair that is legal both ways is read as lat,lon, which is the majority dialect.
+    """
+    m = _LATLON.match(value or "")
+    if not m:
+        return None
+    a, b = float(m.group(1)), float(m.group(2))
+    if abs(a) > 90 and abs(b) <= 90:
+        a, b = b, a
+    if abs(a) > 90 or abs(b) > 180:
+        return None
+    return a, b
+
+
+def _great_circle_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    p = math.pi / 180
+    return 2 * 6371 * math.asin(math.sqrt(
+        math.sin((b[0] - a[0]) * p / 2) ** 2
+        + math.cos(a[0] * p) * math.cos(b[0] * p) * math.sin((b[1] - a[1]) * p / 2) ** 2))
+
+
+def _map_endpoints(url: str) -> list[tuple[str, str]]:
+    try:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    except Exception:  # noqa: BLE001 - a malformed URL is caught by the URL checks
+        return []
+    return [(k, v[0]) for k in MAP_ENDPOINT_PARAMS for v in [query.get(k)] if v and v[0]]
+
+
+def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A map URL parameter is a geocoder query, not a caption.
+
+    This exists because a shipped plan wrote its own Chinese display label into the URL --
+    origin='酒店（拉斯坎特拉斯海滨）', literally the word "hotel" plus a description. Google
+    geocoded it to Taiwan and offered a 65-hour drive to the Canary Islands, while every gate
+    passed: the host was right, the status was 200, no parameter was dropped. Nothing measured
+    whether the endpoint named a place that exists, because a label and a query had never been
+    separate fields.
+
+    The rule that catches it needs no geocoder and no bounding box, only the plan's own numbers:
+    the straight line between a leg's two endpoints cannot be longer than the distance that leg
+    claims to cover. Taiwan to Gran Canaria is 11,000 km against a declared 6.2 -- it fails on
+    arithmetic. Endpoints written as free text are reported rather than failed, because a real
+    place name ('Mercado de Vegueta') is a perfectly good query and only a geocoder could tell
+    the two apart.
+    """
+    tolerance = 1.30  # road distance exceeds great-circle; only a gross mismatch is a defect
+    free_text: list[str] = []
+    checked = 0
+
+    def endpoints_of(url: str, where: str, declared_km: float | None) -> None:
+        nonlocal checked
+        pairs = _map_endpoints(url)
+        if not pairs:
+            return
+        coords = [(k, _endpoint_coords(v), v) for k, v in pairs]
+        for key, point, raw in coords:
+            if point is None:
+                free_text.append(f"{where}: {key}={raw!r}")
+        located = [p for _, p, _ in coords if p is not None]
+        if len(located) == 2:
+            checked += 1
+            straight = _great_circle_km(located[0], located[1])
+            if declared_km is not None and declared_km > 0 and straight > declared_km * tolerance + 1:
+                errors.append(
+                    f"{where}: its two map endpoints are {straight:,.0f} km apart in a straight "
+                    f"line, but the leg declares distance_km={declared_km:g}. One of the two "
+                    f"endpoints does not name the place its label says it does -- a map URL "
+                    f"parameter is a geocoder query, not a caption.")
+            elif declared_km is None and straight > 400:
+                errors.append(
+                    f"{where}: its two map endpoints are {straight:,.0f} km apart, which no "
+                    f"single day's route covers. Check that both endpoints resolve to the "
+                    f"intended places.")
+
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        number = day.get("number")
+        route = _route(day)
+        segments = _segments(day)
+        for index, seg in enumerate(segments):
+            endpoints_of(str(seg.get("verified_map_url") or ""),
+                         f"day {number} segment {index + 1}", _num(seg.get("distance_km")))
+        endpoints_of(str(route.get("verified_map_url") or ""),
+                     f"day {number} route", _num(route.get("distance_km")))
+
+        # A walking URL over a distance nobody walks is a mode error the distance rule cannot
+        # see, because the distance itself is right: one plan's departure-day button asked
+        # Google to walk 25 km from the seafront to the airport. Google answers it, too --
+        # with a five-hour route no traveller will ever take.
+        try:
+            route_query = urllib.parse.parse_qs(urllib.parse.urlparse(
+                str(route.get("verified_map_url") or "")).query)
+        except Exception:  # noqa: BLE001
+            route_query = {}
+        route_mode = (route_query.get("travelmode") or [""])[0].lower()
+        route_km = _num(route.get("distance_km"))
+        if route_mode == "walking" and route_km > 15:
+            errors.append(
+                f"day {number}: the day's map button asks for WALKING directions over "
+                f"{route_km:g} km. Set the travelmode to the mode the day actually uses -- the "
+                f"distance can be right while the mode makes the route useless.")
+
+        # A button that says "full-day route" and carries only two of the day's stops is a
+        # promise the URL does not keep. The renderer prints the label from this field, so the
+        # field has to be true rather than aspirational.
+        scope = str(route.get("route_map_scope") or "")
+        stops = [s for s in _seq(route.get("stops_in_order")) if s]
+        url = str(route.get("verified_map_url") or "")
+        try:
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        except Exception:  # noqa: BLE001
+            query = {}
+        carries_waypoints = bool(query.get("waypoints") or query.get("via"))
+        mode = (query.get("travelmode") or [""])[0].lower()
+        if carries_waypoints and mode == "transit":
+            # Learned by opening one: Google Maps computes waypoints for driving, walking and
+            # cycling but NOT for transit -- the same URL that routes fine in walking mode
+            # answers "cannot calculate public transport directions" and shows nothing. This is
+            # checked whatever the declared scope says, because the URL returns no route either
+            # way. A multi-stop transit day therefore cannot have a true full-day button at all;
+            # the honest scope is primary_leg with the segment buttons as the navigation source,
+            # which is what the skill already says when a provider can navigate only one leg.
+            errors.append(
+                f"day {number}: the full-day button asks Google for a transit route with "
+                f"waypoints, and Google does not compute those -- it returns 'cannot "
+                f"calculate public transport directions' and no route. Drop the waypoints "
+                f"and set route_map_scope to 'primary_leg', so the label says route overview "
+                f"and the per-segment buttons carry the navigation.")
+        if scope == "multi_stop" and len(stops) > 2:
+            if not carries_waypoints:
+                errors.append(
+                    f"day {number}: route_map_scope is 'multi_stop' -- which prints the button as "
+                    f"a full-day route -- but its URL carries only an origin and a destination, "
+                    f"skipping {len(stops) - 2} intermediate stop(s). Either add the waypoints or "
+                    f"set route_map_scope to 'primary_leg' so the label matches what opens.")
+
+    if free_text:
+        notes.append(
+            "note: map endpoints written as free text rather than coordinates (each one is a "
+            "geocoder query -- open it and confirm the pin lands where the label says):\n    - "
+            + "\n    - ".join(free_text[:20])
+            + (f"\n    ... and {len(free_text) - 20} more" if len(free_text) > 20 else ""))
+    if checked:
+        notes.append(f"note: {checked} map link(s) had both endpoints as coordinates and were "
+                     f"distance-checked against the leg they belong to.")
+
+
 # Every plan check this script runs, in report order. A check that is written but never added
 # here does nothing at all, which is the one failure mode worse than not writing it.
-# save_trip_deliverables.py keeps its own copy of this list; extend it there too, or the save
-# path -- the only path that writes files a traveller keeps -- silently skips the new check.
+# save_trip_deliverables.py imports this tuple, so adding a check here also arms the save path --
+# the only path that writes files a traveller keeps.
 PLAN_CHECKS = (
     check_routes,
     check_walking_budget,
@@ -1598,6 +1898,9 @@ PLAN_CHECKS = (
     check_meal_reachability,
     check_budget,
     check_replan_context,
+    check_map_endpoints,
+    check_venue_quality,
+    check_booking_identity,
 )
 
 

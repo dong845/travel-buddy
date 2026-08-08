@@ -195,11 +195,15 @@ def full_verification() -> dict:
             {"domain": "sights_and_hours",
              "claims_checked": ["days[0].dining[0].venue_hours",
                                 "days[0].dining[0].hours_status",
+                                "days[0].dining[1].venue_hours",
+                                "days[0].dining[1].hours_status",
                                 "days[0].activities[0].time",
                                 "days[0].activities[1].detail"],
-             # Nothing under days[0].dining[1] on purpose: that card's hours_status is
-             # "unverified", so it claims nothing and the coverage rule demands nothing. Citing it
-             # anyway would make the 22f cases pass for the wrong reason.
+             # Both dining cards are cited now. They used to differ -- dining[1] carried
+             # hours_status "unverified" so the coverage rule demanded nothing for it -- but a
+             # card may no longer name a seating time while admitting nobody checked the hours,
+             # and render_final_trip_html requires every card to name one. So every card is
+             # researched, and every card has to be cited.
              "findings": []},
             {"domain": "booking_and_lodging",
              "claims_checked": ["booking_options.accommodations[0].nightly_cost_high",
@@ -1737,17 +1741,19 @@ def main() -> int:
 
     # Citing the card itself, rather than a field under it, is the same claim and must pass.
     report = full_verification()
-    report["domains"][2]["claims_checked"] = ["days[0].dining[0]", "days[0].activities[1].name"]
+    report["domains"][2]["claims_checked"] = ["days[0].dining[0]", "days[0].dining[1]",
+                                              "days[0].activities[1].name"]
     expect_ok("citing the dining card itself satisfies coverage", copy.deepcopy(base), report)
 
-    # A card promoted to researched pulls the requirement with it, so the rule cannot be dodged by
-    # adding cards after the report was written.
-    p = copy.deepcopy(base)
-    dinner = day(p, 1)["dining"][1]
-    dinner["venue_hours"] = "17:00-22:00"
-    dinner["hours_status"] = "researched"
-    expect_fail_naming("a newly researched card must be cited too", p,
-                       ["days[0].dining[1]", "Fixture Dinner", "researched"], full_verification())
+    # Dropping a card's pointers pulls the requirement with it, so the rule cannot be dodged by
+    # trimming the report after the plan was written. (This used to promote dining[1] from
+    # "unverified" to "researched" instead; every card is researched now, because a card may no
+    # longer name a seating time while admitting nobody checked the hours.)
+    report = full_verification()
+    report["domains"][2]["claims_checked"] = [c for c in report["domains"][2]["claims_checked"]
+                                              if "dining[1]" not in c]
+    expect_fail_naming("a card the report stopped citing must fail", copy.deepcopy(base),
+                       ["days[0].dining[1]", "Fixture Dinner", "verified"], report)
 
     # And the boundary that keeps it low-noise: a card whose hours_status claims nothing demands
     # nothing. A rule that fired on honest "unverified" cards would make every plan with a
@@ -1832,6 +1838,65 @@ def main() -> int:
     away[0]["area_or_venue"] = "Fixture activity A"   # same numbers, nobody at the lodging
     day(p, 1)["activities"] = away
     expect_ok("without a lodging activity the outbound leg stays outside the window", p)
+
+    # 23. The three defects a user found in a delivered plan, after every gate above had passed.
+    # A map URL parameter is a geocoder query, not a caption: the plan wrote its own Chinese
+    # display label into origin=, Google resolved "酒店（拉斯坎特拉斯海滨）" -- literally the word
+    # "hotel" plus a description -- to TAIWAN, and offered a 65-hour drive to the Canary Islands.
+    # check_link_targets called all 25 map links ok, because the host was right and the status was
+    # 200. The rule that catches it needs no geocoder: the straight line between a leg's endpoints
+    # cannot be longer than the distance that leg claims.
+    p = copy.deepcopy(base)
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["verified_map_url"] = ("https://uri.amap.com/navigation?from=120.5174,24.0615,Hotel"
+                               "&to=104.0700,30.6000,StopA&mode=bus")
+    expect_fail("an endpoint that geocoded to another country", p, "km apart in a straight line")
+
+    p = copy.deepcopy(base)
+    route = day(p, 1)["route"]
+    route["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=30.5723,104.0665"
+                                 "&destination=30.6570,104.0817&waypoints=30.6000,104.0700"
+                                 "&travelmode=transit")
+    expect_fail("a transit route with waypoints, which Google refuses to compute", p,
+                "does not compute those")
+
+    p = copy.deepcopy(base)
+    route = day(p, 1)["route"]
+    route["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=30.5723,104.0665"
+                                 "&destination=30.6570,104.0817&travelmode=walking")
+    expect_fail("a walking button over a distance nobody walks", p, "WALKING directions over")
+
+    # A venue with no quality signal is a taste assertion. The delivered plan shipped a dinner at a
+    # restaurant that returns no listing anywhere, and two lunches at venues that open at 20:00.
+    p = copy.deepcopy(base)
+    for key in ("rating_value", "rating_scale", "rating_count", "rating_source", "rating_url",
+                "rating_checked_at"):
+        day(p, 1)["dining"][0].pop(key, None)
+    expect_fail("a recommended venue with no rating at all", p, "needs a quality signal")
+
+    p = copy.deepcopy(base)
+    day(p, 1)["dining"][0]["rating_value"] = 3.1
+    expect_fail("a venue below the 3.5/5 floor", p, "below")
+
+    p = copy.deepcopy(base)
+    day(p, 1)["dining"][0]["hours_status"] = "unverified"
+    expect_fail("a meal put on the clock while nobody checked the hours", p,
+                "is a claim the venue is open then")
+
+    p = copy.deepcopy(base)
+    day(p, 1)["dining"][0]["rating_status"] = "none"
+    day(p, 1)["dining"][0]["rating_absence_reason"] = ""
+    expect_fail("no rating and no reason for its absence", p, "rating_absence_reason is empty")
+
+    # A comparison link that opens a city is not a link to the thing being compared. Because no
+    # button ever opened either hotel on the platform that sells it, nobody saw that one cost more
+    # than the traveller's whole budget cap and the other had no availability on those dates.
+    p = copy.deepcopy(base)
+    for option in p["booking_options"]["accommodations"]:
+        option["comparison_searches"][0]["search_url"] = (
+            "https://www.booking.com/searchresults.html?ss=Chengdu&checkin=2026-09-28"
+            "&checkout=2026-09-29&group_adults=2&no_rooms=1")
+    expect_fail("both hotels pointing at the same city search", p, "not scoped to this property")
 
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)

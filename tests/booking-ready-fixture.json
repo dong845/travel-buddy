@@ -120,7 +120,7 @@
         "comparison_searches": [
           {
             "platform": "Booking.com",
-            "search_url": "https://www.booking.com/searchresults.html?ss=Chengdu&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1",
+            "search_url": "https://www.booking.com/searchresults.html?ss=Fixture+Hotel+A&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1",
             "checked_at": "2026-07-30T10:00:00+08:00",
             "prefilled_fields": [
               "destination",
@@ -171,7 +171,7 @@
         "comparison_searches": [
           {
             "platform": "Booking.com",
-            "search_url": "https://www.booking.com/searchresults.html?ss=Chengdu&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1",
+            "search_url": "https://www.booking.com/searchresults.html?ss=Fixture+Hotel+B&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1",
             "checked_at": "2026-07-30T10:00:00+08:00",
             "prefilled_fields": [
               "destination",
@@ -265,8 +265,16 @@
           "backup_venue_name": "Fixture Lunch Backup",
           "backup_note": "Use if the first venue has a long queue.",
           "route_anchor": "Fixture activity A",
-          "venue_hours": "11:00-15:00",
-          "hours_status": "verified"
+          "venue_hours": "Mon-Sun 11:00-22:00",
+          "hours_status": "verified",
+          "rating_status": "verified",
+          "rating_value": 4.4,
+          "rating_scale": 5,
+          "rating_count": 812,
+          "rating_source": "Amap（门店页实读）",
+          "rating_url": "https://ditu.amap.com/place/B0FFFFFFFF",
+          "rating_checked_at": "2026-07-30",
+          "rating_absence_reason": null
         },
         {
           "meal": "dinner",
@@ -287,7 +295,16 @@
           "backup_venue_name": "Fixture Dinner Backup",
           "backup_note": "Use if no table is available.",
           "route_anchor": "Fixture activity B",
-          "hours_status": "unverified"
+          "hours_status": "verified",
+          "rating_status": "verified",
+          "rating_value": 4.4,
+          "rating_scale": 5,
+          "rating_count": 812,
+          "rating_source": "Amap（门店页实读）",
+          "rating_url": "https://ditu.amap.com/place/B0FFFFFFFF",
+          "rating_checked_at": "2026-07-30",
+          "rating_absence_reason": null,
+          "venue_hours": "Mon-Sun 11:00-22:00"
         }
       ],
       "route": {
@@ -303,7 +320,7 @@
         "route_logic": "Cluster the central stops and return before dinner to limit transfers.",
         "fallback_plan": "Use a licensed ride-hail only if the metro service is disrupted or mobility changes.",
         "duration_minutes": 73,
-        "distance_km": 11,
+        "distance_km": 23.1,
         "transfer_count": 2,
         "walking_burden": "Derived from segments: 20 minutes of walking across the day (0 km on foot). Flat throughout, with seating at each stop.",
         "cost_low": 8,
@@ -346,7 +363,7 @@
             "mode": "metro",
             "service_or_line": "Metro Line fixture",
             "duration_minutes": 18,
-            "distance_km": 2,
+            "distance_km": 7.7,
             "walking_minutes": 6,
             "transfer_count": 0,
             "cost_low": 2,
@@ -368,7 +385,7 @@
             "mode": "metro",
             "service_or_line": "Metro Line fixture",
             "duration_minutes": 30,
-            "distance_km": 5,
+            "distance_km": 11.4,
             "walking_minutes": 8,
             "transfer_count": 1,
             "cost_low": 3,
