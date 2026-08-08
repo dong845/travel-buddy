@@ -159,6 +159,7 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "opening_hours_recheck": "切换前请核验当前营业时间。",
             "per_person_suffix": "/ 人",
             "round_trip": "搜索往返行程",
+            "round_trip_in": "在 {provider} 搜索往返行程（已带入日期）",
             "compare_booking": "在 Booking.com 比较（已带入日期和住客）",
             "compare_platform_prefix": "在 ",
             "compare_platform_suffix": " 比较（已带入日期和住客）",
@@ -366,6 +367,7 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "unverified_banner_body",
     # Added with the booking-page fixes: the stated budget cap, dining opening hours and
     # their provenance, and the three intake spellings of entry status.
+    "round_trip_in",
     "budget_cap",
     "venue_hours_label",
     "rating_label",
@@ -658,8 +660,12 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         page,
     )
     page = re.sub(
-        r'(data-booking-purpose="round-trip-search"[^>]*>)Search round trip — ([^<]+)(</a>)',
-        lambda match: f"{match.group(1)}{labels['round_trip']} — {match.group(2).replace(' to ', labels['to'])}{match.group(3)}",
+        # The platform name sits inside the label so a card headed "Transavia" cannot open
+        # Skyscanner without saying so, the way the hotel button already names Booking.com.
+        # It is captured rather than translated: a provider name is a proper noun.
+        r'(data-booking-purpose="round-trip-search"[^>]*>)Search round trip in ([^—<]+) — ([^<]+)(</a>)',
+        lambda match: (f"{match.group(1)}{labels['round_trip_in'].replace('{provider}', match.group(2).strip())}"
+                       f" — {match.group(3).replace(' to ', labels['to'])}{match.group(4)}"),
         page,
     )
     page = re.sub(
@@ -1298,9 +1304,9 @@ def option_card(kind: str, item: dict) -> str:
         # "booking-ready" with no way to reach, price-check or availability-check the single
         # largest and most time-sensitive thing on it, while the hotels had three compared
         # candidates each.
-        actions.insert(0, booking_link("ground", item.get("round_trip_search_provider") or comparison_platform or provider, item.get("round_trip_search_checked_at") or checked_at, item.get("round_trip_search_url"), f"Search round trip — {as_text(item.get('outbound_date'))} to {as_text(item.get('return_date'))}", "round-trip-search", item.get("round_trip_prefilled_fields") if isinstance(item.get("round_trip_prefilled_fields"), list) else None))
+        actions.insert(0, booking_link("ground", item.get("round_trip_search_provider") or comparison_platform or provider, item.get("round_trip_search_checked_at") or checked_at, item.get("round_trip_search_url"), f"Search round trip in {as_text(item.get('round_trip_search_provider') or comparison_platform or provider)} — {as_text(item.get('outbound_date'))} to {as_text(item.get('return_date'))}", "round-trip-search", item.get("round_trip_prefilled_fields") if isinstance(item.get("round_trip_prefilled_fields"), list) else None))
     if kind == "flight":
-        actions.insert(0, booking_link("flight", item.get("round_trip_search_provider") or comparison_platform or provider, item.get("round_trip_search_checked_at") or checked_at, item.get("round_trip_search_url"), f"Search round trip — {as_text(item.get('outbound_date'))} to {as_text(item.get('return_date'))}", "round-trip-search", item.get("round_trip_prefilled_fields") if isinstance(item.get("round_trip_prefilled_fields"), list) else None))
+        actions.insert(0, booking_link("flight", item.get("round_trip_search_provider") or comparison_platform or provider, item.get("round_trip_search_checked_at") or checked_at, item.get("round_trip_search_url"), f"Search round trip in {as_text(item.get('round_trip_search_provider') or comparison_platform or provider)} — {as_text(item.get('outbound_date'))} to {as_text(item.get('return_date'))}", "round-trip-search", item.get("round_trip_prefilled_fields") if isinstance(item.get("round_trip_prefilled_fields"), list) else None))
     if kind == "hotel":
         actions.extend(hotel_comparison_links(item))
     if kind == "car":

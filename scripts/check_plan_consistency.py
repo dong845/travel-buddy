@@ -1710,6 +1710,26 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     # comparison search is different: its query string is written here, so the name is in it
     # by construction, and that is where the property-scoping guarantee belongs.
 
+    # The renderer labels direct_review_url "view the official direct-booking page", so a bare
+    # host root under it promises a booking page and delivers a front door. Two flight cards
+    # shipped pointing at transavia.com/ and tui.nl/ that way. An own-site link is allowed to
+    # carry no dates -- many carriers cannot be deep-linked at all -- but it has to be a page
+    # about this product rather than the company.
+    for kind in ("flights", "ground_transport", "accommodations", "rental_cars"):
+        for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get(kind))]:
+            label = str(option.get("property_name") or option.get("provider")
+                        or option.get("id") or "?")
+            direct = str(option.get("direct_review_url") or "")
+            if not direct:
+                continue
+            path = urllib.parse.urlparse(direct).path.strip("/")
+            if not path:
+                errors.append(
+                    f"{kind} '{label}': direct_review_url is {direct!r}, a bare home page, but the "
+                    f"button above it reads 'view the official direct-booking page'. Point it at "
+                    f"the page for this route or property, or drop the field so no button claims "
+                    f"more than it opens.")
+
     # A search button that does not carry the traveller's dates makes them type the trip in
     # again, which is the whole difference between a link and a lead. The plan declares
     # round_trip_prefilled_fields / prefilled_fields listing "outbound_date" and the rest, and

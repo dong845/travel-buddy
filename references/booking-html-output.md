@@ -109,6 +109,18 @@ dated comparison search is the **first** button on the card, and the airline's o
 and described as a channel entry rather than a quote for these dates. Do not invent the deep link;
 run the search on the provider and store the URL it produces.
 
+**A button names the platform it opens.** The hotel comparison button has always read "Compare on
+Booking.com"; the flight one read only "Search round trip", so a card headed *Transavia* opened
+Skyscanner and the traveller had no way to know before clicking. The machine gate was satisfied the
+whole time — `data-provider` carried the right host — which is the point: a provider attribute is
+checked by code, and a label is read by a person.
+
+**An own-site link points at the product, not the company.** `direct_review_url` renders under a
+button reading "view the official direct-booking page", so a bare host root there promises a booking
+page and delivers a front door; two flight cards shipped pointing at `transavia.com/` and `tui.nl/`.
+Carrying no dates is fine — most carriers cannot be deep-linked — but the page has to be about this
+route or this property. When there is no such page, drop the field so no button is rendered at all.
+
 **Two options that open the same page are one option shown twice.** The same check refuses a
 `review_url` or `round_trip_search_url` shared between candidates in any category. This is not
 tidiness: it shipped on flights as well as hotels, and a comparison whose two buttons land in the

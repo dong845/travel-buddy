@@ -2111,6 +2111,37 @@ def main() -> int:
     expect_fail("a leg five times longer than the gap between its own endpoints", p,
                 "apart (")
 
+    # 31. Booking convenience, which is a property of what a button opens rather than of how it
+    # is labelled. A search that does not carry the trip's dates makes the traveller type the
+    # journey in twice, and the prefilled-fields list was a promise the plan wrote about itself
+    # until it was compared to the URL beside it. Providers spell dates differently, so every
+    # common encoding counts.
+    p = copy.deepcopy(base)
+    flights = p["booking_options"].get("flights") or []
+    if len(flights) >= 1:
+        flights[0]["round_trip_search_url"] = "https://www.skyscanner.net/transport/flights/ams/lpa/"
+        expect_fail("a flight search URL with no dates in it", p, "does not carry the outbound date")
+
+    p = copy.deepcopy(base)
+    option = p["booking_options"]["accommodations"][0]
+    option["comparison_searches"][0]["search_url"] = (
+        "https://www.booking.com/searchresults.html?ss=" + "Fixture%20Hotel%20A")
+    expect_fail("a hotel search scoped to the property but stripped of its dates", p,
+                "does not carry the check-in date")
+
+    # A bare host root under a button that reads "view the official direct-booking page" promises
+    # a booking page and delivers a front door. Two flight cards shipped that way.
+    p = copy.deepcopy(base)
+    p["booking_options"]["accommodations"][0]["direct_review_url"] = "https://www.marriott.com"
+    expect_fail("a home page labelled as the official direct-booking page", p, "a bare home page")
+
+    # And the shape that is allowed: an own-site link with no dates is fine -- many carriers
+    # cannot be deep-linked at all -- as long as it is about this product.
+    p = copy.deepcopy(base)
+    p["booking_options"]["accommodations"][0]["direct_review_url"] = (
+        "https://www.marriott.com/hotels/fixture-hotel-a")
+    expect_ok("an own-site property page carrying no dates", p)
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 
