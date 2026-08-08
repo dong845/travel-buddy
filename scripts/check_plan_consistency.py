@@ -174,6 +174,23 @@ def _weekday_tokens() -> dict[str, int]:
         # stating the opposite of the truth. The AMBIGUOUS_WEEKDAY_TOKENS guards below are what
         # refuse them; they can only run on tokens the tokenizer still sees.
         "ma": 0, "di": 1, "do": 3,
+        # Japanese, French, Spanish, Italian, Portuguese, Korean. Same reason German and Dutch were
+        # added: an author copying hours off a venue's own site copies them in the venue's language,
+        # and until a language is in this table its rest day is invisible -- a Kyoto temple or a
+        # Paris bistro could be booked on the one day it is shut and every gate stayed green.
+        # Single CJK characters (月火水木金土日, 월화수목금토일) are matched without a word boundary,
+        # which the tokenizer already handles for Chinese.
+        "月曜日": 0, "火曜日": 1, "水曜日": 2, "木曜日": 3, "金曜日": 4, "土曜日": 5, "日曜日": 6,
+        "月曜": 0, "火曜": 1, "水曜": 2, "木曜": 3, "金曜": 4, "土曜": 5, "日曜": 6,
+        "lundi": 0, "mardi": 1, "mercredi": 2, "jeudi": 3, "vendredi": 4, "samedi": 5, "dimanche": 6,
+        "lun": 0, "mar": 1, "mer": 2, "jeu": 3, "ven": 4, "sam": 5, "dim": 6,
+        "lunes": 0, "martes": 1, "miércoles": 2, "miercoles": 2, "jueves": 3, "viernes": 4,
+        "sábado": 5, "sabado": 5, "domingo": 6,
+        "lunedì": 0, "lunedi": 0, "martedì": 1, "martedi": 1, "mercoledì": 2, "mercoledi": 2,
+        "giovedì": 3, "giovedi": 3, "venerdì": 4, "venerdi": 4, "sabato": 5, "domenica": 6,
+        "segunda-feira": 0, "terça-feira": 1, "terca-feira": 1, "quarta-feira": 2,
+        "quinta-feira": 3, "sexta-feira": 4,
+        "월요일": 0, "화요일": 1, "수요일": 2, "목요일": 3, "금요일": 4, "토요일": 5, "일요일": 6,
     })
     return tokens
 
@@ -195,6 +212,10 @@ _AMBIGUOUS_TOKEN = re.compile(
     r"(?<![A-Za-z])(?:{})\.?(?![A-Za-z])".format("|".join(sorted(AMBIGUOUS_WEEKDAY_TOKENS))),
     re.IGNORECASE)
 _FIRST_TIME = re.compile(r"\d{1,2}[:：]\d{2}")
+# What may legitimately follow a weekday prefix: time windows, the separators between them,
+# and nothing else. Any other word means the string says something this parser does not
+# understand, and guessing is how "Montag geschlossen" became "open on Mondays".
+_ONLY_HOURS = re.compile(r"[\s,，、;；/&+和]*(?:\d{1,2}[:：]\d{2}\s*[-–—~～至到]\s*\d{1,2}[:：]\d{2}[\s,，、;；/&+和]*)+")
 
 
 def has_ambiguous_weekday(hours: str) -> bool:
@@ -214,7 +235,8 @@ _WEEKDAY_TOKEN = re.compile(
         cn="|".join(sorted((t for t in _WEEKDAY_TOKENS if not t.isascii()), key=len, reverse=True)),
         en="|".join(sorted((t for t in _WEEKDAY_TOKENS if t.isascii()), key=len, reverse=True))),
     re.IGNORECASE)
-_WEEKDAY_RANGE_SEP = re.compile(r"\s*(?:[-–—~～]|至|到|through|thru|to)\s*", re.IGNORECASE)
+_WEEKDAY_RANGE_SEP = re.compile(r"\s*(?:[-–—~～]|至|到|through|thru|to|\ba\b|\bà\b|\bau\b|~)\s*",
+                                re.IGNORECASE)
 _WEEKDAY_LIST_SEP = re.compile(r"\s*(?:[、,，/&+]|and|和|以及)\s*", re.IGNORECASE)
 _EVERY_DAY = re.compile(
     r"^\s*(?:daily|open\s+daily|every\s*day|täglich|taeglich|dagelijks|每日|每天|天天)\s*[:：]?\s*",
@@ -277,7 +299,17 @@ def _parse_weekday_prefix(text: str) -> tuple[frozenset[int] | None, str]:
     if not days:
         return None, text
     rest = text[position:].lstrip(" \t:：,，、")
-    if _WEEKDAY_TOKEN.search(rest) or _CLOSED_MARKER.match(rest):
+
+    # Accept the prefix only when everything after it is time windows and separators. Enumerating
+    # closed-markers instead was a whitelist, and it inverted the answer on the most ordinary
+    # German string there is: "Montag geschlossen, 11:00-22:00" means shut on Monday, and the
+    # parser -- matching "Montag", then failing to recognise "geschlossen" because _CLOSED_MARKER
+    # only anchors at the head -- returned {Monday} as the OPEN set. The gate then approves a
+    # dinner on the one day the kitchen is dark, and refuses it with full confidence on every day
+    # it is actually open. The same shape appears as "gesloten" (nl), "休息" (zh), "Ruhetag",
+    # "fermé", "chiuso", "cerrado", and any wording nobody has thought of yet -- which is exactly
+    # why this now fails closed on the unknown word rather than trying to list them.
+    if _WEEKDAY_TOKEN.search(rest) or not _ONLY_HOURS.fullmatch(rest):
         return None, rest
     return frozenset(days), rest
 
@@ -584,9 +616,17 @@ def check_clock_closure(plan: dict, errors: list[str], notes: list[str]) -> None
         start_point = str(_route(day).get("start") or "").strip()
         end_point = str(_route(day).get("end") or "").strip()
         returns_home = bool(start_point) and start_point == end_point
+        # ...unless a timed activity happens AT the lodging. A hotel breakfast puts the traveller
+        # there during the window, so the leg out of it is inside the window after all, and
+        # dropping it hid a morning that cannot happen: breakfast to 09:10, a 25-minute leg, and
+        # the next stop starting 09:15. The traveller arrives twenty minutes after it began and
+        # every gate was green.
+        timed_at_start = any(str(_obj(a).get("area_or_venue") or "").strip() == start_point
+                             for _, _, a in timed) if start_point else False
+
         interior = []
         for index, segment in enumerate(segments):
-            leaves_lodging = index == 0 and start_point and \
+            leaves_lodging = index == 0 and start_point and not timed_at_start and \
                 str(segment.get("from") or "").strip() == start_point
             returns_lodging = returns_home and index == len(segments) - 1 and \
                 str(segment.get("to") or "").strip() == end_point
@@ -638,10 +678,20 @@ def check_day_internals(plan: dict, errors: list[str], notes: list[str]) -> None
             stated = int(_num(_route(day).get("transfer_count")))
             non_walking = sum(1 for seg in segments if not _is_walk(seg))
             within_segments = int(sum(_num(seg.get("transfer_count")) for seg in segments))
-            if stated > len(segments):
+            # The upper bound is the interchanges the day can actually contain: one per boundary
+            # between consecutive legs, plus every interchange declared INSIDE a leg. Bounding by
+            # the segment count alone was wrong for the ordinary case of one ticketed journey with
+            # two changes -- with three segments the lower bound demanded 3 and this demanded at
+            # most 3, so exactly one value passed and it was not necessarily the true one. An
+            # author whose only way past a gate is to write a number they know is wrong will write
+            # it, and the figure on the page stops meaning anything.
+            ceiling = max(len(segments) - 1, 0) + within_segments
+            if stated > ceiling:
                 errors.append(
-                    f"day {number}: route.transfer_count={stated} exceeds the {len(segments)} segments "
-                    f"it summarises ({non_walking} of them are not walking).")
+                    f"day {number}: route.transfer_count={stated} exceeds the {ceiling} this day can "
+                    f"contain -- {max(len(segments) - 1, 0)} boundaries between its {len(segments)} "
+                    f"legs ({non_walking} of them not walking), plus {within_segments} declared "
+                    f"inside a leg.")
             # A day cannot contain fewer interchanges than happen inside its own legs. This is a
             # lower bound rather than equality on purpose: bus -> walk -> bus is two segments with
             # no internal transfer each, yet one vehicle change for the traveller, so summing the
@@ -857,6 +907,20 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
                     f"Dutch but Sunday in Spanish and Italian. Write the day in full "
                     f"('Mittwoch-Samstag', 'mardi-samedi') or in English ('Tue-Sat'), so the "
                     f"closed-day check can run instead of quietly skipping this venue.")
+                continue
+            if open_days is None and _WEEKDAY_TOKEN.search(hours):
+                # The string names a weekday and the parser still could not settle the open set --
+                # so it says something more than "these days, these hours", and the most common
+                # something is a rest day: "Montag geschlossen", "周一休息", "Ruhetag Montag",
+                # "lundi fermé". Reading those as the open set inverts the answer exactly, which is
+                # how a dinner gets approved on the one day the kitchen is dark. Refusing is right;
+                # refusing SILENTLY is not, because the closed-day check then just stops running.
+                errors.append(
+                    f"day {number}: dining venue '{venue}' has venue_hours {hours!r}, which names a "
+                    f"weekday but does not reduce to open days plus times, so the closed-day check "
+                    f"cannot run on it. Rewrite it as the days the venue is OPEN -- a rest day of "
+                    f"Monday becomes 'Tue-Sun 11:00-22:00' -- because a string that states a "
+                    f"closure reads as its own opposite to any parser that guesses.")
                 continue
             if not opening:
                 errors.append(
@@ -1092,10 +1156,21 @@ def check_replan_context(plan: dict, errors: list[str], notes: list[str]) -> Non
 
 REQUIRED_DOMAINS = {"entry", "transport", "sights_and_hours", "booking_and_lodging", "seasonality"}
 REQUIRED_AUDITS = {"consistency", "completeness"}
-# The light tier keeps the domain whose facts are weekday-keyed and close a door in the traveller's
-# face when wrong. The two audits are never optional at any tier: they need no network and, in the
-# run that made them mandatory, produced 27 of 55 findings and 5 of the 6 criticals.
-LIGHT_TIER_DOMAINS = {"sights_and_hours"}
+# The light tier keeps the two domains whose facts strand a traveller rather than disappoint one:
+# `sights_and_hours`, because opening hours are weekday-keyed and a wrong one is a locked door, and
+# `transport`, because the leg between two places is the single point of failure in any day. The
+# first draft dropped `transport` on the reasoning that a trip with no flight has no transport to
+# check -- which is exactly backwards for the trip the light tier is FOR: a two-night rail city
+# break is nothing but transport, and nobody would have verified that the named train runs on that
+# date, in that direction, at that fare.
+#
+# What light still drops, and why each is defensible: `entry` re-derives a fact the research budget
+# forbids re-litigating once the traveller has stated it; `booking_and_lodging`'s airline-window and
+# codeshare checks have no subject where there is no flight; `seasonality` matters where the plan
+# schedules a sunset or leans on a seasonal service, and a short indoor-anchored city break does
+# neither. The two audits are never optional at any tier: they need no network and, in the run that
+# made them mandatory, produced 27 of 55 findings and 5 of the 6 criticals.
+LIGHT_TIER_DOMAINS = {"sights_and_hours", "transport"}
 
 
 def required_domains_for(plan: dict | None) -> tuple[set[str], str]:
@@ -1171,10 +1246,16 @@ def required_domains_for(plan: dict | None) -> tuple[set[str], str]:
         severity = constraints.get("allergy_severity")
         if severity not in {"none", "preference"}:
             disqualifiers.append(f"allergy_severity={severity!r} (not a settled 'none'/'preference')")
-        elif _seq(constraints.get("dietary_or_religious_needs")):
+        elif severity == "none" and _seq(constraints.get("dietary_or_religious_needs")):
+            # Only "none" is untrusted here, because "none" is what new_plan_skeleton.py writes
+            # automatically and --from-intake never overwrites -- so prose beside it means nobody
+            # typed the severity. "preference" is a value an operator can only have entered on
+            # purpose, and treating it as suspect billed a vegetarian on a three-night rail trip
+            # for four extra verification agents, roughly 400k tokens, to re-derive a fact they had
+            # already stated. A tier nobody can reach is a tier nobody uses.
             disqualifiers.append(
-                "dietary needs stated in prose while allergy_severity is still 'none'/'preference' "
-                "-- type the severity before claiming the light tier")
+                "dietary needs stated in prose while allergy_severity is still the default 'none' "
+                "-- type the real severity before claiming the light tier")
 
         # Same shape for mobility: a prose note nobody converted into a number is a constraint
         # nobody can measure, and dropping four verification domains on the strength of an

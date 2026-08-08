@@ -167,8 +167,19 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "ticket_prefix": "查看门票：",
             "unverified_banner_title": "未经事实核验",
             "unverified_banner_body": (
-                "本计划跳过了五域并行核验。其中的票价、营业时间、入境规则与可订状态"
+                "本计划没有任何核验记录。其中的票价、营业时间、入境规则与可订状态"
                 "均未与运营方或官方来源核对过。请把每一个数字都当作估算，预订前自行核实。"),
+            "pill_flight": "机票", "pill_hotel": "酒店", "pill_ticket": "门票",
+            "pill_car": "租车", "schematic_aria": "按游览顺序的路线示意图",
+            "schematic_start": "起点", "schematic_end": "终点",
+            "nonstop": "直飞", "stops_suffix": "次中转", "unit_km": "公里",
+            "why_providers": "为什么选这些服务商：",
+            "constraints_heading": "你的硬性约束",
+            "constraints_severity": "过敏严重程度：",
+            "constraints_dietary": "饮食限制：",
+            "constraints_mobility": "行动能力：",
+            "constraints_walk_cap": "单段连续步行上限：",
+            "constraints_card": "过敏卡 —— 到店请出示这段文字：",
             "plan_status_prefix": "行程状态 · ",
             "arrival": "抵达方式：",
             "pace": "节奏：",
@@ -476,15 +487,15 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         ">Sources used<": f">{labels['sources_used']}<",
         ">Recheck before purchase<": f">{labels['recheck_before']}<",
         ">No purchase options were requested for this plan.<": f">{labels['no_purchase_options']}<",
-        '<span class="pill">flight<': '<span class="pill">机票<',
-        '<span class="pill">hotel<': '<span class="pill">酒店<',
-        '<span class="pill">ticket<': '<span class="pill">门票<',
-        '<span class="pill">car<': '<span class="pill">租车<',
-        'aria-label="Schematic route in visit order"': 'aria-label="按游览顺序的路线示意图"',
-        '>Start</text>': '>起点</text>',
-        '>End</text>': '>终点</text>',
-        '>Start</tspan>': '>起点</tspan>',
-        '>End</tspan>': '>终点</tspan>',
+        '<span class="pill">flight<': f'<span class="pill">{labels.get("pill_flight", "flight")}<',
+        '<span class="pill">hotel<': f'<span class="pill">{labels.get("pill_hotel", "hotel")}<',
+        '<span class="pill">ticket<': f'<span class="pill">{labels.get("pill_ticket", "ticket")}<',
+        '<span class="pill">car<': f'<span class="pill">{labels.get("pill_car", "car")}<',
+        'aria-label="Schematic route in visit order"': f'aria-label="{labels.get("schematic_aria", "Schematic route in visit order")}"',
+        '>Start</text>': f'>{labels.get("schematic_start", "Start")}</text>',
+        '>End</text>': f'>{labels.get("schematic_end", "End")}</text>',
+        '>Start</tspan>': f'>{labels.get("schematic_start", "Start")}</tspan>',
+        '>End</tspan>': f'>{labels.get("schematic_end", "End")}</tspan>',
         "Price not currently verified": labels["price_unverified"],
         "Time not currently verified": labels["time_unverified"],
         "Up to ": labels["up_to"] + " ",
@@ -533,14 +544,24 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
             f'<p class="meta ticket-note"><strong>{labels.get("ticket_note_label", "Ticket: ")}</strong>',
         " per person · ": f" {labels['per_person_suffix']} · ",
         ">Not fact-checked<": f">{labels.get('unverified_banner_title', 'Not fact-checked')}<",
-        ("This plan skipped the five-domain verification pass. Its fares, opening hours, "
-         "entry rules, and availability have not been checked against operators or official "
-         "sources. Treat every figure as an estimate and verify before booking."):
+        # NOTE: this key must stay byte-identical to the sentence emitted at :2079. It is a
+        # substitution table keyed on the rendered English, so editing the banner without editing
+        # this key leaves English on a Chinese page and the i18n gate then fails the file.
+        ("No verification pass is recorded for this plan. Its fares, opening hours, entry rules, "
+         "and availability have not been checked against operators or official sources. Treat "
+         "every figure as an estimate and verify before booking."):
             labels.get("unverified_banner_body",
-                       "This plan skipped the five-domain verification pass. Its fares, opening "
-                       "hours, entry rules, and availability have not been checked against "
-                       "operators or official sources. Treat every figure as an estimate and "
-                       "verify before booking."),
+                       "No verification pass is recorded for this plan. Its fares, opening hours, "
+                       "entry rules, and availability have not been checked against operators or "
+                       "official sources. Treat every figure as an estimate and verify before "
+                       "booking."),
+        ">Your constraints<": f">{labels.get('constraints_heading', 'Your constraints')}<",
+        "Allergy severity: ": labels.get("constraints_severity", "Allergy severity: "),
+        "Dietary needs: ": labels.get("constraints_dietary", "Dietary needs: "),
+        "Mobility: ": labels.get("constraints_mobility", "Mobility: "),
+        "Maximum continuous walking: ": labels.get("constraints_walk_cap", "Maximum continuous walking: "),
+        "Allergy card — show this to staff: ": labels.get("constraints_card", "Allergy card — show this to staff: "),
+        "Why these providers: ": labels.get("why_providers", "Why these providers: "),
         "Plan status · ": labels["plan_status_prefix"],
         "Arrival: ": labels["arrival"],
         " · Pace: ": f" · {labels['pace']}",
@@ -627,9 +648,16 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
     )
     page = re.sub(r'(\d+) minutes?\b', lambda match: f"{match.group(1)}{labels['minute']}", page)
     page = re.sub(r'(\d+) min\b', lambda match: f"{match.group(1)}{labels['minute']}", page)
-    page = re.sub(r'\b0 stop\(s\)', '直飞', page)
-    page = re.sub(r'\b(\d+) stop\(s\)', lambda match: f"{match.group(1)}次中转", page)
-    page = re.sub(r'(\d+(?:\.\d+)?) km\b', lambda match: f"{match.group(1)}公里", page)
+    # These three were hardcoded Chinese inside a function every non-English page runs, so a French
+    # or Japanese itinerary shipped "82公里" on every segment and "直飞" on every flight card while
+    # all four gates reported it valid -- the exact failure the i18n rule exists to prevent, in the
+    # one branch that rule cannot see. English fallbacks keep an incomplete label set readable
+    # instead of leaking a third language into it.
+    page = re.sub(r'\b0 stop\(s\)', labels.get("nonstop", "non-stop"), page)
+    page = re.sub(r'\b(\d+) stop\(s\)',
+                  lambda match: f"{match.group(1)}{labels.get('stops_suffix', ' stop(s)')}", page)
+    page = re.sub(r'(\d+(?:\.\d+)?) km\b',
+                  lambda match: f"{match.group(1)}{labels.get('unit_km', ' km')}", page)
     page = re.sub(
         r'<p class="eyebrow">Day ([^<]+) · ([^<]+)</p>',
         lambda match: f'<p class="eyebrow">{labels["day"]}{match.group(1)}{labels["day_suffix"]} · {match.group(2)}</p>',
@@ -1263,6 +1291,12 @@ def route_segment_links(route: dict, currency: object) -> str:
                 f"Walk {as_text(segment.get('walking_minutes'))} min" if segment.get("walking_minutes") is not None else "",
                 f"{as_text(segment.get('transfer_count'))} transfer(s)" if segment.get("transfer_count") is not None else "",
                 money(segment.get("cost_low"), segment.get("cost_high"), segment.get("currency", currency)),
+                # validate_plan REQUIRES fare_basis on every segment and nothing printed it, so on
+                # the measured plan 15 segments carried "KVB single ticket Preisstufe 1b EUR 4.00,
+                # kvb.koeln, checked 2026-08-05" and the page showed a bare number the traveller
+                # had no way to question. A price with no basis is the black box the whole source
+                # discipline exists to prevent.
+                as_text(segment.get("fare_basis"), ""),
                 as_text(segment.get("journey_instruction"), ""),
                 as_text(segment.get("arrival_instruction"), ""),
                 as_text(segment.get("fallback_note"), ""),
@@ -1654,6 +1688,16 @@ def validate_plan(plan: dict) -> list[str]:
     for source in sources:
         if not isinstance(source, dict) or not all(source.get(key) for key in ("name", "url", "source_type", "accessed_at")) or not is_https(source.get("url")):
             errors.append("Every source needs name, HTTPS url, source_type, and accessed_at.")
+        elif not source.get("claim_or_decision_supported"):
+            # Silently defaulting to "Plan evidence" turned an authoring slip into eighteen
+            # identical rows: the measured plan wrote this field as `supports`, the renderer read
+            # `claim_or_decision_supported`, nothing objected, and the register that exists to say
+            # WHAT each source proves said nothing at all, eighteen times. A source register whose
+            # every line reads the same is not a register.
+            errors.append(
+                "Every source needs claim_or_decision_supported saying what it proves -- the field "
+                "is spelled that way in templates/final-trip-plan.json, and a register whose rows "
+                "all read alike tells the traveller nothing about which fact rests on which page.")
         elif not is_iso_datestamp(source["accessed_at"]):
             errors.append("Every source.accessed_at must be an ISO date or date-time.")
     options = plan.get("booking_options") if isinstance(plan.get("booking_options"), dict) else {}
@@ -2077,20 +2121,64 @@ def render_unlocalized(plan: dict) -> str:
     # has to see it too, so the gap stays visible where the decision actually gets made.
     unverified_banner = (
         '<section id="verification-notice" class="panel"><p class="warning">'
-        '<strong>Not fact-checked</strong> — This plan skipped the five-domain verification pass. '
+        '<strong>Not fact-checked</strong> — No verification pass is recorded for this plan. '
         'Its fares, opening hours, entry rules, and availability have not been checked against '
         'operators or official sources. Treat every figure as an estimate and verify before booking.'
         "</p></section>"
-        if plan.get("verification_status") == "unverified"
+        # Show the banner unless the plan says, in as many words, that it WAS verified. The test
+        # used to be `== "unverified"`, which made the safe state the one nobody writes: the
+        # skeleton emits `None`, a plan that never reached the verification stage keeps `None`, and
+        # replan_trip.py deliberately resets to `None` -- so the default of every plan in the repo
+        # rendered as fully fact-checked. A page whose status nobody set is a page nobody checked,
+        # and it is the traveller standing at an airline counter who pays for the difference.
+        if plan.get("verification_status") != "verified"
         else ""
+    )
+    # The traveller's own hard constraints, on the page they carry. The block was validated here
+    # and rendered nowhere: a severe triple allergy's entire mechanical effect was "run four more
+    # verification agents", and `allergy_card_text` -- the sentence written to hand to restaurant
+    # staff -- lived in the JSON only. Whether the allergy appeared at all depended on the author
+    # separately retyping it into dining prose. SKILL.md's own rule is that a required field never
+    # displayed is research the traveller paid for and cannot see; this was the sharpest case of it
+    # in the file, because the field exists to be read out loud at a table.
+    constraints = trip.get("traveler_constraints") if isinstance(trip.get("traveler_constraints"), dict) else {}
+    constraint_rows = []
+    severity = str(constraints.get("allergy_severity") or "").strip()
+    if severity and severity != "none":
+        constraint_rows.append(
+            f'<p><strong>Allergy severity: </strong><span class="pill">{esc(severity)}</span></p>')
+    for field, label in (("dietary_or_religious_needs", "Dietary needs"),
+                         ("mobility_notes", "Mobility")):
+        values = [v for v in constraints.get(field, []) if isinstance(v, str) and v.strip()]
+        if values:
+            items = "".join(f"<li>{esc(v)}</li>" for v in values)
+            constraint_rows.append(f'<p><strong>{label}: </strong></p><ul>{items}</ul>')
+    cap = constraints.get("max_continuous_walking_minutes")
+    if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+        constraint_rows.append(
+            f'<p><strong>Maximum continuous walking: </strong>{cap} min</p>')
+    card = constraints.get("allergy_card_text")
+    if isinstance(card, str) and card.strip():
+        constraint_rows.append(
+            '<p><strong>Allergy card — show this to staff: </strong></p>'
+            f'<blockquote class="allergy-card">{esc(card)}</blockquote>')
+    constraints_panel = (
+        '<section id="traveller-constraints" class="panel"><h2>Your constraints</h2>'
+        + "".join(constraint_rows) + "</section>"
+        if constraint_rows else ""
     )
     regional = plan.get("regional_service_context") if isinstance(plan.get("regional_service_context"), dict) else {}
     platform_note = (
-        f'<p class="meta">Platform selection: {esc(regional.get("booking_platform_selection_note"))}</p>'
-        if regional.get("booking_platform_selection_note")
-        else ""
+        # selection_basis is REQUIRED by validate_plan and was printed nowhere, so the page said
+        # which map and booking providers were used and never why those suit this destination --
+        # the whole point of routing by market rather than by brand habit. It goes here, beside the
+        # platform note it explains.
+        (f'<p class="meta">Why these providers: {esc(regional.get("selection_basis"))}</p>'
+         if regional.get("selection_basis") else "")
+        + (f'<p class="meta">Platform selection: {esc(regional.get("booking_platform_selection_note"))}</p>'
+           if regional.get("booking_platform_selection_note") else "")
     )
-    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{unverified_banner}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div>{cap_fact}<div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div></section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(" · ".join(part for part in (as_text(plan["transport_preference"]["mode"]), minutes(overview.get("overall_duration_minutes")), as_text(overview.get("overall_distance_km"), "") + " km" if overview.get("overall_distance_km") is not None else "", money(overview.get("cost_low"), overview.get("cost_high"), trip["currency"]), " · ".join(as_text(note) for note in overview.get("notes", []) if note)) if part))}</p><a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details open><summary>Recheck before purchase</summary><p>{recheck}</p></details></section></main></body></html>'''
+    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{unverified_banner}{constraints_panel}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div>{cap_fact}<div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div></section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(" · ".join(part for part in (as_text(plan["transport_preference"]["mode"]), minutes(overview.get("overall_duration_minutes")), as_text(overview.get("overall_distance_km"), "") + " km" if overview.get("overall_distance_km") is not None else "", money(overview.get("cost_low"), overview.get("cost_high"), trip["currency"]), " · ".join(as_text(note) for note in overview.get("notes", []) if note)) if part))}</p><a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details open><summary>Recheck before purchase</summary><p>{recheck}</p></details></section></main></body></html>'''
 
 
 def render(plan: dict) -> str:

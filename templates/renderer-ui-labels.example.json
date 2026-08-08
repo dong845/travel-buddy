@@ -165,5 +165,22 @@
   "entry_visa_required": "visa required in advance",
   "entry_unverified": "unverified",
   "unverified_banner_title": "Not fact-checked",
-  "unverified_banner_body": "This plan skipped the five-domain verification pass. Its fares, opening hours, entry rules, and availability have not been checked against operators or official sources. Treat every figure as an estimate and verify before booking."
+  "unverified_banner_body": "This plan skipped the five-domain verification pass. Its fares, opening hours, entry rules, and availability have not been checked against operators or official sources. Treat every figure as an estimate and verify before booking.",
+  "constraints_heading": "Your constraints",
+  "constraints_severity": "Allergy severity: ",
+  "constraints_dietary": "Dietary needs: ",
+  "constraints_mobility": "Mobility: ",
+  "constraints_walk_cap": "Maximum continuous walking: ",
+  "constraints_card": "Allergy card — show this to staff: ",
+  "pill_flight": "flight",
+  "pill_hotel": "hotel",
+  "pill_ticket": "ticket",
+  "pill_car": "car",
+  "schematic_aria": "Schematic route in visit order",
+  "schematic_start": "Start",
+  "schematic_end": "End",
+  "nonstop": "non-stop",
+  "stops_suffix": " stop(s)",
+  "unit_km": " km",
+  "why_providers": "Why these providers: "
 }

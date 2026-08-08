@@ -13,7 +13,9 @@ Run:  python tests/test_plan_consistency.py
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -24,17 +26,93 @@ CHECKER = ROOT / "scripts" / "check_plan_consistency.py"
 FIXTURE = ROOT / "tests" / "booking-ready-fixture.json"
 
 
+# Loaded once, by path, so the module under test is the file the CLI runs rather than whatever an
+# import path happens to resolve to.
+_spec = importlib.util.spec_from_file_location("_checker_under_test", CHECKER)
+CHECKER_MODULE = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(CHECKER_MODULE)
+
+
 def run(plan: dict, verification: dict | None = None) -> tuple[int, str]:
+    """Run every check in-process and rebuild the output main() would have printed.
+
+    This used to shell out for each of ~70 assertions. Measured: 111 ms per subprocess against
+    0.8 ms in-process -- 132x, and 8.9 s of an 11.4 s suite spent starting interpreters rather than
+    testing anything. A slow suite gets run less often, which costs more coverage than any single
+    check buys.
+
+    What the subprocess DID buy is real and is not thrown away: argument parsing, reading the file
+    from disk, the exit code, the stdout/stderr split, and the plan-path binding that
+    check_verification needs. Those are the CLI contract, so cli_contract_cases() below still
+    shells out -- a handful of times instead of seventy. This helper reproduces main()'s output
+    format exactly (notes to stdout, "PLAN CONSISTENCY FAILED" plus dashed errors to stderr) so
+    every existing assertion, which matches on those strings, keeps testing what it always did.
+    """
+    # main() rejects a non-object plan before any check sees it, and one case below depends on
+    # that: a plan that is a list must exit 2 with an ERROR line rather than reaching a check and
+    # raising. Reproducing the guard here is not decoration -- without it the in-process runner is
+    # more permissive than the CLI it stands in for, which is the one way this refactor could
+    # silently weaken the suite.
+    if not isinstance(plan, dict):
+        return 2, f"ERROR: plan JSON must be an object, got {type(plan).__name__}.\n"
+
+    errors: list[str] = []
+    notes: list[str] = []
+    for check in CHECKER_MODULE.PLAN_CHECKS:
+        check(plan, errors, notes)
+    if verification is not None:
+        CHECKER_MODULE.check_verification(
+            verification, errors, notes, plan=plan, plan_path="plan.json")
+    out = "".join(f"note: {note}\n" for note in notes)
+    if errors:
+        out += "PLAN CONSISTENCY FAILED\n" + "".join(f"- {e}\n" for e in errors)
+        return 1, out
+    return 0, out + "PLAN CONSISTENCY OK\n"
+
+
+def cli_contract_cases(base: dict) -> list[str]:
+    """The handful of behaviours only a real process can prove.
+
+    Kept deliberately small: these are about argv, file IO and exit codes, not about any individual
+    rule, so one clean case and one failing case cover the contract that in-process running cannot.
+    """
+    failures: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
-        plan_path = Path(tmp) / "plan.json"
-        plan_path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
-        cmd = [sys.executable, str(CHECKER), str(plan_path)]
-        if verification is not None:
-            report_path = Path(tmp) / "verification.json"
-            report_path.write_text(json.dumps(verification, ensure_ascii=False), encoding="utf-8")
-            cmd += ["--verification", str(report_path)]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-    return proc.returncode, proc.stdout + proc.stderr
+        good = Path(tmp) / "plan.json"
+        good.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(CHECKER), str(good)],
+                              capture_output=True, text=True)
+        if proc.returncode != 0 or "PLAN CONSISTENCY OK" not in proc.stdout:
+            failures.append(f"cli: a clean plan must exit 0 with OK on stdout, got {proc.returncode}")
+
+        broken = copy.deepcopy(base)
+        broken["days"][0]["route"]["duration_minutes"] = 999
+        bad = Path(tmp) / "bad.json"
+        bad.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(CHECKER), str(bad)],
+                              capture_output=True, text=True)
+        if proc.returncode != 1 or "PLAN CONSISTENCY FAILED" not in proc.stderr:
+            failures.append("cli: a defective plan must exit 1 with the failure banner on stderr")
+        if "- day" not in proc.stderr:
+            failures.append("cli: individual errors must be dashed lines on stderr")
+
+        missing = subprocess.run([sys.executable, str(CHECKER), str(Path(tmp) / "nope.json")],
+                                 capture_output=True, text=True)
+        if missing.returncode != 2 or "ERROR" not in missing.stderr:
+            failures.append("cli: an unreadable plan must exit 2 with an ERROR line, not a traceback")
+        if "Traceback" in missing.stderr:
+            failures.append("cli: an unreadable plan produced a traceback")
+
+        report = full_verification()
+        rp = Path(tmp) / "verification.json"
+        rp.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(CHECKER), str(good), "--verification", str(rp)],
+            capture_output=True, text=True)
+        # The report names "plan.json"; the file on disk is also plan.json, so the binding holds.
+        if proc.returncode != 0:
+            failures.append(f"cli: --verification with a matching report must pass, got {proc.stderr[:200]}")
+    return failures
 
 
 def day(plan: dict, number: int) -> dict:
@@ -161,6 +239,144 @@ def full_verification() -> dict:
     }
 
 
+def required_fields_reach_the_page_cases(base: dict) -> list[str]:
+    """A field the renderer REQUIRES and never prints is research the traveller paid for and cannot
+    see -- SKILL.md states that rule and three fields were violating it.
+
+    Sentinels rather than an eyeball: fill the field with a token nothing else could produce, render,
+    and look for it. `fare_basis` was the worst of the three, because a price with no basis is the
+    black box the whole source discipline exists to prevent -- on the measured plan, 15 segments
+    carried a researched fare and the page showed bare numbers.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import render  # noqa: PLC0415 - import after path setup
+
+    failures: list[str] = []
+    plan = copy.deepcopy(base)
+    for index, segment in enumerate(day(plan, 1)["route"]["segments"]):
+        segment["fare_basis"] = f"ZZ-FARE-{index}-ZZ"
+    plan["regional_service_context"]["selection_basis"] = "ZZ-SELECTION-BASIS-ZZ"
+    for index, source in enumerate(plan["sources"]):
+        source["claim_or_decision_supported"] = f"ZZ-CLAIM-{index}-ZZ"
+    page = render(plan)
+
+    for index in range(len(day(plan, 1)["route"]["segments"])):
+        if f"ZZ-FARE-{index}-ZZ" not in page:
+            failures.append(f"render: segment {index + 1}'s fare_basis never reaches the page, so a "
+                            f"traveller sees a price with no basis")
+    if "ZZ-SELECTION-BASIS-ZZ" not in page:
+        failures.append("render: regional_service_context.selection_basis is required and never "
+                        "printed, so the page says which providers were used and never why")
+    missing = [i for i in range(len(plan["sources"])) if f"ZZ-CLAIM-{i}-ZZ" not in page]
+    if missing:
+        failures.append(f"render: {len(missing)} source rows do not show what they support -- a "
+                        f"register whose lines all read alike is not a register")
+    return failures
+
+
+def language_coverage_cases(base: dict) -> list[str]:
+    """Four defects that all reduce to the same thing: the gate answering in a language it does not
+    speak, or a page speaking one nobody asked for."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import render  # noqa: PLC0415 - import after path setup
+
+    failures: list[str] = []
+    day_one = day(base, 1)["date"]  # a Monday, which every closed-day case below relies on
+
+    def hours_verdict(hours: str) -> str:
+        plan = copy.deepcopy(base)
+        card = day(plan, 1)["dining"][1]
+        card["venue_hours"] = hours
+        card["hours_status"] = "verified"
+        _, out = run(plan)
+        if "closed-day check cannot run" in out:
+            return "unreadable"
+        if "different days in different languages" in out:
+            return "ambiguous"
+        if "only cover" in out:
+            return "closed"
+        return "open"
+
+    # 1. A rest-day marker must never be read as the OPEN set. "Montag geschlossen, 11:00-22:00"
+    #    means shut on Monday; the parser matched "Montag", failed to recognise "geschlossen", and
+    #    returned {Monday} as the days the venue is open -- approving a dinner on the one day the
+    #    kitchen is dark, and refusing it on every day it is not.
+    for closed in ("Montag geschlossen, 11:00-22:00", "maandag gesloten 11:00-22:00",
+                   "周一休息 11:00-22:00", "Mon closed 11:00-22:00",
+                   "Sonntag Ruhetag 11:00-22:00", "lundi fermé 11:00-22:00"):
+        if hours_verdict(closed) != "unreadable":
+            failures.append(f"hours: {closed!r} must be refused as unreadable, never parsed -- "
+                            f"reading a closure as an opening inverts the answer exactly")
+
+    # 2. Languages beyond en/zh/de/nl. Until a language is in the table its rest day is invisible,
+    #    so a Kyoto temple or a Paris bistro books on the day it is shut with every gate green.
+    #    day 1 is a Monday, so a Tuesday-to-Sunday venue must be reported closed.
+    for shut_on_monday in ("火曜日-日曜日 11:00-22:00", "mardi-dimanche 11:00-22:00",
+                           "martes a domingo 11:00-22:00", "martedì-domenica 11:00-22:00",
+                           "화요일-일요일 11:00-22:00"):
+        if hours_verdict(shut_on_monday) != "closed":
+            failures.append(f"hours: {shut_on_monday!r} excludes {day_one}'s weekday and must be "
+                            f"reported closed")
+
+    # 3. Ambiguity still takes precedence over the generic message, because it names the exact fix.
+    if hours_verdict("Ma-Sa 11:00-22:00") != "ambiguous":
+        failures.append("hours: an ambiguous abbreviation must get its own message, not the "
+                        "generic unreadable one")
+
+    # 4. No renderer-owned Chinese may reach a page in a third language. Ten strings were hardcoded
+    #    inside a function every non-English page runs, so a French itinerary shipped 82公里 on every
+    #    segment and 酒店 on every booking card while all four gates called it valid.
+    french = copy.deepcopy(base)
+    french["trip"]["language"] = "fr"
+    french["ui_labels"] = json.loads(
+        (ROOT / "templates" / "renderer-ui-labels.example.json").read_text(encoding="utf-8"))
+    page = render(french)
+    body = re.sub(r"<(style|script).*?</\1>", "", page, flags=re.S)
+    leaked = sorted(set(re.findall(r"[\u4e00-\u9fff]+", re.sub(r"<[^>]+>", " ", body))))
+    if leaked:
+        failures.append(f"i18n: a French page carries renderer-owned Chinese: {leaked}")
+    return failures
+
+
+def constraints_panel_cases(base: dict) -> list[str]:
+    """The traveller's hard constraints must reach the page they carry.
+
+    trip.traveler_constraints was validated by the renderer and rendered nowhere. For the run that
+    prompted it, a severe triple allergy's entire mechanical effect was "run four more verification
+    agents" -- and `allergy_card_text`, the sentence written to hand to restaurant staff, existed
+    only in the JSON. Whether the allergy appeared on the page at all depended on the author having
+    separately retyped it into free-text dining prose.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import render  # noqa: PLC0415 - import after path setup
+
+    failures: list[str] = []
+    plan = copy.deepcopy(base)
+    plan["trip"]["traveler_constraints"] = {
+        "dietary_or_religious_needs": ["ZZ-DAIRY-ZZ", "ZZ-NUT-ZZ"],
+        "allergy_severity": "severe",
+        "allergy_card_text": "ZZ-CARD-TEXT-ZZ",
+        "max_continuous_walking_minutes": 27,
+        "mobility_notes": ["ZZ-MOBILITY-ZZ"],
+    }
+    page = render(plan)
+    for sentinel, label in (("ZZ-DAIRY-ZZ", "a dietary need"), ("ZZ-NUT-ZZ", "a second dietary need"),
+                            ("ZZ-CARD-TEXT-ZZ", "the allergy card text"),
+                            ("ZZ-MOBILITY-ZZ", "a mobility note"), ("27", "the walking cap")):
+        if sentinel not in page:
+            failures.append(f"constraints: {label} ({sentinel}) never reaches the page")
+    if 'id="traveller-constraints"' not in page:
+        failures.append("constraints: the panel is missing entirely")
+
+    # A plan with no constraints must not grow an empty panel -- an empty heading reads as
+    # "we checked and there is nothing", which is a different claim from "nobody asked".
+    bare = copy.deepcopy(base)
+    bare["trip"].pop("traveler_constraints", None)
+    if 'id="traveller-constraints"' in render(bare):
+        failures.append("constraints: a plan carrying none rendered an empty panel")
+    return failures
+
+
 def verification_banner_cases(base: dict) -> list[str]:
     """A plan saved with --unverified must say so on the page, not only in a JSON field.
 
@@ -186,8 +402,23 @@ def verification_banner_cases(base: dict) -> list[str]:
     if 'id="verification-notice"' in render(verified):
         failures.append("banner: a verified plan rendered a notice it should not have")
 
-    if 'id="verification-notice"' in render(copy.deepcopy(base)):
-        failures.append("banner: a plan with no verification_status rendered a notice")
+    # A plan with NO verification_status must show the banner, not hide it. This case used to
+    # assert the opposite, and that was the defect: the banner fired only on the literal string
+    # "unverified", while the skeleton writes None, a plan that never reached the verification
+    # stage keeps None, and replan_trip.py deliberately resets to None. So the default state of
+    # every plan in the repo rendered as fully fact-checked, and a run that pointed
+    # render_final_trip_html.py at the workspace landed both artifacts, passed validate_trip_html,
+    # and produced a page a traveller would book from with no warning on it at all.
+    if 'id="verification-notice"' not in render(copy.deepcopy(base)):
+        failures.append("banner: a plan with no verification_status must still warn -- "
+                        "unset is not verified")
+
+    for absent in (None, "", "researched", "in_progress"):
+        probe = copy.deepcopy(base)
+        probe["verification_status"] = absent
+        if 'id="verification-notice"' not in render(probe):
+            failures.append(f"banner: verification_status={absent!r} must warn; only the literal "
+                            f"'verified' may suppress the notice")
 
     zh = copy.deepcopy(base)
     zh["trip"]["language"] = "中文"
@@ -370,8 +601,13 @@ def main() -> int:
     _cpc = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_cpc)
 
     def tier(plan: dict) -> str:
+        # Light keeps the two domains whose facts strand a traveller rather than disappoint one:
+        # weekday-keyed opening hours, and the leg between two places. The first draft kept only
+        # hours, on the reasoning that a trip with no flight has no transport to check -- backwards
+        # for the very trip this tier exists for, since a two-night rail break is nothing but
+        # transport and nobody would have verified the train runs that day, that way, at that fare.
         required, _ = _cpc.required_domains_for(plan)
-        return "light" if required == {"sights_and_hours"} else "full"
+        return "light" if required == _cpc.LIGHT_TIER_DOMAINS else "full"
 
     if tier(light_plan()) != "light":
         failures.append("tier: a short single-city rail plan with no constraints should qualify as light")
@@ -574,6 +810,24 @@ def main() -> int:
     segments = day(p, 1)["route"]["segments"]
     day(p, 1)["route"]["transfer_count"] = sum(s.get("transfer_count") or 0 for s in segments)
     expect_ok("transfer_count equal to the segment declarations is fine", p)
+
+    # The ceiling used to be the segment COUNT, which collided with the lower bound on the most
+    # ordinary shape there is: one ticketed journey with two changes. With three legs the floor
+    # demanded 3 and the ceiling allowed at most 3, so exactly one value passed and it was not
+    # necessarily the true one -- and an author whose only way past a gate is a number they know is
+    # wrong writes it, after which the figure on the page means nothing. The real ceiling is one
+    # interchange per boundary between legs, plus every interchange declared inside a leg.
+    p = copy.deepcopy(base)
+    route = day(p, 1)["route"]
+    route["segments"][0]["transfer_count"] = 2      # one ticketed leg with two changes
+    route["transfer_count"] = 5                     # 2 boundaries + 3 declared in-leg
+    expect_ok("a leg carrying its own interchanges can be summarised honestly", p)
+
+    p = copy.deepcopy(base)
+    route = day(p, 1)["route"]
+    route["segments"][0]["transfer_count"] = 2
+    route["transfer_count"] = 6                     # one above the ceiling
+    expect_fail("transfer_count above what the day can contain", p, "exceeds the")
 
     # A category declared included but never itemised makes the headline total a black box --
     # exactly what the breakdown exists to prevent.
@@ -990,6 +1244,32 @@ def main() -> int:
     expect_ok("a plan with no replan_context is unaffected", copy.deepcopy(base))
 
     failures += verification_banner_cases(base)
+    # The CLI contract, proven by real processes: argv, file IO, exit codes, the stdout/stderr
+    # split. Every other assertion in this file now runs in-process, 132x faster.
+    failures += required_fields_reach_the_page_cases(base)
+    failures += language_coverage_cases(base)
+    # The clock check drops the leg out of the lodging as happening before the day's window --
+    # unless a timed activity happens AT the lodging, which puts the traveller there during it. A
+    # hotel breakfast made that leg free, hiding a morning that could not happen.
+    start_point = day(base, 1)["route"]["start"]
+    shape = [{"time": "08:30", "name": "Hotel breakfast", "area_or_venue": start_point,
+              "duration_minutes": 70, "detail": "x"},
+             {"time": "09:45", "name": "First stop", "area_or_venue": "Fixture activity A",
+              "duration_minutes": 60, "detail": "y"},
+             {"time": "11:00", "name": "Second stop", "area_or_venue": "Fixture activity B",
+              "duration_minutes": 60, "detail": "z"}]
+    p = copy.deepcopy(base)
+    day(p, 1)["activities"] = copy.deepcopy(shape)
+    expect_fail("lodging activity makes the outbound leg count", p, "does not close")
+
+    p = copy.deepcopy(base)
+    away = copy.deepcopy(shape)
+    away[0]["area_or_venue"] = "Fixture activity A"   # same numbers, nobody at the lodging
+    day(p, 1)["activities"] = away
+    expect_ok("without a lodging activity the outbound leg stays outside the window", p)
+
+    failures += constraints_panel_cases(base)
+    failures += cli_contract_cases(base)
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
