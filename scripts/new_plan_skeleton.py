@@ -596,6 +596,13 @@ def main() -> int:
                  "price_basis": "per_room_per_night", "price_status": "estimate",
                  "trip_cost_low": 0, "trip_cost_high": 0, "currency": currency,
                  "price_checked_at": DATE, "availability_status": "unknown",
+                 # The page you open to read the price publishes the score beside it, so these
+                 # cost one read rather than a second errand.
+                 "guest_rating_status": "verified", "guest_rating_value": 0,
+                 "guest_rating_scale": 10, "guest_rating_count": 0,
+                 "guest_rating_source": f"{TODO}where the score was read",
+                 "guest_rating_url": f"{TODO}https://…the property on that platform",
+                 "guest_rating_checked_at": DATE, "guest_rating_absence_reason": None,
                  "taxes_and_fees_status": f"{TODO}taxes and fees", "cancellation_terms": f"{TODO}cancellation",
                  "accessibility_or_location_note": f"{TODO}access note", "arrival_access_note": f"{TODO}arrival access",
                  "key_area_access_note": f"{TODO}access to planned areas",

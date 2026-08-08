@@ -2059,6 +2059,58 @@ def main() -> int:
     p["trip"]["destination_coords"] = {"lat": 0, "lon": 0}
     expect_fail("destination_coords left at the skeleton's zeros", p, "still at its placeholder")
 
+    # 29. Hotels were judged on price and location and nothing else -- a traveller asked why the
+    # standard that applies to a dinner did not apply to a week of nights, and the answer was
+    # that guest_rating_* existed only as a field one plan invented, enforced and rendered by
+    # nothing. Booking publishes out of 10 where Google publishes out of 5, so the scale rides
+    # with the value.
+    p = copy.deepcopy(base)
+    for key in ("guest_rating_value", "guest_rating_scale", "guest_rating_count",
+                "guest_rating_source"):
+        p["booking_options"]["accommodations"][0].pop(key, None)
+    expect_fail("a hotel with no guest rating at all", p, "needs the same quality evidence")
+
+    p = copy.deepcopy(base)
+    p["booking_options"]["accommodations"][0]["guest_rating_value"] = 6.4
+    expect_fail("a hotel below the 7.0/10 floor", p, "below the 7.0/10 floor")
+
+    # The floor is applied in one scale, so a 5-point score must be converted rather than
+    # compared raw -- 3.4/5 is 6.8/10 and fails; comparing 3.4 against 7.0 would fail every
+    # Google-scored property ever entered.
+    p = copy.deepcopy(base)
+    option = p["booking_options"]["accommodations"][0]
+    option["guest_rating_scale"] = 5
+    option["guest_rating_value"] = 4.4
+    expect_ok("a 4.4/5 hotel, which is 8.8/10 and fine", p)
+
+    p = copy.deepcopy(base)
+    option = p["booking_options"]["accommodations"][0]
+    option["guest_rating_status"] = "none"
+    option["guest_rating_absence_reason"] = ""
+    expect_fail("no hotel rating and no reason for its absence", p, "with no reason")
+
+    # 30. Two route defects that every existing gate passed, both introduced by swapping
+    # coordinates into a plan whose numbers were written before it had any.
+    p = copy.deepcopy(base)
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["mode"] = "步行"
+    seg["distance_km"] = 1.3
+    seg["duration_minutes"] = 6
+    expect_fail("a 1.3 km walk given six minutes", p, "which is running")
+
+    # A leg whose endpoints belong to a different pair of stops keeps every other rule happy:
+    # both coordinates are real places in the right city, and the distance between them is
+    # plausible. What gives it away is that the leg claims to be five times longer than the gap
+    # between its own ends.
+    p = copy.deepcopy(base)
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["distance_km"] = 30.0
+    seg["duration_minutes"] = 45
+    seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=30.5723,104.0665"
+                               "&destination=30.6000,104.0700&travelmode=transit")
+    expect_fail("a leg five times longer than the gap between its own endpoints", p,
+                "apart (")
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 

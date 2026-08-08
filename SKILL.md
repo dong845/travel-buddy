@@ -249,6 +249,24 @@ So every dining card carries:
 
 `check_plan_consistency.py` enforces all of this; it cannot tell you a venue is good, only that you never looked.
 
+**A hotel is judged the same way, and for longer.** Somebody sleeps there for a week, so
+`guest_rating_value` with its `guest_rating_scale` (Booking and Agoda publish out of 10, Google and
+TripAdvisor out of 5 — a bare 8.5 means nothing without it), `guest_rating_count` and
+`guest_rating_source` are required, or `guest_rating_status: "none"` with a reason for a property
+too new to have reviews. **Below 7.0/10 fails**: on Booking's own published wording 7 is "good" and
+6 is "pleasant", which is the polite end of the scale where the complaints begin. Between 7 and 8 is
+reported rather than failed, and needs a sentence in `selection_rationale` saying what makes it
+worth a week of nights. The score costs nothing extra — it is printed on the same page you opened to
+read the price and check the dates are sellable.
+
+Neither floor can tell you about **the reviews underneath the average**. A 4.3 from 3,000 diners
+hides 300 unhappy ones, and whether that matters depends entirely on what they were unhappy about:
+"slow service" is noise for this traveller, "a 20-minute walk from the nearest bus stop" is
+disqualifying for one with a stated walking limit. No gate can read that. Skim the recent negative
+reviews of anything you are about to recommend for a whole week or a farewell dinner, and if the
+complaints land on a constraint this traveller actually stated, say so on the card or pick something
+else.
+
 Read [references/booking-html-output.md](references/booking-html-output.md) before researching booking links, using OpenCLI, or producing the page. Run `python scripts/check_plan_consistency.py <plan.json>` before rendering: it decides in code what prose cannot be trusted to hold — route totals summed from their own segments, walking figures derived rather than asserted, every meal anchored to a stop on that day's route and checked against the venue's opening hours, calendar coverage without gaps over a window that runs forwards, a departure day that is a checkout rather than an extra night, budget totals that match the rows they claim to sum, every category the total claims to include actually itemised in the breakdown, no negative leg quietly cancelling a real one, and a day that never claims fewer interchanges than its own segments declare. Fix what it reports rather than arguing with it. Run `python scripts/validate_trip_html.py <final.html> --expected-days N` before delivery; add `--require-booking-type flight`, `ground`, `hotel`, and/or `ticket` only when those choices are required, and add `--transport-mode self-drive` or `public-transit` to enforce the selected mobility branch. It also fails any button whose named provider is not the host its URL opens, and prints a `note:` for each button whose provider name has no matchable token — read those notes, because they are the only links the gate could not decide for you. Fix every reported issue. Then run `python scripts/check_link_targets.py <final.html>`, which follows every outbound button and reports where it actually lands: a page that names the right provider and carries every required attribute can still open a dead host or redirect onto someone else's site. It fails only on what survives any user agent — a hard 4xx/5xx or an off-domain redirect — and reports everything else as `unverified`, because a provider's answer depends on the agent that asked: the same Google Flights URL returns 200 unredirected to a browser and an `unsupported` page to a script, and an earlier check called that broken when it was not. Read every `unverified` line and resolve it by opening the link yourself; do not let a clean exit stand in for that. Do not output a booking-ready HTML page while essential dates, party size, budget basis, entry feasibility, or mobility mode remains unknown; return to targeted intake instead.
 
 ## 5. Replan incrementally
@@ -295,6 +313,8 @@ Before delivering a recommendation or plan, verify:
 - every dining card's rating is **visible on the page**, not merely present in the JSON — `validate_trip_html.py` fails a card that prints none, because a rating stored and never shown is the same defect as a rating never gathered;
 - every dining card carries a rating with its scale, count and source (or `rating_status: "none"` with a reason), names the venue as its map provider indexes it, and has verified hours for the weekday it is scheduled on — a scheduled meal is a claim the venue is open;
 - every accommodation option has a **property-scoped** booking link, and its price and availability were read off that page rather than estimated;
+- every search button carries the trip's own dates, so it opens a filled-in search rather than a blank form — and where a provider cannot be deep-linked with dates at all, the dated comparison button is the first one on the card and the provider's own link says on the card that it is a channel entry;
+- hotels carry a guest rating on the same terms as restaurants, and nothing below 7.0/10 is recommended without a reason;
 - the parallel verification in [references/verification.md](references/verification.md) ran concurrently before delivery, its report covers all five truth domains **and both auditors** (`consistency`, `completeness`) with every `claims_checked` a list of pointers that resolve, and every `wrong` or `misleading` finding is either fixed in the plan or explicitly accepted by the traveller — a plan saved with `--unverified` carries `verification_status: unverified` and renders a "not fact-checked" banner on the page, so never describe such a page as booking-ready;
 - a date change went through `scripts/replan_trip.py` and [references/replanning.md](references/replanning.md) rather than a hand edit, every `replan_context.must_reverify` entry it raised is resolved, and the plan was re-verified — a shifted plan carries the *old* verification, which was never true of the new weekdays;
 - no irreversible action is represented as completed without user approval.

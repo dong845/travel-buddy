@@ -426,6 +426,42 @@ def activity_on_foot_minutes(day: dict) -> int:
     return total
 
 
+def check_implied_speed(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A leg's distance and its duration have to be survivable by the mode that connects them.
+
+    Both halves of this shipped. A "6 minute" walk between two coordinates 1.1 km apart is
+    11 km/h -- a run, written when the leg had no coordinates and never revisited once it did.
+    The reverse also passes every other gate: a leg whose numbers are fine but whose endpoints
+    belong to a different pair of stops looks like a bus averaging 2 km/h.
+
+    The bounds are deliberately wide. Walking is capped at 6 km/h because a brisk walk is 5 and
+    anything past 6 is jogging; transit is floored at 4 km/h, which is slower than walking and
+    therefore only fires on numbers that cannot describe a bus at all. A rule tight enough to
+    argue with is a rule people learn to route around.
+    """
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        number = day.get("number")
+        for index, seg in enumerate(_segments(day), start=1):
+            minutes = _num(seg.get("duration_minutes"))
+            km = _num(seg.get("distance_km"))
+            if minutes <= 0 or km <= 0:
+                continue
+            kmh = km / (minutes / 60.0)
+            mode = str(seg.get("mode") or "")
+            walking = ("步行" in mode) or ("walk" in mode.casefold())
+            if walking and kmh > 6.0:
+                errors.append(
+                    f"day {number} segment {index}: {km:g} km on foot in {minutes:g} minutes is "
+                    f"{kmh:.1f} km/h, which is running. Give the leg the time the walk actually "
+                    f"takes -- this is a traveller with a stated walking limit, so an optimistic "
+                    f"number here understates the burden the whole plan is built around.")
+            elif not walking and kmh < 4.0 and km > 2.0:
+                errors.append(
+                    f"day {number} segment {index}: {km:g} km by {mode or 'transit'} in "
+                    f"{minutes:g} minutes is {kmh:.1f} km/h, slower than walking. Either the "
+                    f"duration or the distance belongs to a different leg.")
+
+
 def check_walking_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
     """The traveller's accessibility constraint is decided here, not in adjectives.
 
@@ -1633,6 +1669,8 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     that works: it is stable, shareable, tracker-free, and lands on the one property.
     """
     stays: dict[str, list[tuple[str, str]]] = {}
+    low: list[str] = []
+    thin: list[str] = []
     for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
         name = str(option.get("property_name") or option.get("id") or "?")
         key = _property_key(name)
@@ -1672,6 +1710,49 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     # comparison search is different: its query string is written here, so the name is in it
     # by construction, and that is where the property-scoping guarantee belongs.
 
+    # A search button that does not carry the traveller's dates makes them type the trip in
+    # again, which is the whole difference between a link and a lead. The plan declares
+    # round_trip_prefilled_fields / prefilled_fields listing "outbound_date" and the rest, and
+    # until now that list was a promise the same run wrote about itself: nothing compared it to
+    # the URL sitting beside it. Providers encode dates differently -- Skyscanner writes 270108,
+    # KAYAK writes 2027-01-08 -- so every common spelling counts as present.
+    def _date_forms(value: str) -> list[str]:
+        try:
+            d = dt.date.fromisoformat(str(value)[:10])
+        except Exception:  # noqa: BLE001 - a malformed date is reported by the date checks
+            return []
+        return [d.isoformat(), d.strftime("%Y%m%d"), d.strftime("%y%m%d"),
+                d.strftime("%d-%m-%Y"), d.strftime("%d/%m/%Y"), d.strftime("%m/%d/%Y"),
+                d.strftime("%d.%m.%Y")]
+
+    def _dates_in_url(url: str, dates: list[tuple[str, str]], where: str) -> None:
+        if not url:
+            return
+        haystack = urllib.parse.unquote_plus(url)
+        for label, value in dates:
+            forms = _date_forms(value)
+            if forms and not any(f in haystack for f in forms):
+                errors.append(
+                    f"{where}: the search URL does not carry the {label} ({value}), so it opens a "
+                    f"blank search the traveller has to fill in again. Run the search on the "
+                    f"provider with the trip's own dates and store the URL it produces.")
+
+    options = _obj(plan.get("booking_options"))
+    for kind in ("flights", "ground_transport"):
+        for option in [_obj(o) for o in _seq(options.get(kind))]:
+            label = str(option.get("provider") or option.get("id") or "?")
+            _dates_in_url(str(option.get("round_trip_search_url") or ""),
+                          [("outbound date", option.get("outbound_date")),
+                           ("return date", option.get("return_date"))],
+                          f"{kind} '{label}' round-trip search")
+    for option in [_obj(o) for o in _seq(options.get("accommodations"))]:
+        label = str(option.get("property_name") or option.get("id") or "?")
+        for search in [_obj(s) for s in _seq(option.get("comparison_searches"))]:
+            _dates_in_url(str(search.get("search_url") or ""),
+                          [("check-in date", option.get("check_in")),
+                           ("check-out date", option.get("check_out"))],
+                          f"accommodation '{label}' comparison search")
+
     # Two "competing" options that open the same page are one option shown twice. The rule was
     # written for hotels and the same defect shipped on flights: both candidates in a delivered
     # plan carried an identical round-trip search URL, so the comparison compared nothing.
@@ -1691,9 +1772,57 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                         f"that open the same page are one option shown twice.")
                 seen.setdefault((field, url), label)
 
+    # Hotels were judged on price and location and nothing else. The traveller asked for the
+    # same standard as restaurants, and it had never existed: a plan could recommend a 6.1/10
+    # property and every gate stayed green. Booking and Agoda publish out of 10, Google and
+    # TripAdvisor out of 5, so the scale travels with the value or the number means nothing.
+    for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
+        name = str(option.get("property_name") or option.get("id") or "?")
+        status = str(option.get("guest_rating_status") or "").lower()
+        if status == "none":
+            if not str(option.get("guest_rating_absence_reason") or "").strip():
+                errors.append(
+                    f"accommodation '{name}': guest_rating_status is 'none' with no reason. A new "
+                    f"property with no reviews yet can still be the right call -- say which.")
+            continue
+        missing = [k for k in ("guest_rating_value", "guest_rating_scale", "guest_rating_count",
+                               "guest_rating_source")
+                   if option.get(k) in (None, "")]
+        if missing:
+            errors.append(
+                f"accommodation '{name}': missing {', '.join(missing)}. A place someone sleeps for "
+                f"a week needs the same quality evidence as a place they eat one dinner at, and "
+                f"the platform that sells it publishes one on the page you already opened to read "
+                f"the price.")
+            continue
+        scale = _num(option.get("guest_rating_scale")) or 10
+        if scale not in (5, 10):
+            errors.append(f"accommodation '{name}': guest_rating_scale must be 5 or 10, got "
+                          f"{scale:g}.")
+            continue
+        out_of_ten = _num(option.get("guest_rating_value")) * (10.0 / scale)
+        count = _num(option.get("guest_rating_count"))
+        if out_of_ten < 7.0:
+            errors.append(
+                f"accommodation '{name}': guest rating {_num(option.get('guest_rating_value')):g}"
+                f"/{scale:g} ({out_of_ten:.1f}/10) is below the 7.0/10 floor. On Booking's own "
+                f"published wording 7 is 'good' and 6 is 'pleasant', which is the polite end of a "
+                f"scale where the complaints start -- pick another property, or say in "
+                f"selection_rationale what makes this one worth a week of nights anyway.")
+        elif out_of_ten < 8.0:
+            low.append(f"accommodation '{name}' -- {out_of_ten:.1f}/10")
+        if count and count < 50:
+            thin.append(f"accommodation '{name}' -- only {count:g} reviews")
+
     unknown = [str(o.get("property_name")) for o in
                [_obj(x) for x in _seq(_obj(plan.get("booking_options")).get("accommodations"))]
                if str(o.get("availability_status") or "").lower() == "unknown"]
+    if low:
+        notes.append("note: accommodation rated below 8.0/10 -- defensible, but say why in "
+                     "selection_rationale:\n    - " + "\n    - ".join(low))
+    if thin:
+        notes.append("note: accommodation whose score rests on few reviews:\n    - "
+                     + "\n    - ".join(thin))
     if unknown:
         notes.append("note: accommodation whose availability on the selling platform was never "
                      "checked -- one such card shipped sold out:\n    - " + "\n    - ".join(unknown))
@@ -1889,7 +2018,8 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
     # of those, i.e. it would have rejected two ordinary trips to catch nothing extra.
     ANCHOR_RADIUS_KM = 2500.0
 
-    def endpoints_of(url: str, where: str, declared_km: float | None) -> None:
+    def endpoints_of(url: str, where: str, declared_km: float | None,
+                     ratio_check: bool = True) -> None:
         nonlocal checked
         pairs = _map_endpoints(url)
         if not pairs:
@@ -1924,6 +2054,23 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
                         f"a point on another continent while staying the right distance from its "
                         f"partner, so the leg-length rule cannot see it.")
         located = [p for _, p, _ in coords if p is not None]
+        if len(located) == 2 and declared_km and ratio_check:
+            straight_now = _great_circle_km(located[0], located[1])
+            # The other direction of the leg-length rule, and it catches a different mistake.
+            # A road follows the ground, so it runs 1.1x to 1.6x the straight line; a declared
+            # distance several times the gap between its own endpoints means the endpoints are
+            # not the ones the leg describes. That is how a day shipped with two stops swapped:
+            # both coordinates were real places in the right city and the right distance apart,
+            # so the bounding-box and leg-length rules both passed, while segment 1 pointed at
+            # stop 3. Only applied above 1 km, because the ratio is noise on a 200 m walk that
+            # follows a seafront.
+            if straight_now >= 1.0 and declared_km > straight_now * 3.0:
+                errors.append(
+                    f"{where}: declares {declared_km:g} km but its two endpoints are only "
+                    f"{straight_now:.1f} km apart ({declared_km / straight_now:.1f}x). A road is "
+                    f"1.1-1.6x its straight line, so at this ratio the endpoints are probably not "
+                    f"the stops this leg names -- check that the URL matches the segment's own "
+                    f"from/to rather than another pair on the same day.")
         if len(located) == 2:
             checked += 1
             straight = _great_circle_km(located[0], located[1])
@@ -1957,9 +2104,11 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
         for alt in [_obj(a) for a in _seq(route.get("alternative_map_links"))]:
             endpoints_of(str(alt.get("url") or ""),
                          f"day {number} route alternative ({alt.get('provider')})",
-                         _num(route.get("distance_km")))
+                         _num(route.get("distance_km")), ratio_check=False)
+        multi = len([s for s in _seq(route.get("stops_in_order")) if s]) > 2
         endpoints_of(str(route.get("verified_map_url") or ""),
-                     f"day {number} route", _num(route.get("distance_km")))
+                     f"day {number} route", _num(route.get("distance_km")),
+                     ratio_check=not multi)
 
         # A walking URL over a distance nobody walks is a mode error the distance rule cannot
         # see, because the distance itself is right: one plan's departure-day button asked
@@ -2023,7 +2172,8 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
 
     overview = _obj(plan.get("transport_overview"))
     endpoints_of(str(overview.get("overall_route_map_url") or ""),
-                 "transport_overview", _num(overview.get("overall_distance_km")) or None)
+                 "transport_overview", _num(overview.get("overall_distance_km")) or None,
+                 ratio_check=False)
 
     declared_anchor = bool(anchor)
     if checked and anchor_point is None and declared_anchor:
@@ -2055,6 +2205,7 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
 PLAN_CHECKS = (
     check_routes,
     check_walking_budget,
+    check_implied_speed,
     check_clock_closure,
     check_day_internals,
     check_cross_references,

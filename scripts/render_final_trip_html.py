@@ -236,6 +236,7 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "outbound": "去程：",
             "return": "返程：",
             "hotel_location": "位置与通勤：",
+            "guest_rating_label": "住客评分：",
             "hotel_fit": "适配原因：",
             "provider": "供应商：",
             "compared": "比较平台：",
@@ -551,6 +552,7 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         "Return: ": labels["return"],
         "Station and access: ": labels.get("station_access", "Station and access: "),
         "Location and access: ": labels["hotel_location"],
+        "Guest rating: ": labels.get("guest_rating_label", "Guest rating: "),
         "Why it fits: ": labels["hotel_fit"],
         "Destination essentials": labels["destination_essentials"],
         "Budget breakdown": labels["budget_breakdown"],
@@ -1207,6 +1209,11 @@ def option_detail_list(kind: str, item: dict) -> str:
     elif kind == "hotel":
         rows.extend(
             (
+                # The guest score sits above location and price because it is the field that
+                # decides whether the other two are worth having, and because it was collected
+                # and rendered nowhere at all until a traveller asked why hotels were not judged
+                # the way restaurants are.
+                hotel_rating_line(item),
                 f'<li><strong>Location and access: </strong>{esc(item.get("neighborhood"))} · {esc(item.get("address_or_location_reference"))} · {esc(item.get("arrival_access_note"))} · {esc(item.get("key_area_access_note"))}</li>',
                 f'<li><strong>Why it fits: </strong>{esc(item.get("selection_rationale"))}</li>',
                 f'<li><strong>Availability: </strong>{esc(item.get("availability_status"))} · <strong>Price status: </strong>{esc(item.get("price_status"))} · <strong>Price checked: </strong>{stamp(item.get("price_checked_at"))}</li>',
@@ -1443,6 +1450,32 @@ def route_segment_links(route: dict, currency: object) -> str:
         primary = map_link(segment.get("map_provider"), segment.get("map_checked_at"), segment.get("verified_map_url"), f"Open this segment in {as_text(segment.get('map_provider'))}", segment_number=index, link_kind=as_text(segment.get("map_link_kind"), "directions"))
         rows.append(f'''<li class="route-segment" data-route-segment="{index}"><div><strong>{esc(segment.get("from"))} → {esc(segment.get("to"))}</strong><p class="meta">{esc(details)}</p></div>{primary}{alternative_map_links(segment.get("alternative_map_links"))}</li>''')
     return f'<ol class="segment-list">{"".join(rows)}</ol>'
+
+
+def hotel_rating_line(item: dict) -> str:
+    """The guest score, its count and where it was read, as a row in the option card."""
+    status = str(item.get("guest_rating_status") or "").strip().casefold()
+    if status == "none":
+        reason = item.get("guest_rating_absence_reason")
+        return (f'<li class="option-rating" data-rating-status="none"><strong>Guest rating: '
+                f'</strong>no public rating{" · " + esc(reason) if reason else ""}</li>')
+    value = item.get("guest_rating_value")
+    if value is None:
+        return ""
+    scale = item.get("guest_rating_scale") or 10
+    count = item.get("guest_rating_count")
+    source = item.get("guest_rating_source")
+    url = item.get("guest_rating_url")
+    shown = f'{as_text(value)}/{as_text(scale)}'
+    inner = (f'<a class="booking-link" data-booking-type="hotel" '
+             f'data-provider="{attr(item.get("comparison_platform") or source)}" '
+             f'data-verified-at="{attr(item.get("guest_rating_checked_at"))}" href="{attr(url)}" '
+             f'target="_blank" rel="noopener noreferrer">{esc(shown)}</a>') if url else esc(shown)
+    reviews = f' · {as_text(count)} reviews' if count is not None else ""
+    origin = f' · {esc(source)}' if source else ""
+    return (f'<li class="option-rating" data-rating-status="{attr(item.get("guest_rating_status"))}" '
+            f'data-rating-value="{attr(value)}" data-rating-count="{attr(count)}">'
+            f'<strong>Guest rating: </strong>{inner}{reviews}{origin}</li>')
 
 
 def dining_rating_line(item: dict) -> str:

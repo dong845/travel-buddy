@@ -152,7 +152,15 @@
         "key_area_access_note": "Walkable to Luomashi Metro for central-city routes.",
         "selection_rationale": "Central, low-transfer base for the planned areas.",
         "single_option_reason": null,
-        "direct_provider": "Marriott"
+        "direct_provider": "Marriott",
+        "guest_rating_status": "verified",
+        "guest_rating_value": 8.6,
+        "guest_rating_scale": 10,
+        "guest_rating_count": 740,
+        "guest_rating_source": "Booking.com",
+        "guest_rating_url": "https://www.booking.com/searchresults.html?ss=Fixture+Hotel+A&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1",
+        "guest_rating_checked_at": "2026-07-30",
+        "guest_rating_absence_reason": null
       },
       {
         "id": "stay-b",
@@ -203,7 +211,15 @@
         "key_area_access_note": "Walkable to Wenshu Monastery Metro for central-city routes.",
         "selection_rationale": "Alternative base with a different evening neighborhood.",
         "single_option_reason": null,
-        "direct_provider": "Hyatt"
+        "direct_provider": "Hyatt",
+        "guest_rating_status": "verified",
+        "guest_rating_value": 8.6,
+        "guest_rating_scale": 10,
+        "guest_rating_count": 740,
+        "guest_rating_source": "Booking.com",
+        "guest_rating_url": "https://www.booking.com/searchresults.html?ss=Fixture+Hotel+B&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1",
+        "guest_rating_checked_at": "2026-07-30",
+        "guest_rating_absence_reason": null
       }
     ],
     "attraction_tickets": [],

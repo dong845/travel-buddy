@@ -95,6 +95,20 @@ applied. `check_plan_consistency.py` fails a comparison URL that carries neither
 name nor a property id — and `dest_id` does not count, because that is Booking's *city* id and
 allowing it briefly whitelisted the exact URL the rule exists to reject.
 
+**A search button carries the trip's dates, or it is a form the traveller fills in twice.** The
+`round_trip_prefilled_fields` / `prefilled_fields` list was a promise the plan wrote about itself
+until a check compared it to the URL beside it; providers spell dates differently (Skyscanner
+`270108`, KAYAK `2027-01-08`), so any common encoding counts.
+
+Airlines and hotel platforms differ here, and the difference decides the card's shape. A
+property-scoped hotel search prefills and works. An airline's own site frequently does **not**:
+Transavia's search page loads happily with hand-written `origin`/`destination`/`departureDate`
+parameters, drops every one of them, and shows an empty form — a link that returns 200 while
+delivering nothing, which no link checker can distinguish from a working one. So for flights the
+dated comparison search is the **first** button on the card, and the airline's own link is labelled
+and described as a channel entry rather than a quote for these dates. Do not invent the deep link;
+run the search on the provider and store the URL it produces.
+
 **Two options that open the same page are one option shown twice.** The same check refuses a
 `review_url` or `round_trip_search_url` shared between candidates in any category. This is not
 tidiness: it shipped on flights as well as hotels, and a comparison whose two buttons land in the
