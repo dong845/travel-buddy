@@ -106,6 +106,27 @@ Ask sensitively and only when relevant. In particular, first establish whether c
 - dietary, religious, family, safety, language, connectivity, and privacy needs;
 - realistic tolerance for transfers, red-eye flights, self-driving, crowds, and isolation.
 
+### Two answers must leave the interview as machine-readable values
+
+Most of what the intake collects can stay in the traveller's own words. Two cannot, because the
+gates measure them rather than read them, and nothing converts a sentence into either:
+
+- **The walking limit** becomes `trip.traveler_constraints.max_continuous_walking_minutes`, a
+  number of minutes. "I can't walk far" is not one. Ask for the figure directly — *"roughly how
+  many minutes can you walk at a stretch before you'd want to sit down?"* — and accept a rough
+  answer, because 30 is a usable constraint and "not far" is not. Left as prose the field stays
+  null, and every per-leg and per-activity walking check silently passes on a plan built around
+  a limit nobody measured.
+- **A dietary restriction's severity** becomes `allergy_severity`, one of `none`, `preference`,
+  `intolerance`, `anaphylactic`. Ask which it is rather than inferring it: the enum decides
+  whether the trip gets the light or the full verification tier, and "I avoid dairy" covers both
+  a preference and a hospital visit.
+
+`new_plan_skeleton.py --from-intake` copies the prose lists across and says on stderr that it has
+left both of these at their defaults, because a script cannot turn a sentence into a severity or a
+number. Type them in yourself before delivering, or the plan asserts in its own prose that a
+constraint is severe while its fields say there is nothing to avoid.
+
 Phrase the reason for every sensitive question: “This affects entry options” or “I can choose low-walking alternatives.” Treat a non-answer as an unknown, not consent to assume.
 
 ## Profile completeness thresholds

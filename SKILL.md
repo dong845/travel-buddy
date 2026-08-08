@@ -143,7 +143,7 @@ For Discovery and Constrained discovery:
 
 If no candidate survives the hard filters, stop before scoring. State that no recommendation is currently feasible, name the smallest set of conflicting constraints, and ask the user which one may relax. Offer conditional examples only as “possible if X changes”; never disguise an infeasible destination as the winner.
 
-Use [references/decision-and-research.md](references/decision-and-research.md) for scoring, research, evidence, and output rules. Start each candidate record from [templates/destination-evaluation.json](templates/destination-evaluation.json).
+Read [references/decision-and-research.md](references/decision-and-research.md) **before the first research call of either mode**, not only before scoring: besides the scoring and evidence rules it carries the record-once habit that decides whether a page gets opened once or twice, and a Construction task that skips it meets every required field at the end, when the pages are closed. Use it for scoring, research, evidence, and output rules. Start each candidate record from [templates/destination-evaluation.json](templates/destination-evaluation.json).
 
 ### Decision-support response
 
@@ -323,6 +323,7 @@ Use [templates/replan-request.json](templates/replan-request.json) as the shape 
 
 Before delivering a recommendation or plan, verify:
 
+- the record-once rule in [references/decision-and-research.md](references/decision-and-research.md) was applied while the pages were open — every venue's coordinates, registered name, weekday hours and rating captured in one visit, every property's price, availability and guest score in one — rather than reconstructed at construction time from memory;
 - the disqualifier questions in [references/research-budget.md](references/research-budget.md) were asked before any research fan-out, and no anchor, opening-hour, or weather research was launched before the travel dates were final;
 - the fan-out stayed inside that reference's agent-count target (≈3 feasibility, ≈3 design, 5+2 verification for a single-destination trip under a week), or the reason for exceeding it was stated to the traveller — an overrun nobody names is indistinguishable from thoroughness, and the measured run spent 1.18M tokens that way;
 - origin, dates/duration, party, budget basis, destination scope, and experience direction are either known or visibly assumed;

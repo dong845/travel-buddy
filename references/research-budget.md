@@ -119,6 +119,20 @@ When two agents need the same fact, have the first write it to a scratch file an
 to read that file. Flights, fares, and lodging prices are one fact set viewed from three angles —
 not three domains.
 
+The same economy holds *inside* a single lookup, and it is what keeps the fields added since this
+file was measured from costing anything much. One visit to a venue's place page yields the name the
+map provider indexes it under, its rating with the count and the scale, its hours for each weekday,
+its address and its coordinate pair — five required fields for one page load. One visit to a
+property's page on the platform that sells it yields the price, whether those dates are sellable,
+and the guest score. Collect them on the way past, and the marginal cost of the newer gates is a few
+per cent of a run; collect them later and you pay for every page twice, which is the duplication
+this section exists to prevent, just wearing a different hat.
+
+Rule 2 defers anchors, hours and weather until the dates are final because they are keyed to a
+weekday. Coordinates and ratings are not — a restaurant's score does not change because the trip
+moved a day — but they arrive on the same page as the hours, so there is no earlier moment worth
+fetching them at either. Research the venue once, when the dates are settled.
+
 ## 6. Do not challenge what the traveller has already decided
 
 The adversarial pass is for claims *you* produced. A fact the traveller stated — "I have the
@@ -146,7 +160,17 @@ agents, verification = 5 domains + 2 offline auditors**.
 Budget it as the sum of its parts, because a target below the mandatory floor is not a target, it
 is an instruction to cut the pass that catches trip-breaking defects. Six research agents cost
 roughly 37k each in the measured run — **≈220k** — and verification measured **≈700k**, so the
-honest figure is **900k–1.1M**. Past about 1.3M, the overrun is research nobody asked for: a second
+honest figure is **900k–1.1M**.
+
+Two corrections to those numbers, both measured after they were written. They were taken before
+coordinates, ratings and dated property-scoped links became mandatory; re-measured on a rebuilt
+eight-day plan, the added research was **20–40k**, roughly 2–4% of a run, because each of those
+fields rides along on a page the design stage was already opening. And the **≈700k** is the *full*
+verification tier. A plan that qualifies for the light tier — the conditions are in SKILL.md's
+work-mode section, and `check_plan_consistency.py` decides it from the plan's own fields rather than
+from how thorough anyone feels — runs four blocks instead of seven, closer to **300k**, which moves
+the honest total for such a trip to roughly **550k–750k**. Read what the script printed; do not
+argue with it, and do not assume the light tier because a trip feels simple. Past about 1.3M, the overrun is research nobody asked for: a second
 agent on a domain the first already covered does not make the answer safer, it makes the same
 answer twice and spends the quota verification needs. Say so when you exceed it rather than
 quietly trimming the pass.

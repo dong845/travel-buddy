@@ -12,6 +12,50 @@ If a tool or source is unavailable, say what is unverified. Substitute a range o
 
 Research calls that do not depend on each other must be issued together, not one after another. Climate normals, direct-route existence, operator timetables, opening hours, ticket prices, and venue checks are all independent of one another; running fifteen of them sequentially spends fifteen round trips to learn what three batches would have returned. Sequence only where a later query genuinely needs an earlier answer — for example, researching a city's restaurants after the shortlist has selected that city.
 
+## Record a place once, in the form the plan will need
+
+Every lookup above is also the only cheap chance to collect what the plan gates will later refuse
+to do without, and this is a research rule rather than a formatting one: the alternative is buying
+the same page twice.
+
+A venue's own place page carries, in one read, its coordinate pair, the name the map provider
+indexes it under, its hours for each weekday, and its rating with the count and the scale. A
+property's page on the platform that sells it carries, in one read, the price, whether those exact
+dates are sellable, and the guest score. A routing provider's answer carries the leg's real
+distance and duration. Write all of them down while the page is open, with the URL you read them
+off and the date you read it.
+
+Skip that and the cost lands twice. A candidate that wins the shortlist becomes a plan, and the
+plan is refused unless every map endpoint is a coordinate pair, `trip.destination_coords` is
+declared, every dining card carries its rating fields beside a verified weekday `hours_status`, and
+every accommodation carries its guest score beside a price and an availability that came off the
+same page. Meeting that list after the shortlist closes means reopening every page a second time —
+and reconstructing from memory is how a 1.1 km seafront walk got written as six minutes, which the
+speed rule then rejected.
+
+Three of these have a shape that cannot be recovered afterwards, so get them right at the source:
+
+- **Coordinates, in the provider's own order.** Google, Apple and OpenStreetMap read `lat,lon`;
+  Amap reads `lon,lat,name`. Store the raw pair together with which provider's page it came from,
+  and never a display label — a caption written into a URL is a geocoder query that resolves
+  somewhere else, and one delivered plan's `origin=酒店（拉斯坎特拉斯海滨）` resolved to Taiwan.
+  Record the coordinate of every base the trip uses, not only the first: that becomes
+  `trip.destination_coords`, one object or a list for a multi-city trip, and it is the only
+  absolute reference the endpoint checks have.
+- **The rating's scale and count, never the bare number.** Google publishes out of 5; Booking,
+  Agoda and TheFork out of 10, so an unlabelled 8.5 is not a claim. 4.8 from 12 reviews and 4.3
+  from 2,000 are not the same claim either, which is why the count travels beside the value.
+- **Hours for the weekday the visit will actually fall on**, not the venue's general pattern. They
+  are keyed to a weekday, so they are also the first thing a date change invalidates.
+
+Quality is evidence here, not taste. A venue below 3.5/5 and a property below 7.0/10 are refused
+outright unless the plan says in `rating_below_floor_reason` / `guest_rating_below_floor_reason`
+what makes that one worth it anyway — so a candidate whose only affordable lodging is poorly rated
+has a scoring problem, and it is cheaper to learn that here than after the destination is chosen.
+Read the recent negative reviews of anything you would put a whole week or a farewell dinner on:
+an average hides what people were unhappy about, and "a twenty-minute walk from the nearest stop"
+disqualifies a traveller with a walking limit while "slow service" does not.
+
 ## Evaluation sequence
 
 1. Apply any consented profile’s explicit `never_recommend` place exclusions before candidate generation; do not treat past visits as exclusions unless the user said not to revisit.

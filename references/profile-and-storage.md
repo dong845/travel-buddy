@@ -57,6 +57,15 @@ The form has no third-party scripts, remote requests, login, payment, or downloa
 
 When no current-trip intake is available, use `python scripts/start_intake_workflow.py` rather than starting the trip form directly. A saved personal profile does not replace this per-trip form. Its companion HTML form collects departure point, dates/duration, party, budget, destination scope, experience preferences, per-traveler entry eligibility, transport tolerance, and climate constraints. It is also loopback-only and saves one `trip-profile.json`-compatible intake plus a `next-action-*.json` event under `plans/`; it does not create another reusable personal profile. The event carries the derived `work_mode` and a matching `next_action` — `trip_construction` for an already-fixed destination, otherwise `destination_discovery` — and must be acted on immediately.
 
-After validating a final plan, run `python scripts/save_trip_deliverables.py <plan.json>`. It saves paired JSON and HTML using a date/title filename and refuses to overwrite unless `--overwrite` is deliberately supplied. Use a user-selected `--workspace` when the default location is not appropriate.
+After validating a final plan, run
+`python scripts/save_trip_deliverables.py <plan.json> --verification <report.json>`. The
+verification argument is not optional: without it, or without an explicit `--unverified`, the script
+refuses to save at all — structure gates cannot tell you whether a fare, an opening time or an entry
+rule is true, so a plan that never faced the parallel-verify stage does not get to look finished.
+`--unverified` saves anyway, records `verification_status: unverified` in the plan and prints a
+localized "not fact-checked" banner above everything on the page, because a gap recorded only in
+JSON warns whoever opens the JSON, and that is never the person standing at an airline counter.
+It saves paired JSON and HTML using a date/title filename and refuses to overwrite unless
+`--overwrite` is deliberately supplied. Use a user-selected `--workspace` when the default location is not appropriate.
 
 On an explicit forget/delete request, show the resolved profile path and delete only that profile. Never remove the entire workspace or other trips to satisfy a profile deletion request.
