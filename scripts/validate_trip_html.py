@@ -76,6 +76,8 @@ RENDERER_ENGLISH_MARKUP = (
     r"<h3>Accommodation options</h3>",
     r"<h3>Ticket options</h3>",
     r"<h3>Rental-car options</h3>",
+    r"<h3>Rail, coach and ferry options</h3>",
+    r"<h2>Your constraints</h2>",
     r"<summary>Sources used</summary>",
     r"<summary>Recheck before purchase</summary>",
     r"<summary>Booking access checks</summary>",
@@ -86,6 +88,11 @@ RENDERER_ENGLISH_MARKUP = (
     r'data-meal="[a-z]+"><p class="eyebrow">(?:breakfast|lunch|dinner|snack) · ',
     r'data-budget-category="[a-z_]+"><strong>[a-z_]+: ',
     r'<li class="unpriced-category">[a-z_]+</li>',
+    # The whole pill family, not one entry per pill. The four that existed were translated only
+    # by luck of nobody having added a fifth: `ground` shipped raw English on every non-English
+    # page, no translator could fix it (no code path read a `pill_ground` key), and both gates
+    # said VALID. A pattern over the enum makes the next addition fail loudly instead.
+    r'<span class="pill">(?:flight|hotel|ticket|car|ground)</span>',
     r"<strong>(?:flight|accommodation|attraction_ticket|rental_car|rail_or_ground) · ",
     r"<strong>(?:self-drive|public-transit)</strong>",
     r"<h2>[^<]*</h2><p>(?:self-drive|public-transit)",
@@ -98,6 +105,7 @@ RENDERER_ENGLISH_TEXT = (
     r"\bWalk \d+ min\b",
     r"\d+ transfer\(s\)",
     r"\d+ stop\(s\)",
+    r"\d+ change\(s\)",
     r"guest\(s\)",
     r"room\(s\)",
     r"traveller\(s\)",
@@ -123,6 +131,12 @@ RENDERER_ENGLISH_TEXT = (
     r"Walking across the day:",
     r"Platform selection:",
     r"Location and access:",
+    r"Station and access:",
+    r"Why these providers:",
+    r"Allergy severity:",
+    r"Dietary needs:",
+    r"Maximum continuous walking:",
+    r"Allergy card — show this to staff:",
     r"Why it fits:",
     r"Backup:",
     r"Outbound:",
@@ -304,6 +318,11 @@ class TripHTMLParser(HTMLParser):
         self.ids: set[str] = set()
         self.booking_links: list[dict[str, str]] = []
         self.round_trip_links: list[dict[str, str]] = []
+        # One record per .option article, so a button can be attributed to the card it sits in.
+        # Counting per booking TYPE only asserted "at least one of these exists somewhere on the
+        # page", which certifies two rail candidates where only the first is bookable.
+        self.option_cards: list[dict] = []
+        self.active_options: list[dict] = []
         self.hotel_comparison_links: list[dict[str, str]] = []
         self.rental_search_links: list[dict[str, str]] = []
         self.map_links: list[dict[str, str]] = []
@@ -339,6 +358,10 @@ class TripHTMLParser(HTMLParser):
             self.ids.add(attrs["id"])
             if attrs["id"] == "trip-plan":
                 self.trip_plan_attrs = attrs
+        if tag == "article" and "option" in class_set:
+            record = {"kind": attrs.get("data-option-kind", ""), "round_trip": 0}
+            self.option_cards.append(record)
+            self.active_options.append(record)
         if tag == "article" and "day-card" in class_set:
             number = attrs.get("data-day", "")
             if not number.isdigit() or int(number) < 1:
@@ -434,6 +457,8 @@ class TripHTMLParser(HTMLParser):
                         f"Booking ({attrs.get('data-booking-type', '?')})", attrs["data-provider"], href)
                 if attrs.get("data-booking-purpose") == "round-trip-search":
                     self.round_trip_links.append(attrs)
+                    for option in self.active_options:
+                        option["round_trip"] += 1
                 if attrs.get("data-booking-purpose") == "comparison-search" and attrs.get("data-booking-type") == "hotel":
                     self.hotel_comparison_links.append(attrs)
                 if attrs.get("data-booking-purpose") == "rental-search" and attrs.get("data-booking-type") == "car":
@@ -452,6 +477,8 @@ class TripHTMLParser(HTMLParser):
             del self.stack[index:]
             if record is not None and record in self.active_days:
                 self.active_days.remove(record)
+            if record is not None and record in self.active_options:
+                self.active_options.remove(record)
             return
 
 
@@ -577,6 +604,17 @@ def validate(
                  if link.get("data-booking-type") == kind]
         if not owned:
             errors.append(f"{label} options need a dated round-trip search button.")
+        # Per card, not per page. "At least one exists" certifies a page showing two rail
+        # candidates where only the first can be acted on -- the traveller compares two fares and
+        # can buy one. Cards render with data-option-kind; a page assembled outside the render
+        # path without it is caught by the count, since no card then claims the button.
+        unbookable = [card for card in parser.option_cards
+                      if card["kind"] == kind and card["round_trip"] < 1]
+        if unbookable:
+            errors.append(
+                f"{len(unbookable)} of {len([c for c in parser.option_cards if c['kind'] == kind])} "
+                f"{label.lower()} cards have no round-trip search button of their own. Every "
+                f"compared candidate must be bookable, or it is not a candidate.")
         for link in owned:
             fields = set(filter(None, link.get("data-prefilled-fields", "").split(",")))
             if not REQUIRED_FLIGHT_SEARCH_FIELDS.issubset(fields):
@@ -631,6 +669,12 @@ def validate(
         required_access_categories.add("attraction_ticket")
     if "car" in booking_types:
         required_access_categories.add("rental_car")
+    # Presence of the card, not only the mobility mode. Every other category here is keyed on "is
+    # this card on the page"; keying this one on public-transit alone meant a car ferry inside a
+    # self-drive trip -- a real crossing that sells out -- was the single bookable channel with no
+    # record of whether the traveller can buy from it.
+    if "ground" in booking_types:
+        required_access_categories.add("rail_or_ground")
     if parser.trip_plan_attrs and parser.trip_plan_attrs.get("data-transport-mode") == "public-transit":
         required_access_categories.add("rail_or_ground")
     missing_access_categories = required_access_categories - access_categories

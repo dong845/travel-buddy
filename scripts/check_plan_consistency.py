@@ -1197,7 +1197,15 @@ def required_domains_for(plan: dict | None) -> tuple[set[str], str]:
         disqualifiers.append("no booking_options (flights and cars unexamined)")
     else:
         booking = _obj(plan.get("booking_options"))
-        for field, label in (("flights", "a flight"), ("rental_cars", "a rental car")):
+        # ground_transport belongs here for the same reason flights do, and the reason is the
+        # card's contents rather than the vehicle: it asserts a fare range, an availability status
+        # and a prefilled search URL, which is precisely what booking_and_lodging verifies. On a
+        # rail city break that card is the largest and most time-sensitive purchase on the page,
+        # so dropping the domain would leave the one thing the traveller must buy on a deadline as
+        # the one thing no verifier looked at. The light tier still stands for a trip that books
+        # no transport at all -- already ticketed, or everything within walking distance.
+        for field, label in (("flights", "a flight"), ("rental_cars", "a rental car"),
+                             ("ground_transport", "a ticketed rail/coach/ferry leg")):
             if _seq(booking.get(field)):
                 disqualifiers.append(label)
     arrival = str(_obj(plan.get("trip")).get("arrival_transport_mode") or "")

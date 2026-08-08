@@ -239,6 +239,125 @@ def full_verification() -> dict:
     }
 
 
+def fixture_passes_the_delivery_gate_cases(base: dict) -> list[str]:
+    """The known-good fixture must survive the gate a real page is judged by.
+
+    It did not. Two hotel options named their provider "Direct hotel" while linking to
+    marriott.com and hyatt.com, which validate_trip_html.py rejects by design -- the button label
+    is built from the same provider field, so it read "open Direct hotel" and went somewhere else.
+    Nothing noticed for as long as the fixture existed, because every test in this file stopped at
+    validate_plan and render: the HTML gate had no known-good baseline at all, so a regression in
+    it would have shown up first on somebody's real trip.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import render  # noqa: PLC0415 - import after path setup
+
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        page = Path(tmp) / "fixture.html"
+        page.write_text(render(copy.deepcopy(base)), encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "validate_trip_html.py"), str(page)],
+            capture_output=True, text=True)
+        if proc.returncode != 0:
+            reported = [line for line in (proc.stdout + proc.stderr).splitlines()
+                        if line.startswith("- ")]
+            failures.append("fixture: the known-good plan does not pass validate_trip_html -- "
+                            + "; ".join(reported[:3]))
+    return failures
+
+
+def optional_label_cases(base: dict) -> list[str]:
+    """New renderer labels must be optional, and the i18n gate must still catch them untranslated.
+
+    Both halves matter and the first was learned the hard way: making `group_ground` and
+    `station_access` required hard-failed every French, Japanese and Spanish plan already saved in
+    a workspace, naming labels for a booking category those trips do not contain and their author
+    had never heard of. OPTIONAL_UI_LABEL_KEYS exists for exactly that, with the reason written
+    above it, and the new keys were simply not added to it.
+
+    Optional alone would be the opposite mistake -- an untranslated label shipping in silence -- so
+    the gate carries a pattern for each.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import render  # noqa: PLC0415 - import after path setup
+
+    failures: list[str] = []
+    labels = json.loads(
+        (ROOT / "templates" / "renderer-ui-labels.example.json").read_text(encoding="utf-8"))
+
+    plan = copy.deepcopy(base)
+    plan["trip"]["language"] = "fr"
+    plan["ui_labels"] = {k: v for k, v in labels.items()
+                         if k not in {"group_ground", "station_access"}}
+    try:
+        render(plan)
+    except Exception as exc:  # noqa: BLE001 - any failure here is the regression
+        failures.append(f"labels: a plan authored before the new keys stopped rendering: {exc}")
+
+    # The gate must still object when a translator leaves them English.
+    plan = copy.deepcopy(base)
+    plan["trip"]["language"] = "fr"
+    plan["ui_labels"] = {k: (f"FR-{k}" if isinstance(v, str) else v) for k, v in labels.items()}
+    plan["ui_labels"]["group_ground"] = labels["group_ground"]
+    plan["ui_labels"]["station_access"] = labels["station_access"]
+    plan["booking_options"]["ground_transport"] = [dict(
+        json.loads((ROOT / "templates" / "final-trip-plan.json").read_text(encoding="utf-8"))
+        ["booking_options"]["ground_transport"][0])]
+    with tempfile.TemporaryDirectory() as tmp:
+        page = Path(tmp) / "fr.html"
+        try:
+            page.write_text(render(plan), encoding="utf-8")
+        except Exception:  # noqa: BLE001 - the TODO-laden template block may not validate; skip
+            return failures
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "validate_trip_html.py"), str(page)],
+            capture_output=True, text=True)
+        if "Rail, coach and ferry options" not in (proc.stdout + proc.stderr):
+            failures.append("labels: an untranslated ground heading was not caught by the i18n gate")
+    return failures
+
+
+def example_label_file_cases(base: dict) -> list[str]:
+    """The copyable label set must be the complete label set.
+
+    `REQUIRED_UI_LABEL_KEYS` is drift-proof by construction -- it is derived from the zh-CN dict.
+    `templates/renderer-ui-labels.example.json`, the file every translator starts from, was a
+    hand-maintained list with no derivation and no test, so it had silently fallen eleven keys
+    behind. A translator did exactly what the repo asks -- copy the file, translate all of it,
+    ship a French page -- and got English `verified` / `researched` on every dining card, with the
+    i18n gate certifying the page because those two words were not in its lists either.
+
+    Set equality, not a subset: an extra key is drift too, and a missing OPTIONAL key produces the
+    silent-English failure while a missing REQUIRED one produces a page that renders entirely in
+    English. Neither is visible without this assertion.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import labels_for, validate_plan  # noqa: PLC0415
+
+    failures: list[str] = []
+    example = json.loads(
+        (ROOT / "templates" / "renderer-ui-labels.example.json").read_text(encoding="utf-8"))
+    renderer_keys = set(labels_for("zh-CN"))
+    missing = sorted(renderer_keys - set(example))
+    extra = sorted(set(example) - renderer_keys)
+    if missing:
+        failures.append(f"labels: the copyable example file is missing {missing} -- a translator "
+                        f"who translates all of it still ships English for those")
+    if extra:
+        failures.append(f"labels: the example file offers {extra}, which the renderer never reads")
+
+    # And it must be a set validate_plan accepts, so an incomplete one fails loudly here rather
+    # than quietly producing an all-English page in production.
+    plan = copy.deepcopy(base)
+    plan["trip"]["language"] = "fr"
+    plan["ui_labels"] = example
+    errors = [error for error in validate_plan(plan) if "ui_labels" in error or "label" in error]
+    if errors:
+        failures.append(f"labels: the shipped example set does not pass validate_plan: {errors[:2]}")
+    return failures
+
+
 def ground_transport_cases(base: dict) -> list[str]:
     """Rail, coach and ferry had no bookable product at all.
 
@@ -310,6 +429,81 @@ def ground_transport_cases(base: dict) -> list[str]:
     if not validate_plan(plan):
         failures.append("ground: a wrong price_basis was accepted")
 
+    # "Held to exactly the flight standard" is a literal claim in SKILL.md and in
+    # references/booking-html-output.md, and it was false: all three comparison rules were keyed on
+    # flight_items. A lone unexplained rail option, two cards sharing one review_url, and an option
+    # with no id all validated, while the identical omission on a flight was named by the gate.
+    plan = copy.deepcopy(base)
+    item = copy.deepcopy(complete)
+    item.pop("single_option_reason")
+    plan["booking_options"]["ground_transport"] = [item]
+    if not validate_plan(plan):
+        failures.append("ground: one option with no researched single_option_reason was accepted -- "
+                        "a flight in the same position is rejected by name")
+
+    plan = copy.deepcopy(base)
+    item = copy.deepcopy(complete)
+    item.pop("id")
+    plan["booking_options"]["ground_transport"] = [item]
+    if not validate_plan(plan):
+        failures.append("ground: an option with no id was accepted")
+
+    plan = copy.deepcopy(base)
+    twin = copy.deepcopy(complete)
+    twin["id"] = "ground-2"
+    plan["booking_options"]["ground_transport"] = [copy.deepcopy(complete), twin]
+    if not any("review_url" in error for error in validate_plan(plan)):
+        failures.append("ground: two candidates sharing one review_url were accepted -- the page "
+                        "then looks like a comparison and is not")
+
+    plan = copy.deepcopy(base)
+    twin = copy.deepcopy(complete)
+    twin["review_url"] = "https://www.nsinternational.com/en"
+    plan["booking_options"]["ground_transport"] = [copy.deepcopy(complete), twin]
+    if not any("distinct, non-empty string ids" in error for error in validate_plan(plan)):
+        failures.append("ground: two candidates sharing one id were accepted")
+
+    # The contract template seeded these with 0 and 1970-01-01 rather than null, so the one value
+    # meaning "I did not fill this in" was a value every gate accepted: a card advertising a
+    # 0-minute journey at EUR 0. The template is fixed; these keep the gate honest regardless.
+    plan = copy.deepcopy(base)
+    item = copy.deepcopy(complete)
+    item.update(fare_low=0, fare_high=0)
+    plan["booking_options"]["ground_transport"] = [item]
+    if not validate_plan(plan):
+        failures.append("ground: a 0-0 fare range was accepted as a researched fare")
+
+    plan = copy.deepcopy(base)
+    item = copy.deepcopy(complete)
+    item["outbound_itinerary"] = dict(item["outbound_itinerary"], duration_minutes=0)
+    plan["booking_options"]["ground_transport"] = [item]
+    if not validate_plan(plan):
+        failures.append("ground: a leg of zero minutes was accepted as a researched journey")
+
+    # The template block, dropped in verbatim, must not validate. It is the file authors copy from,
+    # so a block whose placeholders are all legal values teaches a card the first gate cannot see
+    # is empty.
+    plan = copy.deepcopy(base)
+    plan["booking_options"]["ground_transport"] = [copy.deepcopy(json.loads(
+        (ROOT / "templates" / "final-trip-plan.json").read_text(encoding="utf-8"))
+        ["booking_options"]["ground_transport"][0])]
+    if not validate_plan(plan):
+        failures.append("ground: the unfilled contract template block validated as a real option")
+
+    # The card printed "Conditions require recheck" -- option_card's no-data fallback -- in the slot
+    # under the price on every ground card, however completely it was researched, three rows above
+    # the line that actually states the conditions.
+    plan = copy.deepcopy(base)
+    plan["booking_options"]["ground_transport"] = [copy.deepcopy(complete)]
+    if not validate_plan(plan):
+        card = re.search(r'<article class="option" data-option-kind="ground".*?</article>',
+                         render(plan), re.S)
+        if not card:
+            failures.append("ground: the rendered card carries no data-option-kind")
+        elif "Conditions require recheck" in card.group(0):
+            failures.append("ground: a fully researched card still prints the no-data fallback "
+                            "'Conditions require recheck' under its fare")
+
     # Dates were truthiness-checked only, so "next Friday" and a return before the departure both
     # validated and printed onto the search button.
     for label, patch, must_reject in (
@@ -366,6 +560,33 @@ def ground_transport_cases(base: dict) -> list[str]:
                          ("estimate", "price_status")):
         if probe not in page:
             failures.append(f"ground: {label} is required and never reaches the card")
+
+    # Adding the category made a train card POSSIBLE; this is what makes it REQUIRED. Without it a
+    # rail-arrival plan with three compared hotels and no way to reach, price-check or
+    # availability-check the train passed every gate exactly as before -- the defect the category
+    # was built to end, recurring on any run where the author did not think of it.
+    # --require-booking-type ground cannot cover for it: that flag is opt-in, and the flight rule
+    # it mirrors pointedly does not depend on the operator remembering one.
+    rail = copy.deepcopy(base)
+    rail["trip"]["arrival_transport_mode"] = "rail"
+    if not any("ground_transport" in e for e in validate_plan(copy.deepcopy(rail))):
+        failures.append("ground: a rail-arrival plan with no train card was accepted")
+    rail["booking_options"]["ground_transport"] = [copy.deepcopy(complete)]
+    if any("ground_transport" in e for e in validate_plan(rail)):
+        failures.append("ground: a rail-arrival plan WITH a train card was rejected")
+
+    # "road" is an intercity coach only when the trip leaves town. The fixture is Chengdu to
+    # Chengdu, where road means the taxi that met the traveller, and demanding a bookable coach
+    # card for that would be a gate firing on correct authoring.
+    local = copy.deepcopy(base)
+    local["trip"]["arrival_transport_mode"] = "road"
+    local["trip"]["destination"] = local["trip"]["origin"]
+    if any("ground_transport" in e for e in validate_plan(local)):
+        failures.append("ground: a same-city road arrival was asked for a coach card")
+    intercity = copy.deepcopy(local)
+    intercity["trip"]["destination"] = "Somewhere Else Entirely"
+    if not any("ground_transport" in e for e in validate_plan(intercity)):
+        failures.append("ground: an intercity road arrival with no coach card was accepted")
 
     # And a plan carrying none of this must be unaffected -- every existing plan predates it.
     if validate_plan(copy.deepcopy(base)):
@@ -469,6 +690,204 @@ def language_coverage_cases(base: dict) -> list[str]:
     leaked = sorted(set(re.findall(r"[\u4e00-\u9fff]+", re.sub(r"<[^>]+>", " ", body))))
     if leaked:
         failures.append(f"i18n: a French page carries renderer-owned Chinese: {leaked}")
+    return failures
+
+
+def ground_card_coverage_cases(base: dict) -> list[str]:
+    """Three ways the ground card sat outside rules every other card obeys.
+
+    1. Its pill shipped the raw machine enum on every non-English page. Four pills were localized
+       and the fifth was not, no translator could fix it (no code path read a `pill_ground` key),
+       and both gates said VALID.
+    2. Its booking-access check was keyed on `transport_preference.mode == "public-transit"` rather
+       than on the card being present, so a car ferry inside a self-drive trip -- a real crossing
+       that sells out -- was the one channel with no record of whether the traveller can buy from it.
+    3. The round-trip-button rule counted per booking type, so a page showing two rail candidates
+       where only the first was bookable passed the delivery gate.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import render, validate_plan  # noqa: PLC0415
+
+    ground = json.loads((ROOT / "tests" / "ground-option.json").read_text(encoding="utf-8")) \
+        if (ROOT / "tests" / "ground-option.json").exists() else None
+    if ground is None:
+        ground = {
+            "id": "ground-1", "provider": "Deutsche Bahn", "comparison_platform": "NS International",
+            "comparison_checked_at": "2026-09-01", "source_type": "official_provider",
+            "checked_at": "2026-09-01", "review_url": "https://int.bahn.de/en",
+            "origin_station": "Leiden Centraal", "destination_station": "Köln Hbf",
+            "outbound_date": base["trip"]["start_date"], "return_date": base["trip"]["end_date"],
+            "outbound_itinerary": {"service_identifier": "ICE 120", "departure_local": "08:12",
+                                   "arrival_local": "11:04", "duration_minutes": 172, "stops": 0,
+                                   "connection_or_terminal_note": "Through service"},
+            "return_itinerary": {"service_identifier": "ICE 127", "departure_local": "17:12",
+                                 "arrival_local": "20:04", "duration_minutes": 172, "stops": 0,
+                                 "connection_or_terminal_note": "Through service"},
+            "material_conditions": "Saver fare is train-bound and non-refundable",
+            "availability_status": "available", "price_basis": "per_person_round_trip",
+            "fare_low": 51, "fare_high": 61, "fare_currency": "EUR",
+            "price_status": "estimate", "price_checked_at": "2026-09-01",
+            "station_transfer_note": "Köln Hbf is 200 m from the cathedral",
+            "round_trip_search_provider": "Deutsche Bahn",
+            "round_trip_search_url": "https://int.bahn.de/en",
+            "round_trip_search_checked_at": "2026-09-01",
+            "round_trip_prefilled_fields": ["origin", "destination", "outbound_date",
+                                            "return_date", "travellers"],
+            "single_option_reason": "One carrier sells this route",
+        }
+
+    failures: list[str] = []
+
+    # 1. The pill, and the through-train label with it. 直飞 means specifically "direct by air", so
+    #    the flight-shaped substitution was calling a through train a direct flight.
+    plan = copy.deepcopy(base)
+    plan["trip"]["language"] = "zh"
+    plan["booking_options"]["ground_transport"] = [copy.deepcopy(ground)]
+    if validate_plan(plan):
+        failures.append("ground-card: the worked option no longer validates")
+    else:
+        page = render(plan)
+        card = re.search(r'<article class="option" data-option-kind="ground".*?</article>',
+                         page, re.S)
+        if card is None:
+            failures.append("ground-card: no ground card rendered")
+        else:
+            text = re.sub(r"<[^>]+>", " ", card.group(0))
+            if ">ground<" in card.group(0):
+                failures.append("ground-card: the pill ships the raw English enum on a zh page")
+            if "直飞" in text:
+                failures.append("ground-card: a through train is labelled 直飞 (direct FLIGHT)")
+            if "直达" not in text:
+                failures.append("ground-card: a zero-change train is not labelled 直达")
+
+    # 2. Access check keyed on the card, not the mobility mode: a ferry inside a self-drive trip.
+    #    Removing the check from a self-drive plan is what isolates the rule -- on a public-transit
+    #    plan the mode trigger would cover for it and the case would prove nothing.
+    plan = copy.deepcopy(base)
+    plan["transport_preference"]["mode"] = "self-drive"
+    plan["booking_options"]["ground_transport"] = [copy.deepcopy(ground)]
+    checks = plan["regional_service_context"]["booking_access_checks"]
+    kept = [check for check in checks
+            if isinstance(check, dict) and check.get("category") != "rail_or_ground"]
+    if len(kept) == len(checks):
+        failures.append("ground-card: the fixture no longer carries a rail_or_ground access "
+                        "check, so this case can no longer isolate the rule")
+    plan["regional_service_context"]["booking_access_checks"] = kept
+    if not any("rail_or_ground" in error for error in validate_plan(plan)):
+        failures.append("ground-card: a bookable crossing inside a self-drive trip needs no "
+                        "booking-access check -- the one category keyed on something other "
+                        "than 'is this card here'")
+
+    # 3. One search button per card, not one per page.
+    plan = copy.deepcopy(base)
+    second = copy.deepcopy(ground)
+    second.update(id="ground-2", provider="NS International",
+                  review_url="https://www.nsinternational.com/en",
+                  round_trip_search_url="https://www.nsinternational.com/en")
+    second.pop("single_option_reason", None)
+    first = copy.deepcopy(ground)
+    first.pop("single_option_reason", None)
+    plan["booking_options"]["ground_transport"] = [first, second]
+    if validate_plan(plan):
+        failures.append("ground-card: two distinct compared rail options were rejected")
+    else:
+        page = render(plan)
+        cards = re.findall(r'<article class="option" data-option-kind="ground".*?</article>',
+                           page, re.S)
+        if len(cards) != 2:
+            failures.append(f"ground-card: expected two ground cards, rendered {len(cards)}")
+        else:
+            stripped = page.replace(
+                cards[1], re.sub(r'<a class="booking-link"[^>]*data-booking-purpose='
+                                 r'"round-trip-search".*?</a>', "", cards[1], flags=re.S))
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "two-rail.html"
+                path.write_text(stripped, encoding="utf-8")
+                proc = subprocess.run(
+                    [sys.executable, str(ROOT / "scripts" / "validate_trip_html.py"), str(path),
+                     "--require-booking-type", "ground"],
+                    capture_output=True, text=True)
+                if proc.returncode == 0:
+                    failures.append("ground-card: a second rail candidate with no search button of "
+                                    "its own passed the delivery gate -- the traveller compares "
+                                    "two fares and can act on one")
+    return failures
+
+
+def malformed_value_cases(base: dict) -> list[str]:
+    """A believable authoring typo must be reported, not raised.
+
+    `set(prefilled_fields)` and `status not in {...}` both take author-supplied values, so writing
+    `[{"origin": "Leiden"}]` -- plausible, since the itinerary fields beside it really are objects
+    -- killed validate_plan with `TypeError: unhashable type: 'dict'` and a bare traceback, instead
+    of the one-line reason the rule exists to print. The same hole was on the flight branch from
+    the start.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import (  # noqa: PLC0415
+        REQUIRED_FLIGHT_SEARCH_FIELDS, PRICE_STATUSES, has_search_fields, is_one_of, validate_plan)
+
+    failures: list[str] = []
+
+    # The two shared guards, directly: every booking category routes through them, and a fixture
+    # carrying one option of every kind does not exist to prove it end to end.
+    for value, label in (([{"origin": "Leiden"}], "a dict element"), ([["origin"]], "a list element"),
+                         ("origin,destination", "a bare string"), (None, "null")):
+        try:
+            if has_search_fields(value, REQUIRED_FLIGHT_SEARCH_FIELDS):
+                failures.append(f"malformed: has_search_fields accepted {label}")
+        except Exception as exc:  # noqa: BLE001 - a raise IS the defect
+            failures.append(f"malformed: has_search_fields({label}) raised {type(exc).__name__}")
+    for value, label in ((["available"], "a list"), ({"is": "x"}, "a dict"), (None, "null")):
+        for allowed, name in (({"available", "limited", "unknown"}, "availability_status"),
+                              (PRICE_STATUSES, "price_status")):
+            try:
+                if is_one_of(value, allowed):
+                    failures.append(f"malformed: is_one_of accepted {label} for {name}")
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"malformed: is_one_of({label}) raised {type(exc).__name__}")
+
+    # And end to end on the category the fixture can carry, because a helper that is correct and
+    # not called is the same defect wearing a different hat.
+    ground = {
+        "id": "ground-1", "provider": "Deutsche Bahn", "source_type": "official_provider",
+        "checked_at": "2026-09-01", "review_url": "https://int.bahn.de/en",
+        "origin_station": "Leiden Centraal", "destination_station": "Köln Hbf",
+        "outbound_date": base["trip"]["start_date"], "return_date": base["trip"]["end_date"],
+        "outbound_itinerary": {"service_identifier": "ICE 120", "departure_local": "08:12",
+                               "arrival_local": "11:04", "duration_minutes": 172, "stops": 0,
+                               "connection_or_terminal_note": "Through service"},
+        "return_itinerary": {"service_identifier": "ICE 127", "departure_local": "17:12",
+                             "arrival_local": "20:04", "duration_minutes": 172, "stops": 0,
+                             "connection_or_terminal_note": "Through service"},
+        "material_conditions": "Saver fare is train-bound", "availability_status": "available",
+        "price_basis": "per_person_round_trip", "fare_low": 51, "fare_high": 61,
+        "fare_currency": "EUR", "price_status": "estimate", "price_checked_at": "2026-09-01",
+        "station_transfer_note": "200 m from the cathedral",
+        "round_trip_search_provider": "Deutsche Bahn",
+        "round_trip_search_url": "https://int.bahn.de/en",
+        "round_trip_search_checked_at": "2026-09-01",
+        "round_trip_prefilled_fields": ["origin", "destination", "outbound_date", "return_date",
+                                        "travellers"],
+        "single_option_reason": "One carrier sells this route",
+    }
+    for field, value, label in (
+        ("round_trip_prefilled_fields", [{"origin": "Leiden"}], "a dict inside prefilled_fields"),
+        ("availability_status", ["available"], "a list availability_status"),
+        ("price_status", {"is": "estimate"}, "a dict price_status"),
+        ("id", ["ground-1"], "a list id"),
+        ("review_url", None, "a null review_url"),
+    ):
+        plan = copy.deepcopy(base)
+        plan["booking_options"]["ground_transport"] = [dict(ground, **{field: value})]
+        try:
+            errors = validate_plan(plan)
+        except Exception as exc:  # noqa: BLE001 - a raise IS the defect
+            failures.append(f"malformed: {label} raised {type(exc).__name__}: {exc} "
+                            f"instead of being reported")
+            continue
+        if not errors:
+            failures.append(f"malformed: {label} was accepted silently")
     return failures
 
 
@@ -807,6 +1226,12 @@ def main() -> int:
         ("an empty days list", lambda p: p.update(days=[])),
         ("no arrival_transport_mode", lambda p: p["trip"].pop("arrival_transport_mode")),
         ("an unset entry status", lambda p: p["entry_context"].clear()),
+        # A ground card asserts a fare range, an availability status and a prefilled search URL --
+        # exactly what booking_and_lodging verifies. On a rail city break, the trip the light tier
+        # was built for, that card is the largest and most time-sensitive purchase on the page, and
+        # the tier left it as the one thing no verifier looked at.
+        ("a ticketed rail leg",
+         lambda p: p["booking_options"].update(ground_transport=[{"id": "ground-1"}])),
     ):
         p = light_plan()
         mutate(p)
@@ -1380,7 +1805,12 @@ def main() -> int:
     failures += verification_banner_cases(base)
     # The CLI contract, proven by real processes: argv, file IO, exit codes, the stdout/stderr
     # split. Every other assertion in this file now runs in-process, 132x faster.
+    failures += optional_label_cases(base)
+    failures += fixture_passes_the_delivery_gate_cases(base)
+    failures += example_label_file_cases(base)
     failures += ground_transport_cases(base)
+    failures += ground_card_coverage_cases(base)
+    failures += malformed_value_cases(base)
     failures += required_fields_reach_the_page_cases(base)
     failures += language_coverage_cases(base)
     # The clock check drops the leg out of the lodging as happening before the day's window --

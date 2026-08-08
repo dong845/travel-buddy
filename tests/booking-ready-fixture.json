@@ -106,7 +106,7 @@
         "neighborhood": "Luomashi",
         "address_or_location_reference": "Near Luomashi Metro Station",
         "property_name": "Fixture Hotel A",
-        "provider": "Direct hotel",
+        "provider": "Marriott",
         "comparison_platform": "Booking.com",
         "comparison_checked_at": "2026-07-30T10:00:00+08:00",
         "direct_review_url": "https://www.marriott.com",
@@ -147,7 +147,8 @@
         "arrival_access_note": "About 55–75 minutes from TFU by researched public-transit route.",
         "key_area_access_note": "Walkable to Luomashi Metro for central-city routes.",
         "selection_rationale": "Central, low-transfer base for the planned areas.",
-        "single_option_reason": null
+        "single_option_reason": null,
+        "direct_provider": "Marriott"
       },
       {
         "id": "stay-b",
@@ -156,7 +157,7 @@
         "neighborhood": "Wenshu Monastery",
         "address_or_location_reference": "Near Wenshu Monastery Metro Station",
         "property_name": "Fixture Hotel B",
-        "provider": "Direct hotel",
+        "provider": "Hyatt",
         "comparison_platform": "Booking.com",
         "comparison_checked_at": "2026-07-30T10:00:00+08:00",
         "direct_review_url": "https://www.hyatt.com",
@@ -197,7 +198,8 @@
         "arrival_access_note": "About 55–75 minutes from TFU by researched public-transit route.",
         "key_area_access_note": "Walkable to Wenshu Monastery Metro for central-city routes.",
         "selection_rationale": "Alternative base with a different evening neighborhood.",
-        "single_option_reason": null
+        "single_option_reason": null,
+        "direct_provider": "Hyatt"
       }
     ],
     "attraction_tickets": [],

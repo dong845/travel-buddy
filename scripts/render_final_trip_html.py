@@ -170,9 +170,13 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
                 "本计划没有任何核验记录。其中的票价、营业时间、入境规则与可订状态"
                 "均未与运营方或官方来源核对过。请把每一个数字都当作估算，预订前自行核实。"),
             "pill_flight": "机票", "pill_hotel": "酒店", "pill_ticket": "门票",
-            "pill_car": "租车", "schematic_aria": "按游览顺序的路线示意图",
+            "pill_car": "租车", "pill_ground": "铁路/巴士/渡轮",
+            "schematic_aria": "按游览顺序的路线示意图",
             "schematic_start": "起点", "schematic_end": "终点",
-            "nonstop": "直飞", "stops_suffix": "次中转", "unit_km": "公里",
+            # 直飞 means specifically "direct by air", so a through train printed it. The English
+            # "non-stop" is fine for both, but a language that distinguishes them needs two keys.
+            "nonstop": "直飞", "nonstop_ground": "直达",
+            "stops_suffix": "次中转", "unit_km": "公里",
             "group_ground": "铁路 / 长途巴士 / 渡轮选项",
             "station_access": "车站与接驳：",
             "why_providers": "为什么选这些服务商：",
@@ -372,6 +376,32 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     # existed, and a rejected set drops the entire page back to English -- trading one
     # untranslated prefix for a hundred translated ones.
     "ticket_note_label",
+    # Added with the rail/coach/ferry category, the traveller-constraints panel, the provider
+    # rationale and the ten formerly-hardcoded Chinese strings. Optional for the reason stated
+    # above and demonstrated by this exact slip: requiring them hard-failed every French,
+    # Japanese and Spanish plan already saved in a workspace, naming labels for a booking
+    # category those trips do not contain and their author had never heard of.
+    "group_ground",
+    "station_access",
+    "constraints_heading",
+    "constraints_severity",
+    "constraints_dietary",
+    "constraints_mobility",
+    "constraints_walk_cap",
+    "constraints_card",
+    "why_providers",
+    "pill_flight",
+    "pill_hotel",
+    "pill_ticket",
+    "pill_car",
+    "pill_ground",
+    "schematic_aria",
+    "schematic_start",
+    "schematic_end",
+    "nonstop",
+    "nonstop_ground",
+    "stops_suffix",
+    "unit_km",
 })
 REQUIRED_UI_LABEL_KEYS = frozenset(labels_for("zh-CN")) - OPTIONAL_UI_LABEL_KEYS
 
@@ -493,6 +523,7 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         '<span class="pill">hotel<': f'<span class="pill">{labels.get("pill_hotel", "hotel")}<',
         '<span class="pill">ticket<': f'<span class="pill">{labels.get("pill_ticket", "ticket")}<',
         '<span class="pill">car<': f'<span class="pill">{labels.get("pill_car", "car")}<',
+        '<span class="pill">ground<': f'<span class="pill">{labels.get("pill_ground", "ground")}<',
         'aria-label="Schematic route in visit order"': f'aria-label="{labels.get("schematic_aria", "Schematic route in visit order")}"',
         '>Start</text>': f'>{labels.get("schematic_start", "Start")}</text>',
         '>End</text>': f'>{labels.get("schematic_end", "End")}</text>',
@@ -652,12 +683,29 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
     )
     page = re.sub(r'(\d+) minutes?\b', lambda match: f"{match.group(1)}{labels['minute']}", page)
     page = re.sub(r'(\d+) min\b', lambda match: f"{match.group(1)}{labels['minute']}", page)
-    # These three were hardcoded Chinese inside a function every non-English page runs, so a French
-    # or Japanese itinerary shipped "82公里" on every segment and "直飞" on every flight card while
-    # all four gates reported it valid -- the exact failure the i18n rule exists to prevent, in the
-    # one branch that rule cannot see. English fallbacks keep an incomplete label set readable
-    # instead of leaking a third language into it.
-    page = re.sub(r'\b0 stop\(s\)', labels.get("nonstop", "non-stop"), page)
+    # These were hardcoded Chinese inside a function every non-English page runs, so a French or
+    # Japanese itinerary shipped "82公里" on every segment and "直飞" on every flight card while all
+    # four gates reported it valid -- the exact failure the i18n rule exists to prevent, in the one
+    # branch that rule cannot see.
+    #
+    # Two refinements since. First, a through train is not a 直飞 -- that word means specifically
+    # "direct by air" -- so the ground branch counts "change(s)", the right English for rail and a
+    # marker this flight-shaped substitution cannot claim. `stops_suffix` ("次中转") is
+    # vehicle-neutral, so only the zero case needed a twin.
+    #
+    # Second, the zero cases substitute ONLY when the label exists. `labels.get("nonstop",
+    # "non-stop")` printed an English word on a French page that no gate pattern recognises, and
+    # "non-stop" and "direct" are both too common in real prose to be safely matchable. Falling
+    # through leaves the count for the sibling rule below, and if that label is missing too the
+    # page keeps `0 stop(s)` / `0 change(s)`, which RENDERER_ENGLISH_TEXT does catch. Elsewhere an
+    # English fallback keeps an incomplete label set readable; here it would keep it silent, and
+    # the whole point of the rule is that an untranslated label must be loud.
+    if labels.get("nonstop_ground"):
+        page = re.sub(r'\b0 change\(s\)', labels["nonstop_ground"], page)
+    if labels.get("nonstop"):
+        page = re.sub(r'\b0 stop\(s\)', labels["nonstop"], page)
+    page = re.sub(r'\b(\d+) change\(s\)',
+                  lambda match: f"{match.group(1)}{labels.get('stops_suffix', ' stop(s)')}", page)
     page = re.sub(r'\b(\d+) stop\(s\)',
                   lambda match: f"{match.group(1)}{labels.get('stops_suffix', ' stop(s)')}", page)
     page = re.sub(r'(\d+(?:\.\d+)?) km\b',
@@ -955,6 +1003,32 @@ def is_iso_datestamp(value: object) -> bool:
         return False
 
 
+def is_one_of(value: object, allowed: set[str]) -> bool:
+    """`value not in {"available", ...}` raises TypeError when the author wrote a list or a dict,
+    so a plausible typo killed validate_plan with a bare traceback instead of printing the
+    one-line reason the rule exists to print. Non-strings are simply not the allowed value."""
+    return isinstance(value, str) and value in allowed
+
+
+def has_search_fields(value: object, required: set[str]) -> bool:
+    """Same crash, one line over: `set(value)` on author-supplied elements raised
+    `TypeError: unhashable type: 'dict'` for `[{"origin": "Leiden"}]` -- a believable slip, since
+    the itinerary fields beside it really are objects. Non-string elements cannot name a field."""
+    if not isinstance(value, list):
+        return False
+    return required.issubset({field for field in value if isinstance(field, str)})
+
+
+def dedupe_key(value: object) -> object:
+    """Duplicate detection puts author-supplied ids and URLs into a set. Anything unhashable
+    reaches its repr instead of crashing, which still distinguishes two different values."""
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
 def is_nonnegative_money_range(low: object, high: object) -> bool:
     """Keep displayed costs comparable and prevent inverted or text-only ranges."""
     numeric = (int, float)
@@ -1015,6 +1089,20 @@ def booking_title(kind: str, item: dict) -> str:
 
 
 def booking_details(kind: str, item: dict) -> str:
+    if kind == "ground":
+        # Without this branch option_card printed its no-data fallback, "Conditions require
+        # recheck", in the slot directly under the fare -- on every ground card, however fully it
+        # was researched, and three rows above the line that actually states the conditions. A
+        # warning nobody earned, sitting under a price the traveller is about to act on.
+        return " · ".join(
+            part
+            for part in (
+                " → ".join(part for part in (as_text(item.get("outbound_date"), ""), as_text(item.get("return_date"), "")) if part),
+                as_text(item.get("travel_class"), ""),
+                as_text(item.get("seat_reservation"), ""),
+            )
+            if part
+        )
     if kind == "flight":
         return " · ".join(
             part
@@ -1057,16 +1145,20 @@ def booking_details(kind: str, item: dict) -> str:
     )
 
 
-def flight_leg_summary(leg: object) -> str:
+def flight_leg_summary(leg: object, kind: str = "flight") -> str:
     if not isinstance(leg, dict):
         return ""
+    # Rail counts changes, not stops, and the distinction is not cosmetic: the localizer rewrites
+    # "0 stop(s)" to 直飞 page-wide with no notion of booking type, so a through train on a
+    # Chinese page was labelled "direct flight".
+    stop_noun = "change(s)" if kind == "ground" else "stop(s)"
     return " · ".join(
         part
         for part in (
             as_text(leg.get("service_identifier"), ""),
             " → ".join(part for part in (as_text(leg.get("departure_local"), ""), as_text(leg.get("arrival_local"), "")) if part),
             minutes(leg.get("duration_minutes")),
-            f"{as_text(leg.get('stops'))} stop(s)" if leg.get("stops") is not None else "",
+            f"{as_text(leg.get('stops'))} {stop_noun}" if leg.get("stops") is not None else "",
             as_text(leg.get("connection_or_terminal_note"), ""),
         )
         if part
@@ -1082,8 +1174,8 @@ def option_detail_list(kind: str, item: dict) -> str:
         # airport-transfer note that stops a cheap-looking flight hiding an impractical arrival.
         rows.extend(
             (
-                f'<li><strong>Outbound: </strong>{esc(flight_leg_summary(item.get("outbound_itinerary")), "Not supplied")}</li>',
-                f'<li><strong>Return: </strong>{esc(flight_leg_summary(item.get("return_itinerary")), "Not supplied")}</li>',
+                f'<li><strong>Outbound: </strong>{esc(flight_leg_summary(item.get("outbound_itinerary"), "ground"), "Not supplied")}</li>',
+                f'<li><strong>Return: </strong>{esc(flight_leg_summary(item.get("return_itinerary"), "ground"), "Not supplied")}</li>',
                 f'<li><strong>Fare conditions: </strong>{esc(item.get("material_conditions"))}</li>',
                 f'<li><strong>Station and access: </strong>{esc(item.get("station_transfer_note"))}</li>',
                 # Required by validate_plan and, until this line, printed nowhere -- so the card
@@ -1204,7 +1296,10 @@ def option_card(kind: str, item: dict) -> str:
         if item.get("single_option_reason")
         else ""
     )
-    return f'''<article class="option"><span class="pill">{attr(kind)}</span><h3>{esc(booking_title(kind, item))}</h3><p><strong>{price_label}</strong>{esc(price)}</p>{stay_total}<p>{esc(booking_details(kind, item), "Conditions require recheck")}</p>{option_detail_list(kind, item)}{single_reason}<p class="meta">Provider: {esc(provider)} · Compared via: {esc(comparison_platform)} · Checked: {stamp(checked_at)} · Source: {esc(item.get("source_type"))}</p>{"".join(actions)}</article>'''
+    # data-option-kind carries the machine enum so the delivery gate can attribute each button to
+    # the card it sits in. The pill beside it says the same thing in the traveller's language and
+    # is therefore unreadable to a gate on a translated page.
+    return f'''<article class="option" data-option-kind="{attr(kind)}"><span class="pill">{attr(kind)}</span><h3>{esc(booking_title(kind, item))}</h3><p><strong>{price_label}</strong>{esc(price)}</p>{stay_total}<p>{esc(booking_details(kind, item), "Conditions require recheck")}</p>{option_detail_list(kind, item)}{single_reason}<p class="meta">Provider: {esc(provider)} · Compared via: {esc(comparison_platform)} · Checked: {stamp(checked_at)} · Source: {esc(item.get("source_type"))}</p>{"".join(actions)}</article>'''
 
 
 def booking_access_details(value: object) -> str:
@@ -1522,7 +1617,7 @@ def validate_plan(plan: dict) -> list[str]:
                 errors.append(f"budget.breakdown[{number}].currency must match trip.currency.")
             if not is_nonnegative_money_range(item["per_person_low"], item["per_person_high"]):
                 errors.append(f"budget.breakdown[{number}] per-person range must be non-negative numbers with low less than or equal to high.")
-            if item["price_status"] not in PRICE_STATUSES:
+            if not is_one_of(item.get("price_status"), PRICE_STATUSES):
                 errors.append(f"budget.breakdown[{number}].price_status must be researched_current, estimate, or user_confirmed.")
             if not is_iso_datestamp(item["checked_at"]):
                 errors.append(f"budget.breakdown[{number}].checked_at must be an ISO date or date-time.")
@@ -1745,7 +1840,7 @@ def validate_plan(plan: dict) -> list[str]:
             if not isinstance(item, dict) or not all(item.get(key) for key in ("provider" if kind != "ticket" else "official_or_authorised_provider", "checked_at", "review_url")) or not is_https(item.get("review_url")):
                 errors.append(f"Every {kind} option needs provider, checked_at, and an HTTPS review_url.")
                 continue
-            if kind in {"flight", "hotel"} and not item.get("id"):
+            if kind in {"flight", "hotel", "ground"} and not item.get("id"):
                 errors.append(f"Every {kind} option needs a stable, non-empty id for day assignments and comparison.")
             if item.get("comparison_platform") and not item.get("comparison_checked_at"):
                 errors.append(f"Every compared {kind} option needs comparison_checked_at.")
@@ -1775,7 +1870,7 @@ def validate_plan(plan: dict) -> list[str]:
                 elif not is_https(item["round_trip_search_url"]):
                     errors.append("Every ground-transport round-trip search URL must be HTTPS.")
                 search_fields = item.get("round_trip_prefilled_fields")
-                if not isinstance(search_fields, list) or not REQUIRED_FLIGHT_SEARCH_FIELDS.issubset(set(search_fields)):
+                if not has_search_fields(search_fields, REQUIRED_FLIGHT_SEARCH_FIELDS):
                     errors.append(
                         "Every ground-transport round-trip search must prefill origin, destination, "
                         "outbound date, return date, and travellers.")
@@ -1785,16 +1880,26 @@ def validate_plan(plan: dict) -> list[str]:
                     leg = item.get(leg_name)
                     if not isinstance(leg, dict) or not all(leg.get(key) is not None and leg.get(key) != "" for key in ("service_identifier", "departure_local", "arrival_local", "duration_minutes", "stops", "connection_or_terminal_note")):
                         errors.append(f"ground.{leg_name} needs the service identifier, local times, duration, changes, and an interchange note.")
-                if item.get("availability_status") not in {"available", "limited", "unknown"}:
+                    elif not (isinstance(leg.get("duration_minutes"), (int, float)) and not isinstance(leg.get("duration_minutes"), bool) and leg["duration_minutes"] > 0):
+                        # A journey of zero minutes is not a researched journey, and zero was what
+                        # the contract template seeded the field with -- so the one value that
+                        # means "I did not fill this in" was the one value every gate accepted.
+                        errors.append(f"ground.{leg_name}.duration_minutes must be a positive number of minutes.")
+                if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
                     errors.append("ground.availability_status must be available, limited, or unknown.")
                 if item.get("price_basis") != "per_person_round_trip":
                     errors.append("ground.price_basis must be per_person_round_trip.")
-                if item.get("price_status") not in PRICE_STATUSES:
+                if not is_one_of(item.get("price_status"), PRICE_STATUSES):
                     errors.append("ground.price_status must be researched_current, estimate, or user_confirmed.")
                 if item.get("fare_low") is None or item.get("fare_high") is None or not item.get("fare_currency"):
                     errors.append("Every ground-transport option needs a checked per-person fare range and currency.")
                 elif not is_nonnegative_money_range(item.get("fare_low"), item.get("fare_high")):
                     errors.append("Every ground-transport fare range must be non-negative with low <= high.")
+                elif item["fare_low"] == 0 and item["fare_high"] == 0:
+                    # Same reasoning as the zero-minute leg: 0/0 was the template's seed value, so
+                    # "unfilled" and "free" were indistinguishable to every gate. A ticket that is
+                    # genuinely free needs no round-trip search URL, which this branch requires.
+                    errors.append("A ground-transport fare of 0-0 is an unfilled field, not a researched fare.")
                 if not is_iso_datestamp(item.get("price_checked_at")):
                     errors.append("ground.price_checked_at must be an ISO date or date-time.")
                 # The two dates were truthiness-checked only, so "next Friday" and a return three
@@ -1829,7 +1934,7 @@ def validate_plan(plan: dict) -> list[str]:
                 elif not is_https(item["round_trip_search_url"]):
                     errors.append("Every flight round-trip search URL must be HTTPS.")
                 search_fields = item.get("round_trip_prefilled_fields")
-                if not isinstance(search_fields, list) or not REQUIRED_FLIGHT_SEARCH_FIELDS.issubset(set(search_fields)):
+                if not has_search_fields(search_fields, REQUIRED_FLIGHT_SEARCH_FIELDS):
                     errors.append("Every flight round-trip search must prefill origin, destination, outbound date, return date, and travellers.")
                 if not is_iso_datestamp(item.get("round_trip_search_checked_at")):
                     errors.append("flight.round_trip_search_checked_at must be an ISO date or date-time.")
@@ -1837,11 +1942,11 @@ def validate_plan(plan: dict) -> list[str]:
                     leg = item.get(leg_name)
                     if not isinstance(leg, dict) or not all(leg.get(key) is not None and leg.get(key) != "" for key in ("service_identifier", "departure_local", "arrival_local", "duration_minutes", "stops", "connection_or_terminal_note")):
                         errors.append(f"flight.{leg_name} needs carrier/flight or service identifier, local times, duration, stops, and connection/terminal note.")
-                if item.get("availability_status") not in {"available", "limited", "unknown"}:
+                if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
                     errors.append("flight.availability_status must be available, limited, or unknown.")
                 if item.get("price_basis") != "per_person_round_trip":
                     errors.append("flight.price_basis must be per_person_round_trip.")
-                if item.get("price_status") not in PRICE_STATUSES:
+                if not is_one_of(item.get("price_status"), PRICE_STATUSES):
                     errors.append("flight.price_status must be researched_current, estimate, or user_confirmed.")
                 if item.get("fare_low") is None or item.get("fare_high") is None or not item.get("fare_currency"):
                     errors.append("Every flight option needs a checked per-person fare range and currency.")
@@ -1866,13 +1971,13 @@ def validate_plan(plan: dict) -> list[str]:
                 )
                 if not all(item.get(key) is not None and item.get(key) != "" for key in required_hotel_fields):
                     errors.append("Every hotel option needs an exact stay area, access rationale, room and current price details, availability status, and check-in/out dates.")
-                if item.get("availability_status") not in {"available", "limited", "unknown"}:
+                if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
                     errors.append("hotel.availability_status must be available, limited, or unknown.")
                 if not item.get("stay_group_id"):
                     errors.append("Every hotel option needs a stay_group_id so comparable options cannot be split by different neighborhood labels.")
                 if item.get("price_basis") != "per_room_per_night":
                     errors.append("hotel.price_basis must be per_room_per_night.")
-                if item.get("price_status") not in PRICE_STATUSES:
+                if not is_one_of(item.get("price_status"), PRICE_STATUSES):
                     errors.append("hotel.price_status must be researched_current, estimate, or user_confirmed.")
                 if not is_iso_datestamp(item.get("price_checked_at")):
                     errors.append("hotel.price_checked_at must be an ISO date or date-time.")
@@ -1893,7 +1998,7 @@ def validate_plan(plan: dict) -> list[str]:
                         if not is_iso_datestamp(search["checked_at"]):
                             errors.append("Every hotel comparison search.checked_at must be an ISO date or date-time.")
                         fields = search.get("prefilled_fields")
-                        if not isinstance(fields, list) or not REQUIRED_STAY_SEARCH_FIELDS.issubset(set(fields)):
+                        if not has_search_fields(fields, REQUIRED_STAY_SEARCH_FIELDS):
                             errors.append("Every hotel comparison search must prefill destination, check-in/out, guests, and rooms.")
                 check_in = parse_iso_date(item.get("check_in"), "hotel.check_in", errors)
                 check_out = parse_iso_date(item.get("check_out"), "hotel.check_out", errors)
@@ -1913,9 +2018,9 @@ def validate_plan(plan: dict) -> list[str]:
                     errors.append("ticket.ticket_status must be idea, researched, held, or booked.")
                 if item.get("price_basis") != "per_person_ticket":
                     errors.append("ticket.price_basis must be per_person_ticket.")
-                if item.get("price_status") not in PRICE_STATUSES:
+                if not is_one_of(item.get("price_status"), PRICE_STATUSES):
                     errors.append("ticket.price_status must be researched_current, estimate, or user_confirmed.")
-                if item.get("availability_status") not in {"available", "limited", "unknown"}:
+                if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
                     errors.append("ticket.availability_status must be available, limited, or unknown.")
                 if not is_nonnegative_money_range(item.get("price_low"), item.get("price_high")):
                     errors.append("ticket price range must be non-negative numbers with low less than or equal to high.")
@@ -1932,16 +2037,16 @@ def validate_plan(plan: dict) -> list[str]:
                     errors.append("Every rental-car option needs exact pickup/dropoff, vehicle/terms, dated per-day price, availability, and search-prefill details.")
                 if item.get("price_basis") != "per_vehicle_per_day":
                     errors.append("rental_car.price_basis must be per_vehicle_per_day.")
-                if item.get("price_status") not in PRICE_STATUSES:
+                if not is_one_of(item.get("price_status"), PRICE_STATUSES):
                     errors.append("rental_car.price_status must be researched_current, estimate, or user_confirmed.")
-                if item.get("availability_status") not in {"available", "limited", "unknown"}:
+                if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
                     errors.append("rental_car.availability_status must be available, limited, or unknown.")
                 if not is_nonnegative_money_range(item.get("price_low"), item.get("price_high")):
                     errors.append("rental-car price range must be non-negative numbers with low less than or equal to high.")
                 if not is_iso_datestamp(item.get("price_checked_at")):
                     errors.append("rental_car.price_checked_at must be an ISO date or date-time.")
                 rental_fields = item.get("rental_search_prefilled_fields")
-                if not isinstance(rental_fields, list) or not REQUIRED_RENTAL_SEARCH_FIELDS.issubset(set(rental_fields)):
+                if not has_search_fields(rental_fields, REQUIRED_RENTAL_SEARCH_FIELDS):
                     errors.append("Every rental-car search must prefill pickup/dropoff locations and times.")
     required_access_categories = {"accommodation"}
     if options.get("flights"):
@@ -1950,21 +2055,38 @@ def validate_plan(plan: dict) -> list[str]:
         required_access_categories.add("attraction_ticket")
     if options.get("rental_cars"):
         required_access_categories.add("rental_car")
-    if mode == "public-transit":
+    # Keyed on the card as well as the mobility mode, because every other category is keyed on
+    # "is this card here" and this one was not. A car ferry, a motorail or a Eurotunnel shuttle
+    # sits inside a self-drive trip, and the mode test alone left that crossing -- often the one
+    # sellable-out purchase on the page -- as the only channel with no record of whether the
+    # traveller can reach and buy from it.
+    if mode == "public-transit" or options.get("ground_transport"):
         required_access_categories.add("rail_or_ground")
     missing_access_categories = required_access_categories - booking_access_categories
     if missing_access_categories:
         errors.append("Missing booking-access checks for: " + ", ".join(sorted(missing_access_categories)) + ".")
     accommodation_items = [item for item in options.get("accommodations", []) if isinstance(item, dict)]
     flight_items = [item for item in options.get("flights", []) if isinstance(item, dict)]
-    if len(flight_items) == 1 and not flight_items[0].get("single_option_reason"):
-        errors.append("Provide at least two comparable flight candidates, or record a researched single_option_reason for the only feasible option.")
-    flight_ids = [item.get("id") for item in flight_items]
-    if any(not identifier for identifier in flight_ids) or len(set(flight_ids)) != len(flight_ids):
-        errors.append("Flight options must use distinct, non-empty ids so the comparison is not ambiguous.")
-    flight_review_urls = [item.get("review_url") for item in flight_items]
-    if len(flight_review_urls) != len(set(flight_review_urls)):
-        errors.append("Flight candidates must not reuse the same review_url; provide genuinely distinct comparison paths.")
+    ground_items = [item for item in options.get("ground_transport", []) if isinstance(item, dict)]
+    # One rule set over both categories. SKILL.md and references/booking-html-output.md both
+    # promise ground is "held to exactly the flight standard"; leaving the three comparison rules
+    # keyed on flight_items made that sentence false, and an uncompared, unexplained single rail
+    # option is exactly what the strictness exists to prevent -- as is a pair of "compared" cards
+    # pointing at one review_url, which looks like a comparison and is not.
+    for items, noun, label in ((flight_items, "flight", "Flight"),
+                               (ground_items, "rail/coach/ferry", "Rail/coach/ferry")):
+        if len(items) == 1 and not items[0].get("single_option_reason"):
+            errors.append(f"Provide at least two comparable {noun} candidates, or record a researched single_option_reason for the only feasible option.")
+        identifiers = [item.get("id") for item in items]
+        # A non-string id is not merely odd: ids are matched by equality against day assignments
+        # elsewhere in the plan, so a list or a number is a value that can never match and never
+        # says why. Truthiness alone accepted `["ground-1"]`.
+        if any(not isinstance(identifier, str) or not identifier.strip() for identifier in identifiers) \
+                or len({dedupe_key(v) for v in identifiers}) != len(identifiers):
+            errors.append(f"{label} options must use distinct, non-empty string ids so the comparison is not ambiguous.")
+        review_urls = [item.get("review_url") for item in items]
+        if len({dedupe_key(v) for v in review_urls}) != len(review_urls):
+            errors.append(f"{label} candidates must not reuse the same review_url; provide genuinely distinct comparison paths.")
     accommodation_ids = {item.get("id") for item in accommodation_items if item.get("id")}
     if not accommodation_ids:
         errors.append("At least one accommodation option with an id is required.")
@@ -2018,6 +2140,33 @@ def validate_plan(plan: dict) -> list[str]:
                 errors.append(f"day {day.get('number', '?')} references an unknown ticket_option_id.")
     if trip.get("arrival_transport_mode") == "flight" and not options.get("flights"):
         errors.append("A flight-arrival plan needs at least one flight option.")
+    # The same rule for the ground modes, and it is the one that makes the category worth having.
+    # Adding ground_transport made a train card POSSIBLE; without this it was never REQUIRED, so a
+    # rail-arrival plan with three compared hotels and no way to reach, price-check or
+    # availability-check the train passed validate_plan, check_plan_consistency and
+    # validate_trip_html exactly as before -- the defect the category was built to end, recurring on
+    # any run where the author simply did not think of it. `--require-booking-type ground` cannot
+    # cover for this: it is opt-in, and the flight rule pointedly does not depend on the operator
+    # remembering a flag.
+    #
+    # "road" is included only for public transit, where it means a coach; on a self-drive trip the
+    # road arrival is the rental car, which the next rule already requires.
+    if trip.get("arrival_transport_mode") == "rail" and not options.get("ground_transport"):
+        errors.append(
+            "A rail-arrival plan needs at least one rail/coach/ferry option in "
+            "booking_options.ground_transport -- the train is the largest and most time-sensitive "
+            "purchase on the page, and without a card the traveller cannot reach, price or "
+            "availability-check it.")
+    # "road" is only an intercity coach when the trip actually leaves town. On a same-city plan --
+    # the repo's own fixture is Chengdu to Chengdu -- road means the taxi or the bus that met the
+    # traveller, and demanding a bookable coach card for it would be a gate firing on correct
+    # authoring, which is worse than no gate.
+    leaves_town = str(trip.get("origin") or "").strip() != str(trip.get("destination") or "").strip()
+    if (trip.get("arrival_transport_mode") == "road" and mode != "self-drive" and leaves_town
+            and not options.get("ground_transport")):
+        errors.append(
+            "A road arrival between two places on public transit means an intercity coach, so it "
+            "needs at least one rail/coach/ferry option in booking_options.ground_transport.")
     if mode == "self-drive" and not options.get("rental_cars"):
         errors.append("A self-drive plan needs at least one rental-car option.")
     if mode == "public-transit" and options.get("rental_cars"):

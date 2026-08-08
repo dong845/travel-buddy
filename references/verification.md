@@ -141,7 +141,7 @@ carries all five domain blocks, both audit blocks, and an inline note on each re
 }
 ```
 
-`domain` must be one of the five names above, and no others are allowed. How many must appear is read off the plan by `check_plan_consistency.py`, not chosen: the full pass needs all five, and a plan that qualifies for the light tier (see SKILL.md's work-mode section) needs only `sights_and_hours`. Both audits are required either way. The
+`domain` must be one of the five names above, and no others are allowed. How many must appear is read off the plan by `check_plan_consistency.py`, not chosen: the full pass needs all five, and a plan that qualifies for the light tier (see SKILL.md's work-mode section) needs `sights_and_hours` and `transport`. Both audits are required either way. The
 two auditors go in a sibling `audits` array — `{"audit": "consistency"|"completeness",
 "claims_checked": [...], "findings": [...]}` — with exactly those two names, both required, and
 findings in the same shape as a domain's. They are a separate array rather than two more domains

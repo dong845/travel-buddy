@@ -107,6 +107,11 @@ def main() -> int:
         required_booking_types.add("flight")
     if plan.get("booking_options", {}).get("attraction_tickets"):
         required_booking_types.add("ticket")
+    # The same list, kept in step by hand in three files. Harmless today because validate_plan
+    # already forces the button on every ground option -- but that is a reason this line is cheap,
+    # not a reason to leave the third copy behind when the first two moved.
+    if plan.get("booking_options", {}).get("ground_transport"):
+        required_booking_types.add("ground")
     html_errors = validate_html(
         rendered_html,
         len(plan["days"]),
