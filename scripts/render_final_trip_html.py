@@ -337,6 +337,9 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "entry_required_to_apply": "需要签证（尚未办理）",
             "budget_cap": "人均预算上限",
             "venue_hours_label": "营业时间：",
+            "rating_label": "评分：",
+            "rating_none": "无公开评分",
+            "rating_reviews": " 条评价",
             "hours_verified": "已核验",
             "hours_researched": "已调研（未核验）",
             "hours_unverified": "未核验",
@@ -364,6 +367,9 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     # their provenance, and the three intake spellings of entry status.
     "budget_cap",
     "venue_hours_label",
+    "rating_label",
+    "rating_none",
+    "rating_reviews",
     "hours_verified",
     "hours_researched",
     "hours_unverified",
@@ -561,6 +567,9 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         "Current researched options only. Opening a link never creates a reservation.": labels["no_reservation"],
         "No meal recommendation was researched.": labels["no_meal_recommendation"],
         "Check current opening hours before switching.": labels["opening_hours_recheck"],
+        "Rating: ": labels.get("rating_label", "Rating: "),
+        "no public rating": labels.get("rating_none", "no public rating"),
+        " reviews": labels.get("rating_reviews", " reviews"),
         # The hours provenance word is anchored inside its own span: bare "researched" also
         # appears as a source-confidence default, and a loose replacement would translate that
         # unrelated word too.
@@ -1436,6 +1445,40 @@ def route_segment_links(route: dict, currency: object) -> str:
     return f'<ol class="segment-list">{"".join(rows)}</ol>'
 
 
+def dining_rating_line(item: dict) -> str:
+    """Print the venue's rating, its count and where it came from.
+
+    The plan collected all of it and the page printed none of it, so a recommendation looked
+    identical whether somebody had opened the venue's page or copied it out of a blog listicle.
+    That is not hypothetical: a delivered plan shipped a dinner at a venue with no listing on
+    any platform, and the traveller had no way to tell. The count travels with the value on
+    purpose -- 4.8 from 12 reviews and 4.3 from 2,000 are different claims -- and a card that
+    honestly has no rating says so rather than staying silent, because silence reads as an
+    omission while "no public rating: market stalls are rated individually" reads as a decision.
+    """
+    status = str(item.get("rating_status") or "").strip().casefold()
+    if status == "none":
+        reason = item.get("rating_absence_reason")
+        return (f'<p class="meta dining-rating" data-rating-status="none">'
+                f'<strong>Rating: </strong>no public rating'
+                f'{" · " + esc(reason) if reason else ""}</p>')
+    value, scale, count = item.get("rating_value"), item.get("rating_scale"), item.get("rating_count")
+    if value is None:
+        return ""
+    source = item.get("rating_source")
+    url = item.get("rating_url")
+    shown = f'{as_text(value)}/{as_text(scale or 5)}'
+    reviews = f' · {as_text(count)} reviews' if count is not None else ""
+    origin = f' · {esc(source)}' if source else ""
+    body = (f'<strong>Rating: </strong>{esc(shown)}{reviews}{origin}')
+    if url:
+        body = (f'<strong>Rating: </strong>'
+                f'<a href="{attr(url)}" target="_blank" rel="noopener noreferrer">{esc(shown)}</a>'
+                f'{reviews}{origin}')
+    return (f'<p class="meta dining-rating" data-rating-status="{attr(item.get("rating_status"))}" '
+            f'data-rating-value="{attr(value)}" data-rating-count="{attr(count)}">{body}</p>')
+
+
 def dining_hours_line(item: dict) -> str:
     """Show the researched opening hours, and say plainly when nobody verified them.
 
@@ -1483,6 +1526,7 @@ def dining_cards(value: object) -> str:
             f'<p>{esc(item.get("cuisine_or_style"))} · {esc(item.get("neighborhood"))}</p>'
             f'<p>{esc(item.get("why_this_stop"))}</p>'
             f'<p class="meta">{esc(money(item.get("price_per_person_low"), item.get("price_per_person_high"), item.get("currency")))} per person · {esc(item.get("reservation_or_queue_note"))}</p>'
+            f'{dining_rating_line(item)}'
             f'{dining_hours_line(item)}'
             f'<a class="dining-link" data-dining-provider="{attr(provider)}" data-verified-at="{attr(item.get("checked_at"))}" href="{attr(item.get("venue_url"))}" target="_blank" rel="noopener noreferrer">View restaurant in {esc(provider)}</a>'
             f'{reservation}{backup}</article>'

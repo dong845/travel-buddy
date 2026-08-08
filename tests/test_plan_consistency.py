@@ -1898,6 +1898,101 @@ def main() -> int:
             "&checkout=2026-09-29&group_adults=2&no_rooms=1")
     expect_fail("both hotels pointing at the same city search", p, "not scoped to this property")
 
+    # 24. What the first version of section 23 could NOT catch, found by attacking it: the
+    # distance rule only runs when both endpoints parse as coordinates, and the shipped bug used
+    # free text throughout. Reproduced: relabel every endpoint with the original Chinese captions,
+    # set every scope to primary_leg, and the checker exited 0 -- a gate that misses the bug it
+    # was written for. Free text is now refused outright, because no offline check can tell
+    # "Mercado de Vegueta" (which resolves) from "酒店（拉斯坎特拉斯海滨）" (which resolved to
+    # Taiwan); only a geocoder can, and it is not here.
+    p = copy.deepcopy(base)
+    for seg in day(p, 1)["route"]["segments"]:
+        seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1"
+                                   "&origin=%E9%85%92%E5%BA%97&destination=%E5%B9%BF%E5%9C%BA"
+                                   "&travelmode=transit")
+    expect_fail("map endpoints written as free text, with the scope rule dodged", p,
+                "is free text, not a coordinate pair")
+
+    # transport_overview carries a pair too, and went uninspected in the first version.
+    p = copy.deepcopy(base)
+    p["transport_overview"]["overall_route_map_url"] = (
+        "https://www.google.com/maps/dir/?api=1&origin=Hotel&destination=Airport&travelmode=transit")
+    expect_fail("the overview map endpoint nobody was checking", p, "transport_overview")
+
+    # A property whose name is not written in Latin script used to skip the scoping rule
+    # entirely, because the tokeniser split on a Latin-only character class and returned nothing.
+    # mainland China and Japan are core markets for this skill, so the hole exempted exactly the
+    # travellers it mattered most for.
+    for cjk in ("东京银座三井花园酒店", "ホテルグレイスリー新宿", "NH"):
+        p = copy.deepcopy(base)
+        option = p["booking_options"]["accommodations"][0]
+        option["property_name"] = cjk
+        option["comparison_searches"][0]["search_url"] = (
+            "https://www.booking.com/searchresults.html?ss=Chengdu&checkin=2026-09-28"
+            "&checkout=2026-09-29&group_adults=2&no_rooms=1")
+        expect_fail(f"a city search behind the non-Latin name {cjk!r}", p,
+                    "not scoped to this property")
+
+    # And the other direction: a correctly scoped search must not be flagged, including when the
+    # plan appends its own bracketed annotation to the property name.
+    p = copy.deepcopy(base)
+    option = p["booking_options"]["accommodations"][0]
+    option["property_name"] = "东京银座三井花园酒店（仅限 16 岁以上）"
+    option["comparison_searches"][0]["search_url"] = (
+        "https://www.booking.com/searchresults.html?ss="
+        "%E4%B8%9C%E4%BA%AC%E9%93%B6%E5%BA%A7%E4%B8%89%E4%BA%95%E8%8A%B1%E5%9B%AD%E9%85%92%E5%BA%97"
+        "&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1")
+    expect_ok("a property-scoped search under a bracketed non-Latin name", p)
+
+    # 25. What an adversarial pass over section 24 found. The leg-length rule is RELATIVE, so it
+    # is blind to a consistently reversed pair: writing lon,lat at both ends of a Las Palmas leg
+    # leaves the points 4.73 km apart instead of 4.70 -- and moves every pin to latitude -15.4,
+    # longitude 28.1, which is southern Africa. Measured, not imagined. One declared destination
+    # coordinate makes every endpoint absolutely checkable.
+    p = copy.deepcopy(base)
+    for seg in day(p, 1)["route"]["segments"]:
+        seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1"
+                                   "&origin=-15.436633,28.139552&destination=-15.413464,28.102546"
+                                   "&travelmode=transit")
+        seg["distance_km"] = 6.2
+    expect_fail("both endpoints reversed, which keeps the leg length plausible", p,
+                "from the trip's declared destination")
+
+    # And the anchor cannot be optional, or the rule above simply switches itself off.
+    p = copy.deepcopy(base)
+    p["trip"].pop("destination_coords", None)
+    expect_fail("coordinates used with no declared destination to check them against", p,
+                "trip.destination_coords is missing")
+
+    # Deleting the declared distance used to switch the endpoint rule off entirely: _num()
+    # returns 0.0 for a missing value, so the "no declared distance" fallback was dead code.
+    p = copy.deepcopy(base)
+    seg = day(p, 1)["route"]["segments"][0]
+    seg.pop("distance_km", None)
+    seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1"
+                               "&origin=30.5723,104.0665&destination=40.416775,-3.703790"
+                               "&travelmode=transit")
+    expect_fail("an endpoint on another continent with no distance_km to check it against", p,
+                "from the trip's declared destination")
+
+    # 26. Two more the adversarial pass found, one of them self-inflicted. dest_id is Booking's
+    # CITY identifier and had been added to the id allow-list, so the exemption whitelisted the
+    # canonical city search -- the exact URL the rule exists to reject.
+    p = copy.deepcopy(base)
+    p["booking_options"]["accommodations"][0]["comparison_searches"][0]["search_url"] = (
+        "https://www.booking.com/searchresults.html?ss=Chengdu&dest_id=-1899695&dest_type=city"
+        "&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1")
+    expect_fail("a city search wearing Booking's dest_id", p, "not scoped to this property")
+
+    # The same "one option shown twice" defect the hotel rule was written for also shipped on
+    # flights: both candidates in a delivered plan carried an identical round-trip search URL.
+    p = copy.deepcopy(base)
+    flights = p["booking_options"].get("flights") or []
+    if len(flights) >= 2:
+        flights[1]["round_trip_search_url"] = flights[0]["round_trip_search_url"]
+        expect_fail("two flight candidates sharing one search URL", p,
+                    "share the same round_trip_search_url")
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 

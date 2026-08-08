@@ -1584,8 +1584,29 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
     # resolution string a reader can check by eye.
 
 
-def _name_tokens(name: str) -> list[str]:
-    return [t for t in re.split(r"[^0-9A-Za-zÀ-ÿ]+", name or "") if len(t) >= 4]
+_BRACKETED = re.compile(r"[（(\[【][^）)\]】]*[）)\]】]")
+
+
+def _fold(text: str) -> str:
+    """Case-folded, punctuation-free, script-agnostic form for substring comparison.
+
+    Tokenising on a Latin character class was the first attempt and it silently exempted every
+    market this skill cares most about: '东京银座三井花园酒店' and 'ホテルグレイスリー新宿' both
+    produced zero tokens, so the property-scoping rule skipped them entirely and a Tokyo or
+    Chengdu plan could still ship two hotels behind one city search. Folding both sides and
+    asking for a substring works in any script.
+    """
+    return re.sub(r"[^0-9a-z぀-ヿ㐀-鿿가-힯]+", "",
+                  (text or "").casefold())
+
+
+def _property_key(name: str) -> str:
+    """The part of a property name a search URL should carry, minus any bracketed gloss.
+
+    'Hotel Cristina by Tigotan Las Palmas（仅限 16 岁以上）' is searched as the hotel; the
+    parenthetical is the plan's own annotation and never appears in the provider's URL.
+    """
+    return _fold(_BRACKETED.sub("", name or ""))
 
 
 def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> None:
@@ -1608,7 +1629,7 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     stays: dict[str, list[tuple[str, str]]] = {}
     for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
         name = str(option.get("property_name") or option.get("id") or "?")
-        tokens = [t.lower() for t in _name_tokens(name)]
+        key = _property_key(name)
         searches = [_obj(s) for s in _seq(option.get("comparison_searches"))]
         if not searches:
             errors.append(f"accommodation '{name}': no comparison_searches. Give the traveller a "
@@ -1617,9 +1638,12 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
         for search in searches:
             url = str(search.get("search_url") or "")
             stays.setdefault(str(option.get("stay_group_id") or ""), []).append((name, url))
-            low = url.lower()
-            if tokens and not any(t in low for t in tokens) and not re.search(
-                    r"(hotel_?id|property[_-]?id|dest_id|hotelId)=", url):
+            haystack = _fold(urllib.parse.unquote_plus(url))
+            # dest_id / dest_type are Booking's *city* identifiers and were briefly on this
+            # allow-list, which exempted the canonical city search -- the very URL the rule
+            # exists to reject. Only identifiers that name one property may buy an exemption.
+            if key and key not in haystack and not re.search(
+                    r"(hotel_?id|property[_-]?id|hotelId|propertyId)=", url):
                 errors.append(
                     f"accommodation '{name}': its comparison search URL is not scoped to this "
                     f"property -- the URL carries none of its name and no property id, so the "
@@ -1634,6 +1658,32 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                     f"stay group '{group}': '{seen[url]}' and '{name}' share the same comparison "
                     f"URL. Two options that open the same page are one option shown twice.")
             seen.setdefault(url, name)
+
+    # review_url is deliberately NOT held to the same name test. A property's own site is
+    # addressed in its own market's script -- '东京銀座三井ガーデンホテル' lives at
+    # gardenhotels.co.jp/ginza -- so demanding the property name inside that URL would fail
+    # exactly the non-Latin markets the folding fix above was written to protect. The
+    # comparison search is different: its query string is written here, so the name is in it
+    # by construction, and that is where the property-scoping guarantee belongs.
+
+    # Two "competing" options that open the same page are one option shown twice. The rule was
+    # written for hotels and the same defect shipped on flights: both candidates in a delivered
+    # plan carried an identical round-trip search URL, so the comparison compared nothing.
+    for kind in ("flights", "ground_transport", "accommodations", "rental_cars"):
+        seen: dict[tuple[str, str], str] = {}
+        for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get(kind))]:
+            label = str(option.get("property_name") or option.get("provider")
+                        or option.get("id") or "?")
+            for field in ("review_url", "round_trip_search_url"):
+                url = str(option.get(field) or "")
+                if not url:
+                    continue
+                previous = seen.get((field, url))
+                if previous and previous != label:
+                    errors.append(
+                        f"{kind}: '{previous}' and '{label}' share the same {field}. Two options "
+                        f"that open the same page are one option shown twice.")
+                seen.setdefault((field, url), label)
 
     unknown = [str(o.get("property_name")) for o in
                [_obj(x) for x in _seq(_obj(plan.get("booking_options")).get("accommodations"))]
@@ -1782,8 +1832,20 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
     the two apart.
     """
     tolerance = 1.30  # road distance exceeds great-circle; only a gross mismatch is a defect
-    free_text: list[str] = []
     checked = 0
+
+    # An absolute reference, because the distance rule alone is relative and therefore blind to
+    # a consistently swapped pair: writing lon,lat for BOTH ends of a Las Palmas leg leaves the
+    # two points 4.73 km apart instead of 4.70, so the leg passes -- while every pin has moved to
+    # latitude -15.4, longitude 28.1, which is southern Africa. Measured, not imagined. One
+    # declared destination coordinate turns every endpoint check from relative into absolute.
+    anchor = _obj(_obj(plan.get("trip")).get("destination_coords"))
+    anchor_point: tuple[float, float] | None = None
+    if anchor:
+        lat, lon = _num(anchor.get("lat")), _num(anchor.get("lon"))
+        if abs(lat) <= 90 and abs(lon) <= 180 and (lat or lon):
+            anchor_point = (lat, lon)
+    ANCHOR_RADIUS_KM = 800.0
 
     def endpoints_of(url: str, where: str, declared_km: float | None) -> None:
         nonlocal checked
@@ -1793,12 +1855,41 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
         coords = [(k, _endpoint_coords(v), v) for k, v in pairs]
         for key, point, raw in coords:
             if point is None:
-                free_text.append(f"{where}: {key}={raw!r}")
+                # Free text is refused rather than reported, and this is the whole rule: the
+                # distance check below can only run on coordinates, so a plan written entirely
+                # in labels used to sail through with a note. That is exactly the plan that
+                # shipped -- every endpoint a Chinese caption, one of them geocoded to Taiwan --
+                # and a gate that cannot catch the bug it was written for is theatre.
+                # A name is not an acceptable substitute because no offline check can tell
+                # 'Mercado de Vegueta' (which resolves) from '酒店（拉斯坎特拉斯海滨）' (which
+                # resolves to another continent); only a geocoder can, and it is not here.
+                # Coordinates cost nothing: the place page that gave you the venue's rating and
+                # opening hours put the lat/lon in its own URL.
+                errors.append(
+                    f"{where}: {key}={raw!r} is free text, not a coordinate pair. A map URL "
+                    f"parameter is a geocoder query -- write it as 'lat,lon' (Amap: 'lon,lat,name') "
+                    f"so it cannot resolve to the wrong continent and so the distance check can "
+                    f"run on it.")
+        if anchor_point is not None:
+            for key, point, raw in coords:
+                if point is None:
+                    continue
+                away = _great_circle_km(anchor_point, point)
+                if away > ANCHOR_RADIUS_KM:
+                    errors.append(
+                        f"{where}: {key}={raw!r} sits {away:,.0f} km from the trip's declared "
+                        f"destination. Check the coordinate order -- 'lat,lon' reversed reads as "
+                        f"a point on another continent while staying the right distance from its "
+                        f"partner, so the leg-length rule cannot see it.")
         located = [p for _, p, _ in coords if p is not None]
         if len(located) == 2:
             checked += 1
             straight = _great_circle_km(located[0], located[1])
-            if declared_km is not None and declared_km > 0 and straight > declared_km * tolerance + 1:
+            if declared_km is not None and declared_km <= 0:
+                declared_km = None      # _num() returns 0.0 for a missing value; without this the
+                                        # "no declared distance" fallback below was dead code, and
+                                        # deleting distance_km switched the whole rule off.
+            if declared_km is not None and straight > declared_km * tolerance + 1:
                 errors.append(
                     f"{where}: its two map endpoints are {straight:,.0f} km apart in a straight "
                     f"line, but the leg declares distance_km={declared_km:g}. One of the two "
@@ -1871,12 +1962,21 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
                     f"skipping {len(stops) - 2} intermediate stop(s). Either add the waypoints or "
                     f"set route_map_scope to 'primary_leg' so the label matches what opens.")
 
-    if free_text:
-        notes.append(
-            "note: map endpoints written as free text rather than coordinates (each one is a "
-            "geocoder query -- open it and confirm the pin lands where the label says):\n    - "
-            + "\n    - ".join(free_text[:20])
-            + (f"\n    ... and {len(free_text) - 20} more" if len(free_text) > 20 else ""))
+    overview = _obj(plan.get("transport_overview"))
+    endpoints_of(str(overview.get("overall_route_map_url") or ""),
+                 "transport_overview", _num(overview.get("overall_distance_km")) or None)
+
+    if checked and anchor_point is None:
+        # Optional was not good enough: without the anchor the endpoint rule is purely relative,
+        # and a consistently reversed lat/lon pair keeps its partner the right distance away while
+        # moving every pin to another continent. A plan that uses coordinates must say where the
+        # trip is, once.
+        errors.append(
+            "trip.destination_coords is missing, so every map endpoint was checked only against "
+            "its own partner. Declare the destination once as {\"lat\": .., \"lon\": ..}: "
+            "without it a lat/lon pair written in the wrong order passes the leg-length rule "
+            "while pointing at another continent.")
+
     if checked:
         notes.append(f"note: {checked} map link(s) had both endpoints as coordinates and were "
                      f"distance-checked against the leg they belong to.")

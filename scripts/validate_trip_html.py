@@ -317,6 +317,8 @@ class TripHTMLParser(HTMLParser):
         self.active_days: list[dict] = []
         self.ids: set[str] = set()
         self.booking_links: list[dict[str, str]] = []
+        self.dining_stops = 0
+        self.dining_ratings = 0
         self.round_trip_links: list[dict[str, str]] = []
         # One record per .option article, so a button can be attributed to the card it sits in.
         # Counting per booking TYPE only asserted "at least one of these exists somewhere on the
@@ -362,6 +364,17 @@ class TripHTMLParser(HTMLParser):
             record = {"kind": attrs.get("data-option-kind", ""), "round_trip": 0}
             self.option_cards.append(record)
             self.active_options.append(record)
+        if "dining-stop" in class_set:
+            self.dining_stops += 1
+        if "dining-rating" in class_set:
+            # A rating the plan collected but the page never printed is work the traveller paid
+            # for and cannot see -- and it is the only thing on a dining card that says whether
+            # anyone opened the venue at all. Counted at the top of handle_starttag because the
+            # rating is a <p>: nested inside the href branch it never fired, and a negative test
+            # (delete one rating row, expect a failure) was what exposed that.
+            self.dining_ratings += 1
+            if not attrs.get("data-rating-status"):
+                self.errors.append("Every dining rating needs data-rating-status.")
         if tag == "article" and "day-card" in class_set:
             number = attrs.get("data-day", "")
             if not number.isdigit() or int(number) < 1:
@@ -536,6 +549,17 @@ def validate(
         errors.append("Day numbers must be contiguous and start at 1.")
     if expected_days is not None and len(parser.days) != expected_days:
         errors.append(f"Expected {expected_days} day cards but found {len(parser.days)}.")
+
+    # Every dining card carries its rating on the page, not only in the JSON. The plan gate
+    # already refuses a card without one; this is the half that makes the traveller see it,
+    # because a delivered page once showed a rating only where the author had happened to
+    # retype it into the prose, and a card filled in correctly but silently would have shown
+    # nothing at all.
+    if parser.dining_stops and parser.dining_ratings < parser.dining_stops:
+        errors.append(
+            f"{parser.dining_stops - parser.dining_ratings} of {parser.dining_stops} dining "
+            f"card(s) print no rating line. Each needs a visible rating with its count and "
+            f"source, or an explicit 'no public rating' with the reason.")
     # These two checks are what keep the fixes from silently regressing: the plan already
     # requires a per-day fallback and the page is unusable on a phone without day jumps,
     # but neither was verifiable before.

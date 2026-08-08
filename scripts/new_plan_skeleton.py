@@ -187,8 +187,20 @@ def dining_card(meal: str, anchor: str) -> dict:
     return {
         "meal": meal,
         "time_window": f"{TODO}HH:MM-HH:MM",
-        "venue_hours": None,
-        "hours_status": "unverified",
+        # Researched, not unverified, because a card that names a seating time is claiming the
+        # venue is open then; check_plan_consistency refuses the pair "unverified" + a clock.
+        "venue_hours": f"{TODO}Mon-Sun HH:MM-HH:MM (the days it is OPEN)",
+        "hours_status": "researched",
+        # Opening the venue's map page hands you all five of these in one read, plus the
+        # coordinates the route segments need.
+        "rating_status": "verified",
+        "rating_value": 0,
+        "rating_scale": 5,
+        "rating_count": 0,
+        "rating_source": f"{TODO}where the rating was read",
+        "rating_url": f"{TODO}https://…the venue's page on that provider",
+        "rating_checked_at": "1970-01-01",
+        "rating_absence_reason": None,
         "venue_name": f"{TODO}venue for {meal}",
         "cuisine_or_style": f"{TODO}cuisine or style",
         "neighborhood": f"{TODO}neighbourhood",
@@ -462,6 +474,10 @@ def main() -> int:
         "trip": {
             "title": f"{TODO}trip title", "language": args.language, "currency": currency,
             "origin": origin, "destination": destination, "destination_type": "city",
+            # Declared once so every map endpoint can be checked absolutely: a lat/lon pair
+            # written in the wrong order keeps its partner the right distance away while
+            # pointing at another continent, which no leg-length rule can see.
+            "destination_coords": {"lat": 0, "lon": 0},
             "start_date": start.isoformat(), "end_date": end.isoformat(),
             "traveler_count": travellers, "pace": f"{TODO}pace",
             "budget_basis": f"{TODO}what the per-person total includes",

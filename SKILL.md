@@ -208,12 +208,18 @@ So: **the string a button shows and the string its URL carries are two different
 may never be copied into the other.** Write the endpoint the way you would type it into that
 provider's own search box.
 
-- **Prefer coordinates.** `origin=28.1025,-15.4135` cannot mis-geocode, is language-independent,
+- **Coordinates, always.** `origin=28.1025,-15.4135` cannot mis-geocode, is language-independent,
   and returns real transit and walking directions. Record `lat,lon` for every stop as you research
-  it — the geocoder you used to find the venue already gave you them.
-- A place *name* is a fine endpoint (`Mercado de Vegueta, Las Palmas de Gran Canaria`); a place
-  *description* is not. If the string contains a colon, a gloss in brackets, an activity ("傍晚漫步"),
-  or two places joined by "与"/"and", it is a caption.
+  it — the place page that gave you the venue's rating and opening hours put the pair in its own
+  URL. Free text is refused outright, and the reason is that the first version of this rule only
+  *warned* about it: a plan rebuilt with the original captions and one line changed passed clean.
+  A name sometimes resolves (`Mercado de Vegueta`) and sometimes lands on another continent
+  (`酒店（拉斯坎特拉斯海滨）`), and no offline check can tell those apart — only a geocoder can, and
+  it is not in the gate.
+- **Declare `trip.destination_coords` once.** The leg-length rule is *relative*, so it cannot see a
+  consistently reversed pair: writing `lon,lat` at both ends of a Las Palmas leg leaves the points
+  4.73 km apart instead of 4.70 while moving every pin to southern Africa. One absolute reference
+  turns every endpoint check from "do these two agree" into "is this where the trip is".
 - The venue link on a dining card is the same defect in a second field: `venue_url` must be a place
   lookup keyed on the venue's **real registered name**. A plan shipped `query=酒店自助早餐（Hotel
   Cristina by Tigotan）` and `query=Puerto de Ons` for a restaurant Google lists as *Restaurante
@@ -285,7 +291,8 @@ Before delivering a recommendation or plan, verify:
 - saved-profile use was explicitly consented, exclusions were applied as hard filters, and the newest user instruction took precedence;
 - the answer preserves choice and makes trade-offs legible;
 - `python scripts/check_plan_consistency.py <plan.json>` exits clean, so no route total, walking figure, meal placement, calendar date, or budget line contradicts the data it is derived from;
-- every map and venue URL carries a **geocoder query, not a display label**: coordinates where you have them, the venue's registered name where you do not, never the itinerary's caption; the script's free-text endpoint list was read and each entry opened; and no day claims `multi_stop` scope without waypoints in its URL;
+- every map URL endpoint is a **coordinate pair**, never a display label, and `trip.destination_coords` is declared so a reversed pair cannot pass; no day claims `multi_stop` scope without waypoints, and no transit URL carries waypoints at all (Google returns no route for those);
+- every dining card's rating is **visible on the page**, not merely present in the JSON — `validate_trip_html.py` fails a card that prints none, because a rating stored and never shown is the same defect as a rating never gathered;
 - every dining card carries a rating with its scale, count and source (or `rating_status: "none"` with a reason), names the venue as its map provider indexes it, and has verified hours for the weekday it is scheduled on — a scheduled meal is a claim the venue is open;
 - every accommodation option has a **property-scoped** booking link, and its price and availability were read off that page rather than estimated;
 - the parallel verification in [references/verification.md](references/verification.md) ran concurrently before delivery, its report covers all five truth domains **and both auditors** (`consistency`, `completeness`) with every `claims_checked` a list of pointers that resolve, and every `wrong` or `misleading` finding is either fixed in the plan or explicitly accepted by the traveller — a plan saved with `--unverified` carries `verification_status: unverified` and renders a "not fact-checked" banner on the page, so never describe such a page as booking-ready;

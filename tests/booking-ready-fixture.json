@@ -13,7 +13,11 @@
     "traveler_count": 2,
     "pace": "balanced",
     "budget_basis": "per person, including transport and lodging",
-    "arrival_transport_mode": "road"
+    "arrival_transport_mode": "road",
+    "destination_coords": {
+      "lat": 30.5723,
+      "lon": 104.0665
+    }
   },
   "regional_service_context": {
     "destination_service_market": "mainland_china",
@@ -271,7 +275,7 @@
           "rating_value": 4.4,
           "rating_scale": 5,
           "rating_count": 812,
-          "rating_source": "Amap（门店页实读）",
+          "rating_source": "Amap",
           "rating_url": "https://ditu.amap.com/place/B0FFFFFFFF",
           "rating_checked_at": "2026-07-30",
           "rating_absence_reason": null
@@ -300,7 +304,7 @@
           "rating_value": 4.4,
           "rating_scale": 5,
           "rating_count": 812,
-          "rating_source": "Amap（门店页实读）",
+          "rating_source": "Amap",
           "rating_url": "https://ditu.amap.com/place/B0FFFFFFFF",
           "rating_checked_at": "2026-07-30",
           "rating_absence_reason": null,
