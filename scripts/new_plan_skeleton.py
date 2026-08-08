@@ -175,6 +175,10 @@ def segment(origin: str, destination: str) -> dict:
         "arrival_instruction": f"{TODO}what the traveller sees on arrival",
         "fare_basis": f"{TODO}fare and its source, or 'walking, no fare'",
         "fallback_note": f"{TODO}what to do if this leg fails",
+        # Set only when geography forces a way round far longer than the straight line --
+        # a canyon with no crossing, a fjord. Without it such a leg is refused, because
+        # nothing else separates a real detour from an endpoint wired to the wrong stop.
+        "detour_reason": None,
         "verified_map_url": URL,
         "map_checked_at": DATE,
         "map_provider": f"{TODO}map provider (must own the URL above)",
@@ -201,6 +205,9 @@ def dining_card(meal: str, anchor: str) -> dict:
         "rating_url": f"{TODO}https://…the venue's page on that provider",
         "rating_checked_at": "1970-01-01",
         "rating_absence_reason": None,
+        # Only when the score is below the floor and the venue still earns the evening --
+        # the one kitchen serving a dietary need, a stall whose reviews are all queue.
+        "rating_below_floor_reason": None,
         "venue_name": f"{TODO}venue for {meal}",
         "cuisine_or_style": f"{TODO}cuisine or style",
         "neighborhood": f"{TODO}neighbourhood",
@@ -603,6 +610,7 @@ def main() -> int:
                  "guest_rating_source": f"{TODO}where the score was read",
                  "guest_rating_url": f"{TODO}https://…the property on that platform",
                  "guest_rating_checked_at": DATE, "guest_rating_absence_reason": None,
+                 "guest_rating_below_floor_reason": None,
                  "taxes_and_fees_status": f"{TODO}taxes and fees", "cancellation_terms": f"{TODO}cancellation",
                  "accessibility_or_location_note": f"{TODO}access note", "arrival_access_note": f"{TODO}arrival access",
                  "key_area_access_note": f"{TODO}access to planned areas",

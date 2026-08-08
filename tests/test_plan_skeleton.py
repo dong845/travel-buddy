@@ -126,6 +126,33 @@ def main() -> int:
                 if "Renderer-owned text is still English" in output:
                     failures.append(f"{label}: skeleton leaks a renderer enum into Chinese prose\n{output}")
 
+    # The skeleton and the data contract have to agree on which fields exist, or a required one
+    # is discovered by failing a gate at the end instead of by filling a blank at the start.
+    # Three fields drifted exactly that way -- rating_below_floor_reason,
+    # guest_rating_below_floor_reason and detour_reason were added to the template and to the
+    # checker, and the skeleton went on emitting cards without them.
+    import json as _json
+    template = _json.loads((ROOT / "templates" / "final-trip-plan.json").read_text(encoding="utf-8"))
+    with tempfile.TemporaryDirectory() as raw:
+        probe = generate(Path(raw), "drift.json", "--start", "2027-03-05", "--end", "2027-03-08",
+                         "--origin", "A", "--destination", "B", "--language", "en",
+                         "--currency", "EUR", "--travellers", "1", "--mode", "public-transit",
+                         "--stops-per-day", "2")
+        skeleton = _json.loads(probe.read_text(encoding="utf-8"))
+
+    def compare(label: str, want: dict, got: dict) -> None:
+        missing = sorted(k for k in want if k not in got)
+        if missing:
+            failures.append(f"skeleton {label} is missing template field(s): {missing}")
+
+    compare("trip", template["trip"], skeleton["trip"])
+    compare("days[].dining[]", template["days"][0]["dining"][0], skeleton["days"][0]["dining"][0])
+    compare("days[].route.segments[]", template["days"][0]["route"]["segments"][0],
+            skeleton["days"][0]["route"]["segments"][0])
+    compare("booking_options.accommodations[]",
+            template["booking_options"]["accommodations"][0],
+            skeleton["booking_options"]["accommodations"][0])
+
     if failures:
         print("FAIL")
         for failure in failures:
