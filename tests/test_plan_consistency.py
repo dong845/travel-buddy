@@ -2142,6 +2142,46 @@ def main() -> int:
         "https://www.marriott.com/hotels/fixture-hotel-a")
     expect_ok("an own-site property page carrying no dates", p)
 
+    # 32. A placeholder must announce itself, not masquerade as a bad answer. The skeleton writes
+    # rating_value 0, and the floor rule read that as "you are recommending a venue rated 0/5.
+    # Replace it" -- sending the author to hunt for a badly-reviewed restaurant nobody chose. A
+    # fresh four-day skeleton produced 38 errors that way; it now produces 13, one per real task.
+    # Both directions are pinned here, because the cheap way to pass the first half is to stop
+    # checking anything.
+    p = copy.deepcopy(base)
+    card = day(p, 1)["dining"][0]
+    card["venue_name"] = "TODO: venue for lunch"
+    card["venue_url"] = "https://example.invalid/TODO-replace-with-a-researched-url"
+    card["rating_value"] = 0
+    expect_fail_naming("an unfilled dining card reports as unfilled", p,
+                       ["placeholder"], full_verification())
+
+    p = copy.deepcopy(base)
+    card = day(p, 1)["dining"][0]
+    card["venue_name"] = "TODO: venue for lunch"
+    card["rating_value"] = 0
+    ok, output = run(p)
+    if "below the 3.5/5 floor" in output:
+        failures.append("an unfilled dining card must not be accused of being badly rated: "
+                        + output)
+
+    # And the guard must not become a way to switch the rule off: a card that IS filled in and
+    # rated 3.1/5 still fails.
+    p = copy.deepcopy(base)
+    day(p, 1)["dining"][0]["rating_value"] = 3.1
+    expect_fail("a filled-in card rated 3.1/5", p, "below the 3.5/5 floor")
+
+    p = copy.deepcopy(base)
+    p["booking_options"]["accommodations"][0]["property_name"] = "TODO: property 1"
+    ok, output = run(p)
+    if "below the 7.0/10 floor" in output:
+        failures.append("an unfilled accommodation must not be accused of a low guest score: "
+                        + output)
+
+    p = copy.deepcopy(base)
+    p["booking_options"]["accommodations"][0]["guest_rating_value"] = 6.2
+    expect_fail("a filled-in hotel rated 6.2/10", p, "below the 7.0/10 floor")
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 

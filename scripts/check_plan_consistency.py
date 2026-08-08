@@ -916,6 +916,8 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
 
             hours = card.get("venue_hours")
             status = str(card.get("hours_status") or "").strip().lower()
+            if _unfilled(venue, hours):
+                continue      # an unfilled card is reported once by check_venue_quality
             if not hours and status not in {"unverified", "closed_unknown"}:
                 errors.append(
                     f"day {number}: dining venue '{venue}' has neither venue_hours nor "
@@ -1620,6 +1622,24 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
     # resolution string a reader can check by eye.
 
 
+PLACEHOLDER_MARKERS = ("TODO:", "example.invalid")
+
+
+def _unfilled(*values: object) -> bool:
+    """Is this still the skeleton's placeholder rather than an answer?
+
+    Content rules must not run on a card nobody has filled in yet, because the error they
+    produce describes a problem that does not exist. The skeleton writes rating_value 0, and
+    the floor rule read that as "you are recommending a venue rated 0/5. Replace it" -- sending
+    an author to hunt for a badly-reviewed restaurant that was never chosen. A fresh four-day
+    skeleton produced 38 errors that way, most of them about values nobody had entered.
+
+    Saying "not filled in" once per card is both kinder and shorter: validate_trip_html.py
+    already refuses to ship a TODO, so nothing is lost by staying quiet here.
+    """
+    return any(marker in str(v) for v in values if v is not None for marker in PLACEHOLDER_MARKERS)
+
+
 _BRACKETED = re.compile(r"[（(\[【][^）)\]】]*[）)\]】]")
 
 
@@ -1673,6 +1693,8 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     thin: list[str] = []
     for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
         name = str(option.get("property_name") or option.get("id") or "?")
+        if _unfilled(name, option.get("review_url")):
+            continue      # already reported once as an unfilled card
         key = _property_key(name)
         searches = [_obj(s) for s in _seq(option.get("comparison_searches"))]
         if not searches:
@@ -1720,6 +1742,8 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
             label = str(option.get("property_name") or option.get("provider")
                         or option.get("id") or "?")
             direct = str(option.get("direct_review_url") or "")
+            if _unfilled(label, direct):
+                continue
             if not direct:
                 continue
             path = urllib.parse.urlparse(direct).path.strip("/")
@@ -1761,12 +1785,16 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     for kind in ("flights", "ground_transport"):
         for option in [_obj(o) for o in _seq(options.get(kind))]:
             label = str(option.get("provider") or option.get("id") or "?")
+            if _unfilled(label, option.get("review_url"), option.get("round_trip_search_url")):
+                continue
             _dates_in_url(str(option.get("round_trip_search_url") or ""),
                           [("outbound date", option.get("outbound_date")),
                            ("return date", option.get("return_date"))],
                           f"{kind} '{label}' round-trip search")
     for option in [_obj(o) for o in _seq(options.get("accommodations"))]:
         label = str(option.get("property_name") or option.get("id") or "?")
+        if _unfilled(label, option.get("review_url")):
+            continue
         for search in [_obj(s) for s in _seq(option.get("comparison_searches"))]:
             _dates_in_url(str(search.get("search_url") or ""),
                           [("check-in date", option.get("check_in")),
@@ -1798,6 +1826,12 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     # TripAdvisor out of 5, so the scale travels with the value or the number means nothing.
     for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
         name = str(option.get("property_name") or option.get("id") or "?")
+        if _unfilled(name, option.get("guest_rating_source"), option.get("review_url")):
+            errors.append(
+                f"accommodation '{name}' is still the skeleton's placeholder. Fill it from the "
+                f"property's page on the platform that sells it -- one visit yields the price, "
+                f"the availability on these dates and the guest score together.")
+            continue
         status = str(option.get("guest_rating_status") or "").lower()
         if status == "none":
             if not str(option.get("guest_rating_absence_reason") or "").strip():
@@ -1879,6 +1913,13 @@ def check_venue_quality(plan: dict, errors: list[str], notes: list[str]) -> None
             # to be keyed on the venue this card is about. It cannot prove the name exists, which
             # is what the rating requirement and opening the page are for.
             venue = str(card.get("venue_name") or "")
+            if _unfilled(venue, card.get("venue_url"), card.get("venue_hours"),
+                         card.get("rating_source")):
+                errors.append(
+                    f"day {number}: the {card.get('meal') or 'meal'} card is still the skeleton's "
+                    f"placeholder. Fill it from the venue's own page -- one visit yields the name, "
+                    f"the hours, the rating and the link.")
+                continue
             key = _property_key(venue)
             url = str(card.get("venue_url") or "")
             # A URL that addresses the venue by identifier is a STRONGER claim than one that
@@ -1894,6 +1935,9 @@ def check_venue_quality(plan: dict, errors: list[str], notes: list[str]) -> None
                     f"finds the restaurant.")
 
         for index, card in enumerate([_obj(c) for c in _seq(day.get("dining"))]):
+            if _unfilled(card.get("venue_name"), card.get("venue_url"),
+                         card.get("venue_hours"), card.get("rating_source")):
+                continue      # already reported once, above, as an unfilled card
             where = f"day {number} {card.get('meal') or 'meal'} ('{card.get('venue_name')}')"
             status = str(card.get("rating_status") or "").lower()
             value, count = card.get("rating_value"), card.get("rating_count")
@@ -1935,6 +1979,9 @@ def check_venue_quality(plan: dict, errors: list[str], notes: list[str]) -> None
     for day in [_obj(d) for d in _seq(plan.get("days"))]:
         number = day.get("number")
         for card in [_obj(c) for c in _seq(day.get("dining"))]:
+            if _unfilled(card.get("venue_name"), card.get("venue_hours"),
+                         card.get("time_window")):
+                continue
             hours_status = str(card.get("hours_status") or "").lower()
             window = str(card.get("time_window") or "").strip()
             if window and hours_status not in {"verified", "researched"}:
