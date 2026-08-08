@@ -1590,14 +1590,20 @@ _BRACKETED = re.compile(r"[（(\[【][^）)\]】]*[）)\]】]")
 def _fold(text: str) -> str:
     """Case-folded, punctuation-free, script-agnostic form for substring comparison.
 
-    Tokenising on a Latin character class was the first attempt and it silently exempted every
-    market this skill cares most about: '东京银座三井花园酒店' and 'ホテルグレイスリー新宿' both
-    produced zero tokens, so the property-scoping rule skipped them entirely and a Tokyo or
-    Chengdu plan could still ship two hotels behind one city search. Folding both sides and
-    asking for a substring works in any script.
+    Twice written as an allow-list and twice wrong. The first version tokenised on a Latin
+    character class, so '东京银座三井花园酒店' produced nothing and the property-scoping rule
+    skipped every CJK market. The second added kana, CJK and hangul to the allow-list and
+    silently exempted 'Кафе Пушкинъ', 'Ταβέρνα', 'ร้านอาหาร', 'مطعم', 'מלון' and 'होटल' instead:
+    an empty key makes the caller's `if key and ...` guard false, so the card passes with no
+    error and no note.
+
+    The lesson is the shape, not the script list. Enumerating what to keep means the rule
+    protects the alphabets whoever wrote it happened to think of, and goes quiet everywhere
+    else -- quiet in the same way the original bug was quiet. So keep whatever Unicode calls a
+    letter or a digit and drop the rest; str.isalnum() knows every script, including the ones
+    added after this line was written.
     """
-    return re.sub(r"[^0-9a-z぀-ヿ㐀-鿿가-힯]+", "",
-                  (text or "").casefold())
+    return "".join(ch for ch in (text or "").casefold() if ch.isalnum())
 
 
 def _property_key(name: str) -> str:
@@ -1876,7 +1882,12 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
         lat, lon = _num(anchor.get("lat")), _num(anchor.get("lon"))
         if abs(lat) <= 90 and abs(lon) <= 180 and (lat or lon):
             anchor_point = (lat, lon)
-    ANCHOR_RADIUS_KM = 800.0
+    # Derived rather than picked. A reversed pair moves a point 4,300 km (Rome) to 12,000 km
+    # (Reykjavik) -- the smallest swap is the floor this has to catch. Legitimate multi-city
+    # domestic trips reach 1,067 km (Beijing-Shanghai) and 1,419 km (Sapporo-Fukuoka) -- the
+    # largest is the ceiling this must not fail. 800 km was the first guess and sat below both
+    # of those, i.e. it would have rejected two ordinary trips to catch nothing extra.
+    ANCHOR_RADIUS_KM = 2500.0
 
     def endpoints_of(url: str, where: str, declared_km: float | None) -> None:
         nonlocal checked
@@ -2014,7 +2025,14 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
     endpoints_of(str(overview.get("overall_route_map_url") or ""),
                  "transport_overview", _num(overview.get("overall_distance_km")) or None)
 
-    if checked and anchor_point is None:
+    declared_anchor = bool(anchor)
+    if checked and anchor_point is None and declared_anchor:
+        errors.append(
+            "trip.destination_coords is present but still at its placeholder (0/0 or blank), so "
+            "no map endpoint could be checked against it. Replace it with the destination's own "
+            "pair -- the skeleton writes zeros precisely so this is a filled-in field rather than "
+            "a forgotten one.")
+    elif checked and anchor_point is None:
         # Optional was not good enough: without the anchor the endpoint rule is purely relative,
         # and a consistently reversed lat/lon pair keeps its partner the right distance away while
         # moving every pin to another continent. A plan that uses coordinates must say where the

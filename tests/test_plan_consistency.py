@@ -2028,6 +2028,37 @@ def main() -> int:
          "checked_at": "2026-07-30", "map_link_kind": "directions", "note": "alt"}]
     expect_fail("a caption hiding in a checked alternative link", p, "is free text")
 
+    # 28. The doc-sync audit found two more, both the same shape as the CJK hole: an allow-list
+    # protects the alphabets whoever wrote it thought of and goes quiet everywhere else. The
+    # second version kept Latin, kana, CJK and hangul -- and silently exempted Cyrillic, Greek,
+    # Thai, Arabic, Hebrew and Devanagari. _fold now keeps whatever Unicode calls alphanumeric.
+    for name in ("Кафе Пушкинъ", "Ταβέρνα Ψαρρά", "ร้านอาหารบ้านไทย", "مطعم الشرق",
+                 "מלון דן", "होटल ताज"):
+        p = copy.deepcopy(base)
+        option = p["booking_options"]["accommodations"][0]
+        option["property_name"] = name
+        option["comparison_searches"][0]["search_url"] = (
+            "https://www.booking.com/searchresults.html?ss=Chengdu&checkin=2026-09-28"
+            "&checkout=2026-09-29&group_adults=2&no_rooms=1")
+        expect_fail(f"a city search behind the name {name!r}", p, "not scoped to this property")
+
+    # And the other direction, so the rule cannot be satisfied by rejecting everything.
+    p = copy.deepcopy(base)
+    option = p["booking_options"]["accommodations"][0]
+    option["property_name"] = "Кафе Пушкинъ"
+    option["comparison_searches"][0]["search_url"] = (
+        "https://www.booking.com/searchresults.html?ss="
+        "%D0%9A%D0%B0%D1%84%D0%B5%20%D0%9F%D1%83%D1%88%D0%BA%D0%B8%D0%BD%D1%8A"
+        "&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1")
+    expect_ok("a property-scoped search under a Cyrillic name", p)
+
+    # The skeleton writes {"lat": 0, "lon": 0}, which the anchor check reads as not-yet-filled.
+    # Saying "missing" about a field that is visibly present sends the author looking for the
+    # wrong thing, so the placeholder gets its own sentence.
+    p = copy.deepcopy(base)
+    p["trip"]["destination_coords"] = {"lat": 0, "lon": 0}
+    expect_fail("destination_coords left at the skeleton's zeros", p, "still at its placeholder")
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 

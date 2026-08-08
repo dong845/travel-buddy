@@ -1472,8 +1472,14 @@ def dining_rating_line(item: dict) -> str:
     origin = f' · {esc(source)}' if source else ""
     body = (f'<strong>Rating: </strong>{esc(shown)}{reviews}{origin}')
     if url:
+        # Classed rather than bare so check_link_targets.py follows it. The rating is the one
+        # field on the card that testifies somebody opened the venue's page, and for a while it
+        # was the least verified link on the page: the checker reads booking-link, dining-link
+        # and map-link, and this anchor carried none of them.
         body = (f'<strong>Rating: </strong>'
-                f'<a href="{attr(url)}" target="_blank" rel="noopener noreferrer">{esc(shown)}</a>'
+                f'<a class="dining-link" data-dining-provider="{attr(item.get("rating_source"))}" '
+                f'data-verified-at="{attr(item.get("rating_checked_at"))}" '
+                f'href="{attr(url)}" target="_blank" rel="noopener noreferrer">{esc(shown)}</a>'
                 f'{reviews}{origin}')
     return (f'<p class="meta dining-rating" data-rating-status="{attr(item.get("rating_status"))}" '
             f'data-rating-value="{attr(value)}" data-rating-count="{attr(count)}">{body}</p>')

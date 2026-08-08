@@ -84,6 +84,14 @@ that no longer matches; every dining card whose `hours_status` claims `researche
 (the claim itself is weekday-keyed); every activity carrying a `ticket_note` or an opening-time
 claim; any prose naming a weekday that moved; and the plan's verification as a whole.
 
+Two fields are deliberately **not** on that list, and the reason is worth keeping so nobody adds
+them back as noise. A dining card's `rating_*` and the plan's `trip.destination_coords` are not
+weekday-keyed: a restaurant's score does not change because the trip moved a day, and a city does
+not move at all. What *was* weekday-keyed on that card — its opening hours, and the `hours_status`
+claim about them — is already raised above. A rating goes stale with *time*, not with a shift, so
+re-read it when `rating_checked_at` is old rather than because the dates slid; raising it on every
+shift would train people to tick a box that was never wrong.
+
 Resolving an entry means re-checking the fact against the **new** weekday at its original source —
 not ticking the box. Where the reason begins `CLOSED ON THE NEW DAY`, do not even re-check: the plan
 already carries its own refutation, so move the item to another day, take the fallback the plan

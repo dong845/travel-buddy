@@ -32,9 +32,9 @@ any of the seven blocks.
 | Domain | Verify |
 | --- | --- |
 | `entry` | Visa requirement per **nationality × residence status**, not nationality alone. Anything required *after* the visa and before boarding — EVUS for PRC passports holding 10-year B1/B2, ETA/eTA schemes, transit visas for the actual connection airports. Passport-validity rule as the destination states it (commonly six months beyond intended stay), not "covers the trip". Current appointment waits, dated. |
-| `transport` | Every fare, duration, headway, and season in the plan, against the operator. Which direction a fare is collected in. Whether a named route exists, on the planned weekday, in the planned season. Whether a fallback is reachable from where the traveller would actually be stranded. |
-| `sights_and_hours` | Opening hours and closure days for every venue and attraction, against the specific dates. Whether a tour or service is daily or weekday-gated. Whether a combo ticket may be split across days. Timed-entry rules. Accessibility conditions the plan asserts. |
-| `booking_and_lodging` | Whether the dates are sellable yet — airline windows apply to **both** legs of a round trip, and codeshare inventory opens no earlier than the operating carrier's. Who actually operates each flight. Whether the property offers the room product claimed, in that season. Whether search URLs load a prefilled search. Applicable lodging taxes. |
+| `transport` | Every fare, duration, headway, and season in the plan, against the operator. Which direction a fare is collected in. Whether a named route exists, on the planned weekday, in the planned season. Whether a fallback is reachable from where the traveller would actually be stranded. **Open every day and segment map button and confirm the pin lands where the label says** — a directions URL whose endpoint does not resolve returns HTTP 200 and looks identical to a working one, which is how a button offering a 65-hour drive from Taiwan passed every structural gate. |
+| `sights_and_hours` | Opening hours and closure days for every venue and attraction, against the specific dates. Whether a tour or service is daily or weekday-gated. Whether a combo ticket may be split across days. Timed-entry rules. Accessibility conditions the plan asserts. **Whether each recommended venue exists at the name the plan uses**, and whether its rating and price band match what its own page says — one plan's dinner venue returned no listing on any platform, and two of its lunches were at restaurants that open at 20:00. |
+| `booking_and_lodging` | Whether the dates are sellable yet — airline windows apply to **both** legs of a round trip, and codeshare inventory opens no earlier than the operating carrier's. Who actually operates each flight. Whether the property offers the room product claimed, in that season. Whether search URLs load a prefilled search. Applicable lodging taxes. **Open each property-scoped link and read the price and availability off that page**: this domain exists in its current form because two hotels shipped behind one city search, and only opening them showed that one cost more than the traveller's entire cap and the other had no availability on the dates at all. |
 | `seasonality` | Climate figures with the right statistic — a monthly *mean* is not the mean daily *maximum*, and quoting the latter as the former oversells a destination by ~5 °C. Daylight and sunset times where the plan schedules a sunset. Whether seasonal services still run on the planned dates. |
 
 ### How to fan out, per runtime
@@ -166,6 +166,14 @@ to resolve costs more to fabricate than to earn. Pointing at a field whose value
 examining an empty field is real work. One coverage rule is enforced on top: `sights_and_hours` must
 cite every `days[].dining[]` card whose `hours_status` claims researched or verified, because that is
 exactly where the measured defect lived.
+
+Since 2.1 that rule reaches every dining card rather than a subset, and not by being widened: a card
+may no longer name a `time_window` while its `hours_status` is `unverified`, and the renderer
+requires every card to name one — so "researched or verified" is now the only legal state and every
+card must be cited. The venue-existence and rating checks in that domain's row ride on the same
+pointer, which is deliberate. Do not add a *separate* rating-coverage sentence here: a claim in this
+file that no code measures is the exact defect class that produced the release, and this one already
+has its backstop.
 
 The checker also rejects a report dated before the plan's `generated_at`, since it cannot have
 inspected a plan that did not exist.

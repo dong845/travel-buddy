@@ -53,7 +53,7 @@ For every option included in the page, show provider, option name, price/range a
 
 - **Flights:** include the intended origin/destination, explicit outbound and return dates, cabin/baggage assumptions, per-person round-trip fare range/currency, price status/check time, availability status, conditions, and a live provider or verified search-result link. Each candidate must expose both legs separately: operating flight/service identifier, local departure/arrival times, duration, stops/layover, and terminal or connection note. Include the airport-to-city transfer burden so a cheap-looking flight cannot hide an impractical arrival. Normally show two comparable candidates; one is allowed only with a researched `single_option_reason`. A round-trip button must carry machine-readable `origin`, `destination`, `outbound_date`, `return_date`, and `travellers` prefill fields as well as the visible dates; do not hand-build a provider deep-link pattern or label a fare available until rechecked.
 - **Rail, coach and ferry:** required whenever the trip has a ticketed intercity leg, in `booking_options.ground_transport`, and held to exactly the flight standard above. Include both stations, both dates, an outbound and a return itinerary each naming the service, its local times, duration, number of changes and where they happen, the fare conditions (refundable? changeable? is a seat reservation compulsory or extra?), a per-person round-trip fare range with its price status and check time, availability, and a `station_transfer_note` saying how the traveller gets from the arrival station into town — the ground analogue of the airport-transfer note, so a cheap fare cannot hide an impractical arrival. Render a verified round-trip search button whose prefill fields carry origin, destination, both dates and travellers. Two optional display fields, `travel_class` and `seat_reservation`, print beside the dates in the slot a flight uses for cabin and baggage; supply them when the answer is not obvious. "Exactly the flight standard" is literal, not a figure of speech: the same three comparison rules apply — two comparable candidates or a researched `single_option_reason`, distinct non-empty `id`s, and no two candidates sharing a `review_url`. This category exists because a rail trip's largest and most time-sensitive purchase previously had no card at all: the page compared three hotels and offered no way to reach, price or availability-check the train. `validate_plan` derives the requirement when `trip.arrival_transport_mode` is `rail`, or is `road` between two different places on public transit; a mid-trip city hop on a fly-in trip is invisible to that test, so pass `--require-booking-type ground` yourself in that case.
-- **Accommodation:** normally offer two to three comparable options in the same `stay_group_id`, calibrated to budget and accessibility; one option is allowed only with a researched reason (for example, a remote town or the user already selected the property). A different neighborhood label must not be used to bypass the comparison. Include the neighborhood, location reference, arrival/airport access, access to planned areas, explicit check-in/out, guests/rooms, room basis, cancellation conditions if visible, taxes/fees status, per-room-per-night and trip-total ranges, price status/check time, availability status, and a direct/property link whenever available. Add at least one verified comparison-platform search URL with destination, dates, guests, and rooms prefilled. A departure-day card may reference the hotel checked out that morning or show no overnight stay; it must not imply an extra night. Use Booking.com when it is suitable for the destination and user, but use another appropriate platform when coverage, price transparency, language, currency, or cancellation display is better.
+- **Accommodation:** normally offer two to three comparable options in the same `stay_group_id`, calibrated to budget and accessibility; one option is allowed only with a researched reason (for example, a remote town or the user already selected the property). A different neighborhood label must not be used to bypass the comparison. Include the neighborhood, location reference, arrival/airport access, access to planned areas, explicit check-in/out, guests/rooms, room basis, cancellation conditions if visible, taxes/fees status, per-room-per-night and trip-total ranges, price status/check time, availability status, and a direct/property link whenever available. Add at least one verified comparison-platform search URL with destination, dates, guests, and rooms prefilled, **scoped to this property rather than to the city** — see the provider/URL table below for why that distinction cost two unbookable recommendations. Read the price and the availability off that page rather than estimating them: the card's `availability_status` and price range are claims about a specific product on a specific date, and the only place those are true is the page that sells it. A departure-day card may reference the hotel checked out that morning or show no overnight stay; it must not imply an extra night. Use Booking.com when it is suitable for the destination and user, but use another appropriate platform when coverage, price transparency, language, currency, or cancellation display is better.
 - **Attractions:** show a ticket link only if paid entry, advance reservation, or timed entry is material. Prefer the official venue ticket page; otherwise say that booking status is unverified. Do not send the user to an unknown resale site.
 - **Rental cars:** include only after the user selects self-drive and confirm location, dates/times, driver requirements, transmission preference, luggage/party capacity, insurance excess, fuel policy, mileage, tolls, parking, and cross-border limits where relevant. Show a dated provider/comparison search page with pickup/dropoff location and times prefilled, not a checkout URL; label the per-vehicle-per-day price basis, status, availability, and check time.
 
@@ -67,10 +67,49 @@ The renderer builds a button's visible label **and** its `data-*-provider` attri
 | --- | --- | --- |
 | flight / hotel / car | `provider` | that provider's own site (`review_url`) |
 | flight comparison | `round_trip_search_provider` | that platform (`round_trip_search_url`) |
-| hotel comparison | `comparison_searches[].platform` | that platform's search URL |
+| hotel comparison | `comparison_searches[].platform` | that platform's search **for this property** |
 | ticket | `official_or_authorised_provider` | that venue's page (`review_url`) |
-| dining | `map_provider` | that map provider's place lookup (`venue_url`) |
-| route / segment | `map_provider` | that map provider's directions URL |
+| dining | `map_provider` | that map provider's place lookup, keyed on the venue's **registered name** or a place id (`venue_url`) |
+| route / segment | `map_provider` | that map provider's directions URL, endpoints written as **coordinates** |
+
+The last three rows say more than "the right host" because each of them shipped a button that
+named the right provider, opened the right host, and answered the wrong question.
+
+**Hotel comparison — scope the search to the property, not the city.** A city search satisfies the
+prefill rule while answering none of the questions the card exists to answer. Both hotels in a
+delivered plan carried a byte-identical Booking.com city search, so no button ever opened either
+property where it is sold — and nobody saw that one cost €1,256 for the week, over the traveller's
+entire budget cap before flights, while the other had **no availability on those dates at all**.
+Two unbookable recommendations shipped because the link that would have exposed them did not exist.
+Put the property's own name in the destination field: `searchresults…?ss=<property name>` plus the
+trip's dates and occupancy lands on the one property *and* satisfies the
+destination/check-in/check-out/guests/rooms requirement at the same time, because `ss` **is** the
+destination field.
+
+Do not reach for the property path instead. Booking's slugs are underivable — *Hotel Cristina by
+Tigotan* lives at `/hotel/es/las-palmas.html` — and the bare `/hotel/<cc>/<slug>.html` answers with
+an error page unless it carries the `label`/`sid` session parameters this skill forbids embedding;
+stripping them to comply breaks the link. Measured both ways: the stripped path returned "page
+cannot be displayed", the property-scoped search returned the single property with the dates
+applied. `check_plan_consistency.py` fails a comparison URL that carries neither the property's
+name nor a property id — and `dest_id` does not count, because that is Booking's *city* id and
+allowing it briefly whitelisted the exact URL the rule exists to reject.
+
+**Two options that open the same page are one option shown twice.** The same check refuses a
+`review_url` or `round_trip_search_url` shared between candidates in any category. This is not
+tidiness: it shipped on flights as well as hotels, and a comparison whose two buttons land in the
+same place compares nothing.
+
+**Dining — the query is a lookup, not a caption.** A plan searched its map provider for the phrase
+`酒店自助早餐（Hotel Cristina by Tigotan）` — "hotel buffet breakfast" — and for `Puerto de Ons`, a
+name that resolves nowhere for a restaurant Google lists as *Restaurante Ons*. Open the venue's
+place page and copy the name it is indexed under; that page hands you the rating, the price band,
+the address, the hours and the coordinates in one read, which is every field the card needs. A URL
+addressing the venue by place id is accepted in place of the name, because an id is the stronger
+claim. Paste `rating_url` from the page you actually read the number off: it renders as a followed
+link, so `check_link_targets.py` reports where it lands alongside the booking and map buttons — for
+a while it was the least verified link on the page, which is a poor property for the one field that
+testifies somebody opened the venue at all.
 
 A comparison platform therefore belongs in the comparison field, never behind an airline's name in `review_url`. The dining pair is the one that surprises people: the button reads "view restaurant in *`map_provider`*", so `venue_url` must be a place lookup on that map provider — a blog or listicle that merely *mentions* the venue fails, and the article belongs in `sources[]` instead.
 
@@ -84,6 +123,13 @@ A comparison platform therefore belongs in the comparison field, never behind an
   the request. Open them in a browser and confirm the page shows what the label promises.
 - **ok** — reachable, same host, parameters intact. Still not proof the *content* is the right hotel or the right
   restaurant; that is what the `sights_and_hours` and `booking_and_lodging` verification domains are for.
+
+And there is a fourth question this check cannot ask at all: **does the endpoint name a real
+place?** A directions URL whose origin geocodes to the wrong continent is reachable, same-host and
+parameter-intact, so it reports `ok`. That is not a flaw to fix here — following a link cannot
+geocode it — but it is the reason endpoints must be coordinates before they ever reach this stage,
+and the reason somebody still has to open the map buttons and confirm the pin lands in the
+destination city.
 
 The reason `broken` is so narrow is worth keeping: the same Google Flights URL answers 200 with no redirect to a
 Chrome agent and redirects to `/travel/flights/unsupported` to a scripted one. A run that compared two probes sent
@@ -102,6 +148,54 @@ For rail, ferry, intercity bus, and transit passes, use an official operator for
 
 Before selecting a provider, read [regional-service-routing.md](regional-service-routing.md). Record the destination service market, normal traveller access, provider selection basis, primary provider, and checked alternatives in `regional_service_context`. Do not assume Google Maps, Booking.com, or any other global service is appropriate in every country. For mainland-China routes, a verified Amap/高德 primary route link is the default; Google Maps is not an acceptable sole or default route link. Use the local transit/rail/road authority to support fares, schedules, and restrictions.
 
+### Write the endpoint, not the caption
+
+Every endpoint in a route URL is a **coordinate pair**, and free text is refused by
+`check_plan_consistency.py`. The label a button shows and the string its URL carries are two
+different fields, and copying one into the other is what put a traveller on a 65-hour drive: a
+delivered plan wrote `origin=酒店（拉斯坎特拉斯海滨）` — the word "hotel" plus a description — and
+Google geocoded it to **Taiwan**, while a second endpoint carrying no Latin-script place name
+returned "destination not found". Six of that plan's fifteen endpoints could not geocode, and
+`check_link_targets.py` reported all 25 map links `ok`, because the host was right, the status was
+200 and no parameter had been dropped. Nothing measured whether an endpoint named a place.
+
+A name is not an acceptable substitute even when it looks like one. `Mercado de Vegueta` resolves
+and `酒店（拉斯坎特拉斯海滨）` resolves to another continent, and no offline check can tell those
+apart — only a geocoder can, and it is not in the gate. Coordinates cost nothing: the place page
+that gave you the venue's rating and opening hours put the pair in its own URL.
+
+Per-provider order matters and is not guessable from the numbers alone: Google, Apple and
+OpenStreetMap read `lat,lon`; Amap reads `lon,lat,name`. Declare `trip.destination_coords` once so
+every endpoint can be checked *absolutely* rather than only against its partner — the leg-length
+rule is relative and therefore blind to a consistently reversed pair, which leaves a Las Palmas leg
+4.73 km long instead of 4.70 while moving every pin to southern Africa.
+
+That declaration is a requirement, not a courtesy: the moment any map URL carries a coordinate, a
+plan without it fails, and every endpoint more than **2,500 km** away fails on its own. The radius
+is derived rather than picked — the smallest reversal moves a point 4,332 km (Rome), while the
+longest ordinary domestic hop is 1,419 km (Sapporo–Fukuoka), so anything between those two catches
+every swap and rejects no real trip. Two traps are easier to learn here than from the error message.
+The skeleton writes `{"lat": 0, "lon": 0}` and the check reads that as *not yet filled in*, so
+replace the zeros with the city's own pair. And **the arriving flight is not a map button**: a day-1
+segment drawn from the origin airport puts an endpoint thousands of kilometres from the destination
+and fails on the spot. That leg belongs on its flight or rail card; the day's first mapped segment
+starts where the traveller lands.
+
+Two provider limits are worth knowing before you build a button rather than after:
+
+- **Google computes waypoints for driving, walking and cycling, but not for transit.** The same URL
+  that routes fine in walking mode answers "cannot calculate public transport directions" and shows
+  nothing. A multi-stop transit day therefore has no true full-day button at all: its scope is
+  `primary_leg` and the per-segment buttons are the navigation source of truth, which is what this
+  file already says to do when a provider can navigate only one leg.
+- **`route_map_scope: "multi_stop"` prints the button as a full-day route,** so it is only true when
+  the URL carries every intermediate stop. Requiring waypoints and not counting them let one
+  throwaway waypoint certify a five-stop day.
+- **The mode is checked too, because the right distance with the wrong mode is still a route nobody
+  can take.** A day map whose `travelmode` is `walking` fails above 15 km. One plan's departure-day
+  button asked Google to walk 25 km from the seafront to the airport — and Google answers that, with
+  a five-hour route the traveller was never going to take.
+
 Build a route in chronological, geographically coherent order. Keep the day’s actual travel burden visible: start/end, one researched primary transport mode, route logic, distance or stop count, transfers, walking, duration, fare/range and fare source, service caveat, and a fallback for closures or bad weather. Never use a choice-list such as “metro/bus/taxi (choose one)” as the route: choose the primary recommendation and state alternatives only in the fallback.
 
 The final HTML must contain both:
@@ -109,7 +203,7 @@ The final HTML must contain both:
 1. an inline SVG or ordered-route diagram marked **“schematic — not for navigation”**; and
 2. a verified external map/directions link for the actual route.
 
-Additionally, split each day into actual travel segments and render one verified, user-opened map button for every segment. A whole-day map button is not a substitute for segment buttons. For each segment show endpoints, one mode, service/line where relevant, boarding/exit or arrival instruction, walking minutes, transfer count, duration, fare/range and source, and a fallback note. Attach `data-map-provider` and `data-map-kind="directions"` to all live map buttons. A place/POI page may be linked for a restaurant or venue, but is never a route button. Checked alternative map links are optional and must be visibly labelled with their own provider.
+Additionally, split each day into actual travel segments and render one verified, user-opened map button for every segment. A whole-day map button is not a substitute for segment buttons. For each segment show endpoints, one mode, service/line where relevant, boarding/exit or arrival instruction, walking minutes, transfer count, duration, fare/range and source, and a fallback note. Attach `data-map-provider` and `data-map-kind="directions"` to all live map buttons. A place/POI page may be linked for a restaurant or venue, but is never a route button. Checked alternative map links are optional, must be visibly labelled with their own provider, and are held to every rule above — optional to *include*, never optional to get right. They were for a while the one place a caption could still hide, and so was `transport_overview.overall_route_map_url`; both are inspected now. An OpenStreetMap link is not a way around any of it either: its single `route=a;b` parameter is split back into two endpoints and checked like the rest.
 
 For mainland China, use the documented Amap directions URI returned by research: `https://uri.amap.com/navigation?from=<lon>,<lat>,<name>&to=<lon>,<lat>,<name>&mode=bus|car|walk|ride...`. It must contain both endpoints and the intended mode. `https://ditu.amap.com/place/...` is a POI page and fails the final route gate. Call a live map a “full-day route” only when it actually carries all listed waypoints. When the provider can navigate only one leg, label it as a **route overview** and make the exact segment buttons the navigational source of truth.
 
@@ -127,7 +221,7 @@ Show the daily route and an overall route summary with segments, total driving d
 
 Do not reduce a city trip to one headline attraction per day. For a city stay of three or more days, research at least three destination-specific experience anchors across two or more days—such as an important historic district, a local urban landscape, a cultural institution, a market/food area, or a nature counterpoint—then choose only those that match the user’s preferences and crowd/pace limits. The final page must make these anchors visible with their areas, planned days, sources, and reasons; never add famous sights just to meet a count.
 
-Treat meals as scheduled stops, not an afterthought. For every full sightseeing day, provide a researched lunch and dinner; arrival and departure days need the realistically relevant meal (or a clearly stated airport/hotel alternative). Each recommendation needs a concrete venue, cuisine/style, neighborhood, time window, why it fits the preceding/next stop and dietary preferences, per-person price range, queue/reservation note, a safe user-opened venue link, and one backup when timing or queues are material. A venue/POI link is acceptable here because it is for finding the restaurant, not for routing.
+Treat meals as scheduled stops, not an afterthought. For every full sightseeing day, provide a researched lunch and dinner; arrival and departure days need the realistically relevant meal (or a clearly stated airport/hotel alternative). Each recommendation needs a concrete venue, cuisine/style, neighborhood, time window, why it fits the preceding/next stop and dietary preferences, per-person price range, queue/reservation note, a safe user-opened venue link, and one backup when timing or queues are material. It also needs a **quality signal** — `rating_value` with its `rating_scale`, `rating_count`, `rating_source`, `rating_url` and `rating_checked_at`, or `rating_status: "none"` with a reason — and hours that were actually checked for the weekday it is scheduled on. Both are enforced, and both exist because the contract used to require everything about a venue except whether it is any good or whether it exists: a delivered plan shipped a dinner at a place with no listing on any platform, two lunches at restaurants that open at 20:00, and a farewell dinner priced at half what the venue bills. The count travels beside the value because 4.8 from 12 reviews and 4.3 from 2,000 are different claims, and the scale beside both because Google publishes out of 5 while TheFork and Booking publish out of 10. A backup must be a **named venue whose own hours cover the same slot**, not a category: one plan's lunch backup opened at 16:30. A venue/POI link is acceptable here because it is for finding the restaurant, not for routing.
 
 ## Optional OpenCLI research
 
@@ -165,7 +259,13 @@ A field that is required, researched, and never displayed is work the traveller 
 - each flight option’s `material_conditions` (change/refund terms);
 - any `single_option_reason`, so a category with only one option reads as a researched decision rather than an omission;
 - `budget.unverified_categories`, so the per-person total does not silently read as all-inclusive;
-- `plan.assumptions` and `regional_service_context.booking_platform_selection_note`.
+- `plan.assumptions` and `regional_service_context.booking_platform_selection_note`;
+- every dining card's **rating** — value, count and source, or an explicit "no public rating" with
+  its reason. This one is enforced by `validate_trip_html.py` rather than left to good intent,
+  because it is the field most likely to be gathered and then not shown: a delivered page carried
+  the ratings only where the author had happened to retype them into the prose, so a card filled in
+  correctly but silently would have displayed nothing at all. A rating stored in the JSON and never
+  rendered is the same defect as a rating never gathered.
 
 Group option cards by booking type. Give the page a sticky in-page navigation with one link per day plus the standing sections: a multi-day itinerary is tens of thousands of pixels tall, and without jumps the third morning is only reachable by scrolling past the first two. Render the visit-order schematic as a vertical ordered list rather than a wide SVG — a horizontal diagram needs a ~720px minimum width to stay legible, which on a phone silently shows only the first two stops of the day.
 
