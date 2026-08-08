@@ -239,6 +239,140 @@ def full_verification() -> dict:
     }
 
 
+def ground_transport_cases(base: dict) -> list[str]:
+    """Rail, coach and ferry had no bookable product at all.
+
+    A Japan or European rail trip shipped as "booking-ready" with three compared hotels and no way
+    to reach, price-check or availability-check the train -- the largest and most time-sensitive
+    purchase on the page. The category is held to the flight standard on purpose: a looser one
+    becomes the place authors put what they did not research.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render_final_trip_html import render, validate_plan  # noqa: PLC0415 - import after path setup
+
+    def leg(identifier: str) -> dict:
+        return {"service_identifier": identifier, "departure_local": "10:00",
+                "arrival_local": "13:11", "duration_minutes": 191, "stops": 1,
+                "connection_or_terminal_note": "One change, same platform as planned"}
+
+    complete = {
+        "id": "ground-1", "provider": "Deutsche Bahn", "comparison_platform": "NS International",
+        "comparison_checked_at": "2026-09-01", "source_type": "official_provider",
+        "checked_at": "2026-09-01", "review_url": "https://int.bahn.de/en",
+        "origin_station": "Leiden Centraal", "destination_station": "Köln Hbf",
+        "outbound_date": base["trip"]["start_date"], "return_date": base["trip"]["end_date"],
+        "outbound_itinerary": leg("NS Intercity + ICE 123"),
+        "return_itinerary": leg("ICE 126 + NS Intercity"),
+        "material_conditions": "Saver fare is train-bound and non-refundable",
+        "availability_status": "available", "price_basis": "per_person_round_trip",
+        "fare_low": 51, "fare_high": 61, "fare_currency": "EUR",
+        "price_status": "estimate", "price_checked_at": "2026-09-01",
+        "station_transfer_note": "Köln Hbf is 200 m from the cathedral; no transfer needed",
+        "round_trip_search_provider": "Deutsche Bahn",
+        "round_trip_search_url": "https://int.bahn.de/en",
+        "round_trip_search_checked_at": "2026-09-01",
+        "round_trip_prefilled_fields": ["origin", "destination", "outbound_date", "return_date",
+                                        "travellers"],
+        "single_option_reason": "No direct service exists; one change is the shortest routing",
+    }
+
+    failures: list[str] = []
+    plan = copy.deepcopy(base)
+    plan["booking_options"]["ground_transport"] = [copy.deepcopy(complete)]
+    errors = validate_plan(plan)
+    if errors:
+        failures.append(f"ground: a complete rail option was rejected: {errors[:2]}")
+    else:
+        page = render(plan)
+        for probe, label in (("ICE 123", "the outbound service identifier"),
+                             ("ICE 126", "the return service identifier"),
+                             ("Saver fare", "the fare conditions"),
+                             ("200 m from the cathedral", "the station transfer note"),
+                             ('data-booking-type="ground"', "a bookable ground link")):
+            if probe not in page:
+                failures.append(f"ground: {label} never reaches the page")
+
+    # Held to the flight standard: each of these alone must be rejected.
+    for field in ("origin_station", "destination_station", "material_conditions",
+                  "station_transfer_note", "round_trip_search_url", "outbound_itinerary"):
+        plan = copy.deepcopy(base)
+        item = copy.deepcopy(complete)
+        item.pop(field)
+        plan["booking_options"]["ground_transport"] = [item]
+        if not validate_plan(plan):
+            failures.append(f"ground: an option missing {field} was accepted -- the category must "
+                            f"not be a looser back door than a flight")
+
+    plan = copy.deepcopy(base)
+    item = copy.deepcopy(complete)
+    item["price_basis"] = "per_person"          # the flight rule spells this per_person_round_trip
+    plan["booking_options"]["ground_transport"] = [item]
+    if not validate_plan(plan):
+        failures.append("ground: a wrong price_basis was accepted")
+
+    # Dates were truthiness-checked only, so "next Friday" and a return before the departure both
+    # validated and printed onto the search button.
+    for label, patch, must_reject in (
+        ("a non-ISO outbound date", {"outbound_date": "next Friday"}, True),
+        # Reversed dates need a window wider than the fixture's single day, so this case builds
+        # one below rather than here.
+        ("a date outside the trip window", {"outbound_date": "2099-01-01"}, True),
+    ):
+        plan = copy.deepcopy(base)
+        item = copy.deepcopy(complete)
+        item.update(patch)
+        plan["booking_options"]["ground_transport"] = [item]
+        if bool(validate_plan(plan)) is not must_reject:
+            failures.append(f"ground: {label} was accepted")
+
+    # Two rules that need a multi-day window, which the single-day fixture cannot give: a reversed
+    # pair, and the mid-trip leg. The flight rule that outbound_date == trip.start_date is
+    # deliberately NOT copied to ground, because a rail leg is often the hop between two cities and
+    # pinning it to the window's first day would reject the multi-city case this category serves.
+    wide = copy.deepcopy(base)
+    wide["trip"]["end_date"] = "2026-09-30"
+    day_two = copy.deepcopy(wide["days"][0])
+    day_two.update(number=2, date="2026-09-29")
+    day_three = copy.deepcopy(wide["days"][0])
+    day_three.update(number=3, date="2026-09-30", day_type="departure")
+    wide["days"] = [wide["days"][0], day_two, day_three]
+    for stay in wide["booking_options"]["accommodations"]:
+        stay["check_out"] = "2026-09-30"
+
+    plan = copy.deepcopy(wide)
+    item = copy.deepcopy(complete)
+    item.update(outbound_date="2026-09-30", return_date="2026-09-29")
+    plan["booking_options"]["ground_transport"] = [item]
+    if not any("return_date" in e for e in validate_plan(plan)):
+        failures.append("ground: a return before the outbound was accepted")
+
+    plan = copy.deepcopy(wide)
+    item = copy.deepcopy(complete)
+    item.update(outbound_date="2026-09-29", return_date="2026-09-29")   # the mid-trip city hop
+    plan["booking_options"]["ground_transport"] = [item]
+    if any("outbound_date" in e or "return_date" in e for e in validate_plan(plan)):
+        failures.append("ground: a mid-trip rail leg was rejected; only flights must start the trip")
+
+    # Three fields the validator requires and the card did not print, so the fare showed with no
+    # hint that it was an estimate, priced weeks ago, on limited inventory -- while the hotel and
+    # flight cards beside it said exactly that.
+    plan = copy.deepcopy(base)
+    item = copy.deepcopy(complete)
+    item.update(availability_status="limited", price_status="estimate",
+                price_checked_at="2026-07-01")
+    plan["booking_options"]["ground_transport"] = [item]
+    page = render(plan)
+    for probe, label in (("2026-07-01", "price_checked_at"), ("limited", "availability_status"),
+                         ("estimate", "price_status")):
+        if probe not in page:
+            failures.append(f"ground: {label} is required and never reaches the card")
+
+    # And a plan carrying none of this must be unaffected -- every existing plan predates it.
+    if validate_plan(copy.deepcopy(base)):
+        failures.append("ground: a plan with no ground_transport array stopped validating")
+    return failures
+
+
 def required_fields_reach_the_page_cases(base: dict) -> list[str]:
     """A field the renderer REQUIRES and never prints is research the traveller paid for and cannot
     see -- SKILL.md states that rule and three fields were violating it.
@@ -1246,6 +1380,7 @@ def main() -> int:
     failures += verification_banner_cases(base)
     # The CLI contract, proven by real processes: argv, file IO, exit codes, the stdout/stderr
     # split. Every other assertion in this file now runs in-process, 132x faster.
+    failures += ground_transport_cases(base)
     failures += required_fields_reach_the_page_cases(base)
     failures += language_coverage_cases(base)
     # The clock check drops the leg out of the lodging as happening before the day's window --

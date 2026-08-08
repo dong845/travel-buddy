@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
 
 
-ALLOWED_BOOKING_TYPES = {"flight", "hotel", "ticket", "car"}
+ALLOWED_BOOKING_TYPES = {"flight", "hotel", "ticket", "car", "ground"}
 BOOKING_ACCESS_CATEGORIES = {"flight", "accommodation", "attraction_ticket", "rental_car", "rail_or_ground"}
 BOOKING_ACCESS_STATUSES = {"available", "limited", "unknown"}
 REQUIRED_FLIGHT_SEARCH_FIELDS = {"origin", "destination", "outbound_date", "return_date", "travellers"}
@@ -556,15 +556,33 @@ def validate(
         errors.append("A self-drive trip needs at least one rental-car booking link.")
     if transport_mode == "public-transit" and "car" in booking_types:
         errors.append("A public-transit trip must not show rental-car booking links.")
-    if "flight" in booking_types:
-        if not parser.round_trip_links:
-            errors.append("Flight options need a dated round-trip search button.")
-        for link in parser.round_trip_links:
-            if link.get("data-booking-type") != "flight":
-                errors.append("A round-trip search button must be a flight booking link.")
+    # Round-trip buttons are checked per booking type. This block used to assume every one of them
+    # was a flight -- true when flights were the only category that had one -- so the moment rail
+    # got the same button, a plan that flies in and takes the train between cities validated,
+    # rendered, and then failed HERE with "A round-trip search button must be a flight booking
+    # link": an error about markup the author never wrote and cannot change from the plan JSON. The
+    # only way to green was to delete the rail option, which restores the defect the category was
+    # added to fix.
+    ROUND_TRIP_OWNERS = {"flight", "ground"}
+    stray = [link for link in parser.round_trip_links
+             if link.get("data-booking-type") not in ROUND_TRIP_OWNERS]
+    if stray:
+        errors.append(
+            "A round-trip search button may only belong to a flight or a rail/coach/ferry option; "
+            f"found {sorted({link.get('data-booking-type') for link in stray})}.")
+    for kind, label in (("flight", "Flight"), ("ground", "Rail/coach/ferry")):
+        if kind not in booking_types:
+            continue
+        owned = [link for link in parser.round_trip_links
+                 if link.get("data-booking-type") == kind]
+        if not owned:
+            errors.append(f"{label} options need a dated round-trip search button.")
+        for link in owned:
             fields = set(filter(None, link.get("data-prefilled-fields", "").split(",")))
             if not REQUIRED_FLIGHT_SEARCH_FIELDS.issubset(fields):
-                errors.append("Flight round-trip search buttons need origin, destination, outbound/return dates, and travellers prefilled.")
+                errors.append(
+                    f"{label} round-trip search buttons need origin, destination, outbound/return "
+                    f"dates, and travellers prefilled.")
     if "hotel" in booking_types:
         if not parser.hotel_comparison_links:
             errors.append("Hotel options need a dated comparison-platform search button.")

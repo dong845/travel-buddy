@@ -173,6 +173,8 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "pill_car": "租车", "schematic_aria": "按游览顺序的路线示意图",
             "schematic_start": "起点", "schematic_end": "终点",
             "nonstop": "直飞", "stops_suffix": "次中转", "unit_km": "公里",
+            "group_ground": "铁路 / 长途巴士 / 渡轮选项",
+            "station_access": "车站与接驳：",
             "why_providers": "为什么选这些服务商：",
             "constraints_heading": "你的硬性约束",
             "constraints_severity": "过敏严重程度：",
@@ -510,6 +512,7 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         "Price status: ": labels["price_status"],
         "Outbound: ": labels["outbound"],
         "Return: ": labels["return"],
+        "Station and access: ": labels.get("station_access", "Station and access: "),
         "Location and access: ": labels["hotel_location"],
         "Why it fits: ": labels["hotel_fit"],
         "Destination essentials": labels["destination_essentials"],
@@ -591,6 +594,7 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
         "<h2>Entry eligibility</h2>": f"<h2>{labels['entry_heading']}</h2>",
         "Basis: ": labels["entry_basis"],
         "<h3>Flight options</h3>": f"<h3>{labels['group_flight']}</h3>",
+        "<h3>Rail, coach and ferry options</h3>": f"<h3>{labels.get('group_ground', 'Rail, coach and ferry options')}</h3>",
         "<h3>Accommodation options</h3>": f"<h3>{labels['group_hotel']}</h3>",
         "<h3>Ticket options</h3>": f"<h3>{labels['group_ticket']}</h3>",
         "<h3>Rental-car options</h3>": f"<h3>{labels['group_car']}</h3>",
@@ -1001,6 +1005,8 @@ def read_json(path: str) -> dict:
 def booking_title(kind: str, item: dict) -> str:
     if kind == "flight":
         return f"{as_text(item.get('provider'))}: {as_text(item.get('origin_airport'))} → {as_text(item.get('destination_airport'))}"
+    if kind == "ground":
+        return f"{as_text(item.get('provider'))}: {as_text(item.get('origin_station'))} → {as_text(item.get('destination_station'))}"
     if kind == "hotel":
         return f"{as_text(item.get('property_name'))} · {as_text(item.get('stay_location'))}"
     if kind == "ticket":
@@ -1069,6 +1075,24 @@ def flight_leg_summary(leg: object) -> str:
 
 def option_detail_list(kind: str, item: dict) -> str:
     rows: list[str] = []
+    if kind == "ground":
+        # Same rows as a flight, because the traveller's questions are the same ones: which
+        # service, when, how long, how many changes, what the fare lets them do, and how they get
+        # from the station into town. `station_transfer_note` is the ground analogue of the
+        # airport-transfer note that stops a cheap-looking flight hiding an impractical arrival.
+        rows.extend(
+            (
+                f'<li><strong>Outbound: </strong>{esc(flight_leg_summary(item.get("outbound_itinerary")), "Not supplied")}</li>',
+                f'<li><strong>Return: </strong>{esc(flight_leg_summary(item.get("return_itinerary")), "Not supplied")}</li>',
+                f'<li><strong>Fare conditions: </strong>{esc(item.get("material_conditions"))}</li>',
+                f'<li><strong>Station and access: </strong>{esc(item.get("station_transfer_note"))}</li>',
+                # Required by validate_plan and, until this line, printed nowhere -- so the card
+                # showed a fare with no hint that it was an estimate, priced weeks ago, on limited
+                # inventory, while the hotel and flight cards beside it said exactly that. Same
+                # labels as the flight row, so they are already localized.
+                f'<li><strong>Availability: </strong>{esc(item.get("availability_status"))} · <strong>Price status: </strong>{esc(item.get("price_status"))} · <strong>Price checked: </strong>{stamp(item.get("price_checked_at"))}</li>',
+            )
+        )
     if kind == "flight":
         rows.extend(
             (
@@ -1148,7 +1172,8 @@ def option_card(kind: str, item: dict) -> str:
         "Price per person, round trip: " if kind == "flight" else
         "Price per room/night: " if kind == "hotel" else
         "Ticket price per person: " if kind == "ticket" else
-        "Vehicle price per day: " if kind == "car" else ""
+        "Vehicle price per day: " if kind == "car" else
+        "Price per person, round trip: " if kind == "ground" else ""
     )
     stay_total = ""
     if kind == "hotel":
@@ -1158,6 +1183,14 @@ def option_card(kind: str, item: dict) -> str:
     if direct_url and direct_url != url:
         direct_provider = as_text(item.get("direct_provider"), "Direct provider")
         actions.append(booking_link(kind, direct_provider, item.get("comparison_checked_at") or checked_at, direct_url, f"Review direct provider in {direct_provider}", "direct-provider"))
+    if kind == "ground":
+        # Rail, coach and ferry get the flight treatment because the traveller needs the same
+        # things: which service, when it leaves, how long, how many changes, and what the fare
+        # conditions are. Before this they got nothing -- a Japan or European rail trip shipped as
+        # "booking-ready" with no way to reach, price-check or availability-check the single
+        # largest and most time-sensitive thing on it, while the hotels had three compared
+        # candidates each.
+        actions.insert(0, booking_link("ground", item.get("round_trip_search_provider") or comparison_platform or provider, item.get("round_trip_search_checked_at") or checked_at, item.get("round_trip_search_url"), f"Search round trip — {as_text(item.get('outbound_date'))} to {as_text(item.get('return_date'))}", "round-trip-search", item.get("round_trip_prefilled_fields") if isinstance(item.get("round_trip_prefilled_fields"), list) else None))
     if kind == "flight":
         actions.insert(0, booking_link("flight", item.get("round_trip_search_provider") or comparison_platform or provider, item.get("round_trip_search_checked_at") or checked_at, item.get("round_trip_search_url"), f"Search round trip — {as_text(item.get('outbound_date'))} to {as_text(item.get('return_date'))}", "round-trip-search", item.get("round_trip_prefilled_fields") if isinstance(item.get("round_trip_prefilled_fields"), list) else None))
     if kind == "hotel":
@@ -1701,7 +1734,8 @@ def validate_plan(plan: dict) -> list[str]:
         elif not is_iso_datestamp(source["accessed_at"]):
             errors.append("Every source.accessed_at must be an ISO date or date-time.")
     options = plan.get("booking_options") if isinstance(plan.get("booking_options"), dict) else {}
-    required = {"flights": "flight", "accommodations": "hotel", "attraction_tickets": "ticket", "rental_cars": "car"}
+    required = {"flights": "flight", "ground_transport": "ground", "accommodations": "hotel",
+                "attraction_tickets": "ticket", "rental_cars": "car"}
     for field, kind in required.items():
         items = options.get(field, [])
         if not isinstance(items, list):
@@ -1721,6 +1755,68 @@ def validate_plan(plan: dict) -> list[str]:
                 errors.append(f"Every compared {kind} option.comparison_checked_at must be an ISO date or date-time.")
             if item.get("direct_review_url") and not is_https(item.get("direct_review_url")):
                 errors.append(f"Every direct {kind} cross-check URL must be HTTPS.")
+            if kind == "ground":
+                # Held to the flight standard on purpose. A category with looser evidence rules
+                # becomes the place authors put the thing they did not research, and this is the
+                # purchase a rail traveller most needs to check: which service, when, what the fare
+                # allows, whether it is still sellable, and how they get from the station into town.
+                required_ground_fields = (
+                    "origin_station", "destination_station", "outbound_date", "return_date",
+                    "outbound_itinerary", "return_itinerary", "material_conditions",
+                    "availability_status", "price_checked_at", "station_transfer_note",
+                    "round_trip_search_url", "round_trip_search_provider",
+                    "round_trip_search_checked_at", "round_trip_prefilled_fields",
+                )
+                if not all(item.get(key) for key in required_ground_fields):
+                    errors.append(
+                        "Every rail/coach/ferry option needs both stations, both dates, concrete "
+                        "outbound and return itineraries, fare conditions, a current-price status, "
+                        "a station-to-city transfer note, and a verified dated round-trip search URL.")
+                elif not is_https(item["round_trip_search_url"]):
+                    errors.append("Every ground-transport round-trip search URL must be HTTPS.")
+                search_fields = item.get("round_trip_prefilled_fields")
+                if not isinstance(search_fields, list) or not REQUIRED_FLIGHT_SEARCH_FIELDS.issubset(set(search_fields)):
+                    errors.append(
+                        "Every ground-transport round-trip search must prefill origin, destination, "
+                        "outbound date, return date, and travellers.")
+                if not is_iso_datestamp(item.get("round_trip_search_checked_at")):
+                    errors.append("ground.round_trip_search_checked_at must be an ISO date or date-time.")
+                for leg_name in ("outbound_itinerary", "return_itinerary"):
+                    leg = item.get(leg_name)
+                    if not isinstance(leg, dict) or not all(leg.get(key) is not None and leg.get(key) != "" for key in ("service_identifier", "departure_local", "arrival_local", "duration_minutes", "stops", "connection_or_terminal_note")):
+                        errors.append(f"ground.{leg_name} needs the service identifier, local times, duration, changes, and an interchange note.")
+                if item.get("availability_status") not in {"available", "limited", "unknown"}:
+                    errors.append("ground.availability_status must be available, limited, or unknown.")
+                if item.get("price_basis") != "per_person_round_trip":
+                    errors.append("ground.price_basis must be per_person_round_trip.")
+                if item.get("price_status") not in PRICE_STATUSES:
+                    errors.append("ground.price_status must be researched_current, estimate, or user_confirmed.")
+                if item.get("fare_low") is None or item.get("fare_high") is None or not item.get("fare_currency"):
+                    errors.append("Every ground-transport option needs a checked per-person fare range and currency.")
+                elif not is_nonnegative_money_range(item.get("fare_low"), item.get("fare_high")):
+                    errors.append("Every ground-transport fare range must be non-negative with low <= high.")
+                if not is_iso_datestamp(item.get("price_checked_at")):
+                    errors.append("ground.price_checked_at must be an ISO date or date-time.")
+                # The two dates were truthiness-checked only, so "next Friday" and a return three
+                # days BEFORE departure both validated and printed straight onto the search button.
+                # price_checked_at and round_trip_search_checked_at on the same object are already
+                # ISO-checked, so the looseness was an oversight rather than a decision.
+                outbound = parse_iso_date(item.get("outbound_date"), "ground.outbound_date", errors)
+                inbound = parse_iso_date(item.get("return_date"), "ground.return_date", errors)
+                if outbound and inbound and inbound < outbound:
+                    errors.append("ground.return_date cannot be before ground.outbound_date.")
+                # Deliberately NOT copied from the flight branch: a flight's outbound_date must equal
+                # trip.start_date, because the flight IS the arrival. A rail leg is often mid-trip --
+                # the hop between two cities -- so pinning it to the trip window would reject the
+                # multi-city case this category exists to serve. Both dates must still fall inside
+                # the trip, which is a weaker and correct claim.
+                trip_start = parse_iso_date(trip.get("start_date"), "trip.start_date", [])
+                trip_end = parse_iso_date(trip.get("end_date"), "trip.end_date", [])
+                for label, value in (("outbound_date", outbound), ("return_date", inbound)):
+                    if value and trip_start and trip_end and not trip_start <= value <= trip_end:
+                        errors.append(
+                            f"ground.{label} {value.isoformat()} falls outside the trip window "
+                            f"{trip_start.isoformat()}..{trip_end.isoformat()}.")
             if kind == "flight":
                 required_flight_fields = (
                     "origin_airport", "destination_airport", "outbound_date", "return_date",
@@ -1974,6 +2070,11 @@ def render_unlocalized(plan: dict) -> str:
     groups = []
     for field, kind, heading in (
         ("flights", "flight", "Flight options"),
+        # Rail, coach and ferry sit next to flights because they answer the same question -- how
+        # the traveller crosses the distance -- and because a rail trip's biggest, most
+        # time-sensitive purchase previously had no card at all: the page compared three hotels and
+        # offered no way to reach, price or availability-check the train.
+        ("ground_transport", "ground", "Rail, coach and ferry options"),
         ("accommodations", "hotel", "Accommodation options"),
         ("attraction_tickets", "ticket", "Ticket options"),
         ("rental_cars", "car", "Rental-car options"),

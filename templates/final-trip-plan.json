@@ -3,7 +3,6 @@
     "Notes on the three blocks a real run shipped without. All three are OPTIONAL -- a plan that",
     "omits them passes every gate exactly as before -- so nothing warns you when they are absent.",
     "That is the whole reason they are written out here.",
-
     "trip.traveler_constraints -- what the traveller's body and diet require, carried from intake.",
     "dietary_or_religious_needs and mobility_notes are free text lists. allergy_severity is one of",
     "none | preference | intolerance | severe, and it is the difference between a dish the traveller",
@@ -11,7 +10,6 @@
     "to restaurant staff, in the local language. max_continuous_walking_minutes is a hard number the",
     "walking check reads: with it set, any single segment or activity that exceeds it fails the gate,",
     "and without it nothing measures the constraint the traveller actually stated.",
-
     "entry_context -- the entry conclusion, on the page. SKILL.md's own quality gate requires that",
     "the conclusion reach the page through this block, and this template, the skeleton and the HTML",
     "template all omitted it, so a real cross-border plan shipped with no entry section at all during",
@@ -22,16 +20,13 @@
     "Delete the whole block when the trip never crosses a border; an unverified entry panel on a",
     "domestic trip is noise, and SKILL.md says not to raise entry as a blocker for a traveller",
     "staying home.",
-
     "days[].activities[].on_foot_minutes -- minutes of THIS activity spent on foot or standing,",
     "an integer >= 0. Segment walking_minutes covers only travel between stops, so a page can",
     "truthfully print '42 minutes on foot' for a day that schedules three and a half hours of it",
     "inside museums and markets. That happened, against a stated mobility limit, and the walking",
     "gate certified the number. Authoring it turns the second half of the day's walking on.",
-
     "Delete this _contract key before saving the real plan."
   ],
-
   "plan_status": "researched",
   "verification_status": null,
   "verification_report": null,
@@ -171,6 +166,58 @@
         "availability_status": null,
         "price_checked_at": null,
         "airport_transfer_note": null,
+        "single_option_reason": null
+      }
+    ],
+    "ground_transport": [
+      {
+        "_note": "Rail, coach and ferry. Same evidence as a flight, because the traveller asks the same questions -- which service, when, how long, how many changes, what the fare allows -- and on a rail trip this is the largest and most time-sensitive purchase on the page. Omit the array entirely when the trip has no ticketed intercity leg.",
+        "id": "ground-1",
+        "provider": "TODO: carrier that sells the ticket (must own review_url)",
+        "comparison_platform": "TODO: comparison platform, or null",
+        "comparison_checked_at": "1970-01-01",
+        "source_type": "official_provider",
+        "checked_at": "1970-01-01",
+        "review_url": "https://example.invalid/TODO-replace-with-a-researched-url",
+        "origin_station": "TODO: station the traveller boards at",
+        "destination_station": "TODO: station they arrive at",
+        "outbound_date": "1970-01-01",
+        "return_date": "1970-01-01",
+        "outbound_itinerary": {
+          "service_identifier": "TODO: e.g. 'NS Intercity + ICE 123'",
+          "departure_local": "TODO: HH:MM",
+          "arrival_local": "TODO: HH:MM",
+          "duration_minutes": 0,
+          "stops": 0,
+          "connection_or_terminal_note": "TODO: where the change happens and how tight it is"
+        },
+        "return_itinerary": {
+          "service_identifier": "TODO",
+          "departure_local": "TODO: HH:MM",
+          "arrival_local": "TODO: HH:MM",
+          "duration_minutes": 0,
+          "stops": 0,
+          "connection_or_terminal_note": "TODO"
+        },
+        "material_conditions": "TODO: refundable? changeable? is a seat reservation compulsory or extra?",
+        "availability_status": "unknown",
+        "price_basis": "per_person_round_trip",
+        "fare_low": 0,
+        "fare_high": 0,
+        "fare_currency": "EUR",
+        "price_status": "estimate",
+        "price_checked_at": "1970-01-01",
+        "station_transfer_note": "TODO: how they get from the arrival station into town -- the ground analogue of an airport transfer, so a cheap fare cannot hide an impractical arrival",
+        "round_trip_search_provider": "TODO: provider that owns round_trip_search_url",
+        "round_trip_search_url": "https://example.invalid/TODO-replace-with-a-researched-url",
+        "round_trip_search_checked_at": "1970-01-01",
+        "round_trip_prefilled_fields": [
+          "origin",
+          "destination",
+          "outbound_date",
+          "return_date",
+          "travellers"
+        ],
         "single_option_reason": null
       }
     ],

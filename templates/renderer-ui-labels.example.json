@@ -182,5 +182,7 @@
   "nonstop": "non-stop",
   "stops_suffix": " stop(s)",
   "unit_km": " km",
-  "why_providers": "Why these providers: "
+  "why_providers": "Why these providers: ",
+  "group_ground": "Rail, coach and ferry options",
+  "station_access": "Station and access: "
 }
