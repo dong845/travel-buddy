@@ -2182,6 +2182,64 @@ def main() -> int:
     p["booking_options"]["accommodations"][0]["guest_rating_value"] = 6.2
     expect_fail("a filled-in hotel rated 6.2/10", p, "below the 7.0/10 floor")
 
+    # 33. Three findings from the strict self-check, each a rule that was wrong rather than merely
+    # missing. The worst is the one that broke the market this skill mandates Amap for: range
+    # alone cannot tell lat,lon from lon,lat, so Ürümqi (87.6,43.8) written in Amap's documented
+    # order was read as latitude 87.6 and reported 4,946 km away in the Arctic -- and an author
+    # who "checked the coordinate order" as the message demanded got a green gate and every
+    # button pointing at the Arctic. The order comes from the provider now.
+    p = copy.deepcopy(base)
+    seg = day(p, 1)["route"]["segments"][0]
+    p["trip"]["destination_coords"] = {"lat": 43.8256, "lon": 87.6168}
+    seg["verified_map_url"] = ("https://uri.amap.com/navigation?from=87.6168,43.8256,Hotel"
+                               "&to=87.6300,43.8400,Park&mode=bus")
+    seg["distance_km"] = 2.5
+    day(p, 1)["route"]["verified_map_url"] = seg["verified_map_url"]
+    day(p, 1)["route"]["distance_km"] = 2.5
+    ok, output = run(p)
+    if "from the trip's declared destination" in output:
+        failures.append("a correct Amap lon,lat pair west of 90 degrees must not be accused of "
+                        "being on another continent: " + output)
+
+    # The same URL written in the wrong dialect for that provider still fails, because otherwise
+    # the fix would have silently repaired the plan's text while the button stayed broken.
+    p = copy.deepcopy(base)
+    p["trip"]["destination_coords"] = {"lat": 43.8256, "lon": 87.6168}
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["verified_map_url"] = ("https://uri.amap.com/navigation?from=43.8256,87.6168,Hotel"
+                               "&to=43.8400,87.6300,Park&mode=bus")
+    seg["distance_km"] = 2.5
+    expect_fail("an Amap URL written lat,lon", p, "from the trip's declared destination")
+
+    # A floor whose error message offers an escape no code reads rejects the honest author and
+    # waves through the one who flips a status field. Both halves are pinned.
+    p = copy.deepcopy(base)
+    card = day(p, 1)["dining"][0]
+    card["rating_value"] = 3.4
+    card["rating_below_floor_reason"] = "The only kitchen in town serving this dietary need."
+    expect_ok("a below-floor venue with the reason the message asks for", p)
+
+    p = copy.deepcopy(base)
+    card = day(p, 1)["dining"][0]
+    card["rating_value"] = 3.4
+    card["rating_status"] = "none"
+    card["rating_absence_reason"] = "market stall"
+    expect_fail("a floor dodged by flipping rating_status while keeping the score", p,
+                "cannot both have a")
+
+    p = copy.deepcopy(base)
+    option = p["booking_options"]["accommodations"][0]
+    option["guest_rating_value"] = 6.2
+    option["guest_rating_below_floor_reason"] = "The only accessible room in the village."
+    expect_ok("a below-floor hotel with its reason", p)
+
+    p = copy.deepcopy(base)
+    option = p["booking_options"]["accommodations"][0]
+    option["guest_rating_status"] = "none"
+    option["guest_rating_absence_reason"] = "newly opened"
+    option["guest_rating_value"] = 6.2
+    expect_fail("a hotel floor dodged the same way", p, "how a floor gets dodged")
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 

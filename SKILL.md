@@ -225,6 +225,12 @@ provider's own search box.
   A name sometimes resolves (`Mercado de Vegueta`) and sometimes lands on another continent
   (`酒店（拉斯坎特拉斯海滨）`), and no offline check can tell those apart — only a geocoder can, and
   it is not in the gate.
+- **The coordinate order comes from the provider, never from the numbers.** Google, Apple and
+  OpenStreetMap read `lat,lon`; Amap reads `lon,lat,name`. Guessing by range was tried and broke
+  the one market this skill mandates a non-Google provider for: Ürümqi written correctly as
+  `87.6168,43.8256` was read as latitude 87.6 and reported 4,946 km away, and an author who
+  followed the error message and "fixed the order" got a green gate with every button pointing at
+  the Arctic. Kashgar and Shigatse were out by 4,439 km and 6,691 km the same way.
 - **Declare `trip.destination_coords` once.** The leg-length rule is *relative*, so it cannot see a
   consistently reversed pair: writing `lon,lat` at both ends of a Las Palmas leg leaves the points
   4.73 km apart instead of 4.70 while moving every pin to southern Africa. One absolute reference
@@ -255,6 +261,18 @@ So every dining card carries:
 - The venue's **registered name**, the one the map provider indexes — verify it by opening the place page, which also hands you the rating, the price band, the address and the hours in one read.
 - `hours_status` of `verified` or `researched` whenever the card names a `time_window`. Putting a meal on the clock *is* the claim that the venue is open then; `unverified` beside `13:15–14:30` is that claim with its evidence deleted, and it reads as researched to the traveller and as compliant to the gate. Verify the hours for that weekday or drop the venue.
 - A backup that is a **named venue** whose own hours cover the same slot, not a category like "长廊沿线餐厅". One plan's lunch backup opened at 16:30.
+
+Below the floor is a decision, not a wall: write `rating_below_floor_reason` (or
+`guest_rating_below_floor_reason`) and the card ships. The only place in town serving a dietary
+need, a legendary stall whose score is all queue complaints, the village's one accessible room —
+those are real answers. The reason has to be its own field rather than a sentence in the rationale,
+because the message used to promise that escape while no code read it: the honest author who wrote
+the justification was rejected anyway, and the one who flipped `rating_status` to `"none"` walked
+straight through with the low score still in the card. Both halves are now enforced.
+
+Hours have no equivalent escape, and the asymmetry is deliberate. A market genuinely has no single
+score, so `"none"` is an honest answer about a rating. Nothing is an honest answer about hours once
+the card names a seating time — a traveller standing at a closed door is not an information gap.
 
 `check_plan_consistency.py` enforces all of this; it cannot tell you a venue is good, only that you never looked.
 

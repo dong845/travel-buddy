@@ -918,11 +918,16 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
             status = str(card.get("hours_status") or "").strip().lower()
             if _unfilled(venue, hours):
                 continue      # an unfilled card is reported once by check_venue_quality
-            if not hours and status not in {"unverified", "closed_unknown"}:
+            if not hours:
                 errors.append(
-                    f"day {number}: dining venue '{venue}' has neither venue_hours nor "
-                    f"hours_status='unverified'. Opening hours nobody checked are how a 20:00 dinner "
-                    f"gets booked at a venue that closes at 17:00.")
+                    f"day {number}: dining venue '{venue}' has no venue_hours. This card names a "
+                    f"seating time, and naming one is the claim that the venue is open then -- so "
+                    f"the hours for that weekday have to be read, not left blank. (This used to "
+                    f"offer hours_status='unverified' as a way out. It is not one: a card without "
+                    f"a time_window is refused by the renderer, so the escape led nowhere. Ratings "
+                    f"keep an honest 'none' path because a market has no single score; hours do "
+                    f"not, because a traveller standing at a closed door is not an information "
+                    f"gap, it is a ruined afternoon.)")
                 continue
             window = _parse_window(card.get("time_window"))
             if not isinstance(hours, str) or not hours.strip():
@@ -1838,6 +1843,11 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                 errors.append(
                     f"accommodation '{name}': guest_rating_status is 'none' with no reason. A new "
                     f"property with no reviews yet can still be the right call -- say which.")
+            if _num(option.get("guest_rating_value")) > 0:
+                errors.append(
+                    f"accommodation '{name}': guest_rating_status is 'none' while "
+                    f"guest_rating_value is {_num(option.get('guest_rating_value')):g}. That pair "
+                    f"is how a floor gets dodged rather than met.")
             continue
         missing = [k for k in ("guest_rating_value", "guest_rating_scale", "guest_rating_count",
                                "guest_rating_source")
@@ -1856,13 +1866,16 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
             continue
         out_of_ten = _num(option.get("guest_rating_value")) * (10.0 / scale)
         count = _num(option.get("guest_rating_count"))
-        if out_of_ten < 7.0:
+        if out_of_ten < 7.0 and not str(
+                option.get("guest_rating_below_floor_reason") or "").strip():
             errors.append(
                 f"accommodation '{name}': guest rating {_num(option.get('guest_rating_value')):g}"
                 f"/{scale:g} ({out_of_ten:.1f}/10) is below the 7.0/10 floor. On Booking's own "
                 f"published wording 7 is 'good' and 6 is 'pleasant', which is the polite end of a "
-                f"scale where the complaints start -- pick another property, or say in "
-                f"selection_rationale what makes this one worth a week of nights anyway.")
+                f"scale where the complaints start -- pick another property, or write "
+                f"guest_rating_below_floor_reason saying what makes this one worth a week "
+                f"of nights. A field rather than prose, because this message used to point "
+                f"at selection_rationale and no code ever read it.")
         elif out_of_ten < 8.0:
             low.append(f"accommodation '{name}' -- {out_of_ten:.1f}/10")
         if count and count < 50:
@@ -1948,6 +1961,13 @@ def check_venue_quality(plan: dict, errors: list[str], notes: list[str]) -> None
                         f"A venue with no public rating can still be the right call -- a market "
                         f"stall, a hotel breakfast -- but say which, so the gap reads as a "
                         f"decision rather than an omission.")
+                if _num(card.get("rating_value")) > 0:
+                    errors.append(
+                        f"{where}: rating_status is 'none' while rating_value is "
+                        f"{_num(card.get('rating_value')):g}. One object cannot both have a "
+                        f"score and not have one, and that pair is exactly how the floor gets "
+                        f"dodged -- flipping the status hides the number instead of replacing "
+                        f"the venue.")
                 continue
             missing = [k for k in ("rating_value", "rating_scale", "rating_count",
                                    "rating_source", "rating_url", "rating_checked_at")
@@ -1966,11 +1986,16 @@ def check_venue_quality(plan: dict, errors: list[str], notes: list[str]) -> None
                               f"bare number is not comparable across sources.")
                 continue
             out_of_five = _num(value) * (5.0 / scale)
-            if out_of_five < 3.5:
+            if out_of_five < 3.5 and not str(card.get("rating_below_floor_reason") or "").strip():
                 errors.append(
-                    f"{where}: rating is {_num(value):g}/{scale:g} ({out_of_five:.1f}/5), below "
-                    f"the 3.5/5 floor. Replace it, or state in why_this_stop what makes it worth "
-                    f"the traveller's evening anyway.")
+                    f"{where}: rating is {_num(value):g}/{scale:g} ({out_of_five:.1f}/5), "
+                    f"below the 3.5/5 floor. Replace it, or write rating_below_floor_reason "
+                    f"saying what makes it worth the traveller's evening anyway -- the only "
+                    f"place in town serving a dietary need, a legendary stall whose score is "
+                    f"all queue complaints. A field rather than prose, because this message "
+                    f"used to offer that escape and no code read it: an author who wrote the "
+                    f"justification was rejected anyway, while one who flipped rating_status "
+                    f"to 'none' walked straight through.")
             elif out_of_five < 4.0:
                 low.append(f"{where} -- {out_of_five:.1f}/5")
             if _num(count) < 30:
@@ -2008,20 +2033,44 @@ OSM_ROUTE_PARAM = "route"
 _LATLON = re.compile(r"^\s*(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*(?:,.*)?$")
 
 
-def _endpoint_coords(value: str) -> tuple[float, float] | None:
+LON_FIRST_HOSTS = ("amap.com", "gaode.com")
+
+
+def _lon_first(url: str) -> bool:
+    """Does this provider write lon,lat? Amap documents that order; the rest write lat,lon."""
+    host = urllib.parse.urlparse(url or "").netloc.casefold()
+    return any(h in host for h in LON_FIRST_HOSTS)
+
+
+def _endpoint_coords(value: str, lon_first: bool = False) -> tuple[float, float] | None:
     """Read 'lat,lon' (Google/Apple/OSM) or 'lon,lat,name' (Amap) out of a map URL parameter.
 
-    Amap documents its endpoints the other way round, so the pair is accepted in either order
-    and disambiguated by range: a latitude cannot exceed 90, so '120.51,24.06' can only be
-    lon,lat. A pair that is legal both ways is read as lat,lon, which is the majority dialect.
+    Range alone cannot tell the two dialects apart, and believing it could broke the one market
+    this skill mandates a non-Google provider for. The old rule swapped only when the first
+    number exceeded 90, so Beijing (116.4,39.9) decoded correctly while Ürümqi (87.6,43.8) --
+    a correct Amap URL -- was read as latitude 87.6 and landed 4,946 km away in the Arctic
+    Ocean. Kashgar was out by 4,439 km and Shigatse by 6,691. Worse than the false accusation
+    was the remedy it printed: an author who "checked the coordinate order" as told and wrote
+    lat,lon got a green gate and every map button pointing at the Arctic -- the exact defect
+    this function exists to catch, inverted. references/regional-service-routing.md said so all
+    along: the order is provider-specific and is not recoverable from the numbers.
+
+    So take the order from the provider, which is the one thing that actually knows it. The host
+    in the URL says which dialect the button will be read in, and reading it that way is what
+    makes a genuine mistake visible: an author who writes lon,lat into a Google URL gets the
+    endpoint Google will resolve -- somewhere in the Atlantic off Africa -- rather than a
+    charitable re-reading. Guessing the nearer interpretation was tried and is worse than the
+    bug it fixed: it silently repairs the plan's text while the traveller's button stays broken.
     """
     m = _LATLON.match(value or "")
     if not m:
         return None
     a, b = float(m.group(1)), float(m.group(2))
-    if abs(a) > 90 and abs(b) <= 90:
+    if lon_first:
         a, b = b, a
     if abs(a) > 90 or abs(b) > 180:
+        # Not a coordinate in the dialect this provider reads. Fall back to the other order only
+        # to decide it is unusable rather than to rescue it.
         return None
     return a, b
 
@@ -2091,7 +2140,8 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
         pairs = _map_endpoints(url)
         if not pairs:
             return
-        coords = [(k, _endpoint_coords(v), v) for k, v in pairs]
+        lon_first = _lon_first(url)
+        coords = [(k, _endpoint_coords(v, lon_first), v) for k, v in pairs]
         for key, point, raw in coords:
             if point is None:
                 # Free text is refused rather than reported, and this is the whole rule: the
