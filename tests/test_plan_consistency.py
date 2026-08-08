@@ -1993,6 +1993,41 @@ def main() -> int:
         expect_fail("two flight candidates sharing one search URL", p,
                     "share the same round_trip_search_url")
 
+    # 27. The four the adversarial pass listed that the previous round left open. Each is a rule
+    # the docs already stated and nothing measured -- the class that produced all of this.
+    p = copy.deepcopy(base)
+    day(p, 1)["dining"][0]["venue_url"] = (
+        "https://www.google.com/maps/search/?api=1&query="
+        "%E9%85%92%E5%BA%97%E8%87%AA%E5%8A%A9%E6%97%A9%E9%A4%90")   # "hotel buffet breakfast"
+    expect_fail("a venue link that searches a description instead of the venue", p,
+                "searches something else")
+
+    # OpenStreetMap packs both ends into one parameter, so an OSM-routed plan carried no endpoint
+    # the checker could see at all.
+    p = copy.deepcopy(base)
+    seg = day(p, 1)["route"]["segments"][0]
+    seg["verified_map_url"] = ("https://www.openstreetmap.org/directions"
+                               "?route=104.0665%2C30.5723%3B-15.41%2C28.10")
+    expect_fail("an OSM route= pair pointing off the map", p, "from the trip's declared destination")
+
+    # The multi_stop rule demanded waypoints and then never counted them, so one throwaway
+    # waypoint certified a day of any length.
+    p = copy.deepcopy(base)
+    route = day(p, 1)["route"]
+    route["route_map_scope"] = "multi_stop"
+    route["stops_in_order"] = ["A", "B", "C", "D", "E"]
+    route["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=30.5723,104.0665"
+                                 "&destination=30.6570,104.0817&waypoints=30.60,104.07"
+                                 "&travelmode=walking")
+    expect_fail("one waypoint standing in for a five-stop day", p, "waypoint(s), but the day has")
+
+    # A checked alternative is a button too, and nothing looked inside one.
+    p = copy.deepcopy(base)
+    day(p, 1)["route"]["segments"][0]["alternative_map_links"] = [
+        {"provider": "Apple", "url": "https://maps.apple.com/?saddr=%E9%85%92%E5%BA%97&daddr=%E5%B9%BF%E5%9C%BA",
+         "checked_at": "2026-07-30", "map_link_kind": "directions", "note": "alt"}]
+    expect_fail("a caption hiding in a checked alternative link", p, "is free text")
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 

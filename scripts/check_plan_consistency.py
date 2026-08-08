@@ -1716,6 +1716,28 @@ def check_venue_quality(plan: dict, errors: list[str], notes: list[str]) -> None
     thin: list[str] = []
     for day in [_obj(d) for d in _seq(plan.get("days"))]:
         number = day.get("number")
+        for card in [_obj(c) for c in _seq(day.get("dining"))]:
+            # SKILL.md names venue_url as "the same defect in a second field" and nothing measured
+            # it: a delivered plan searched the map provider for the phrase 酒店自助早餐（…）--
+            # "hotel buffet breakfast" -- instead of a venue. A place lookup needs a NAME rather
+            # than a coordinate, so the rule here is different from the route one: the query has
+            # to be keyed on the venue this card is about. It cannot prove the name exists, which
+            # is what the rating requirement and opening the page are for.
+            venue = str(card.get("venue_name") or "")
+            key = _property_key(venue)
+            url = str(card.get("venue_url") or "")
+            # A URL that addresses the venue by identifier is a STRONGER claim than one that
+            # searches its name -- an Amap /place/B0… or a Google place_id resolves to exactly
+            # one venue -- so an id buys the exemption the name test would otherwise deny it.
+            identified = re.search(
+                r"(/place/|place_id=|[?&]cid=|/maps/place/|ftid=)", url) is not None
+            if key and url and not identified and key not in _fold(urllib.parse.unquote_plus(url)):
+                errors.append(
+                    f"day {number}: the venue link for '{venue}' searches something else -- the "
+                    f"query in venue_url does not contain the venue's own name. A map link keyed "
+                    f"on a description finds a phrase; only one keyed on the registered name "
+                    f"finds the restaurant.")
+
         for index, card in enumerate([_obj(c) for c in _seq(day.get("dining"))]):
             where = f"day {number} {card.get('meal') or 'meal'} ('{card.get('venue_name')}')"
             status = str(card.get("rating_status") or "").lower()
@@ -1777,7 +1799,10 @@ def check_venue_quality(plan: dict, errors: list[str], notes: list[str]) -> None
                      "\n    - " + "\n    - ".join(thin))
 
 
-MAP_ENDPOINT_PARAMS = ("origin", "destination", "from", "to", "saddr", "daddr", "query")
+MAP_ENDPOINT_PARAMS = ("origin", "destination", "from", "to", "saddr", "daddr")
+# OpenStreetMap packs both ends into one parameter, so a plan routed through OSM used to carry
+# no endpoint this function could see at all.
+OSM_ROUTE_PARAM = "route"
 _LATLON = re.compile(r"^\s*(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*(?:,.*)?$")
 
 
@@ -1811,7 +1836,13 @@ def _map_endpoints(url: str) -> list[tuple[str, str]]:
         query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
     except Exception:  # noqa: BLE001 - a malformed URL is caught by the URL checks
         return []
-    return [(k, v[0]) for k in MAP_ENDPOINT_PARAMS for v in [query.get(k)] if v and v[0]]
+    pairs = [(k, value) for k in MAP_ENDPOINT_PARAMS for values in [query.get(k)]
+             if values for value in values]
+    for value in query.get(OSM_ROUTE_PARAM) or []:
+        for index, half in enumerate(str(value).split(";")):
+            if half.strip():
+                pairs.append((f"{OSM_ROUTE_PARAM}[{index}]", half.strip()))
+    return pairs
 
 
 def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None:
@@ -1908,6 +1939,14 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
         for index, seg in enumerate(segments):
             endpoints_of(str(seg.get("verified_map_url") or ""),
                          f"day {number} segment {index + 1}", _num(seg.get("distance_km")))
+            for alt in [_obj(a) for a in _seq(seg.get("alternative_map_links"))]:
+                endpoints_of(str(alt.get("url") or ""),
+                             f"day {number} segment {index + 1} alternative "
+                             f"({alt.get('provider')})", _num(seg.get("distance_km")))
+        for alt in [_obj(a) for a in _seq(route.get("alternative_map_links"))]:
+            endpoints_of(str(alt.get("url") or ""),
+                         f"day {number} route alternative ({alt.get('provider')})",
+                         _num(route.get("distance_km")))
         endpoints_of(str(route.get("verified_map_url") or ""),
                      f"day {number} route", _num(route.get("distance_km")))
 
@@ -1955,6 +1994,15 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
                 f"and set route_map_scope to 'primary_leg', so the label says route overview "
                 f"and the per-segment buttons carry the navigation.")
         if scope == "multi_stop" and len(stops) > 2:
+            waypoint_count = 0
+            for value in (query.get("waypoints") or []) + (query.get("via") or []):
+                waypoint_count += len([part for part in re.split(r"[|;]", str(value)) if part.strip()])
+            if carries_waypoints and waypoint_count < len(stops) - 2:
+                errors.append(
+                    f"day {number}: route_map_scope is 'multi_stop' and the URL carries "
+                    f"{waypoint_count} waypoint(s), but the day has {len(stops) - 2} stop(s) "
+                    f"between its ends. Requiring waypoints and then not counting them let a "
+                    f"single throwaway waypoint certify a five-stop day.")
             if not carries_waypoints:
                 errors.append(
                     f"day {number}: route_map_scope is 'multi_stop' -- which prints the button as "
