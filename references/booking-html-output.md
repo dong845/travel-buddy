@@ -291,6 +291,26 @@ Generate one self-contained file: semantic HTML, inline CSS, minimal inline Java
 
 If a real cost does not fit a category, put it in the nearest one and explain it in that breakdown row’s `description`/`note`. Never invent a category name: the page cannot translate it and the gate will reject the file.
 
+### The transport overview is for what is true all trip, not a fifth copy of day 1
+
+This section exists so trip-wide mobility facts have somewhere to live: which mode the trip uses,
+whether a car is rented, and the handful of things that decide a booking without belonging to any
+one day — that the airport bus runs 24 hours, so a 20:15 departure is not hostage to a last
+service; that a hilltop castle is reached by lift rather than on foot. A traveller reading day 1
+will not think to ask whether the last bus home exists on day 5, and that is exactly when they
+need to know.
+
+What it is **not** is a headline number. A delivered page printed "28 minutes · 12.0 km ·
+€13.60–19.10" on one line, where the first two described the airport leg and the third described
+the whole trip's transport spend — three figures side by side reading as one thing when they were
+two. Neither scope fixes it either: repeating the airport leg duplicates a button day 1 already
+has, and a five-day sum of every leg is a number nobody will ever travel in one go. So the header
+carries only the mode and the trip-wide fare range, whose scope is unambiguous, and the notes
+carry the substance.
+
+For the same reason the map button names the leg it opens. It used to read "transport overview"
+and open the airport transfer; a button may be a route overview, but it has to say which route.
+
 ### A field the contract calls a list is a list, even when it holds one thing
 
 `transport_overview.notes`, `assumptions`, `recheck_before_purchase`, the budget category lists and
