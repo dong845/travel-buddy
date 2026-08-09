@@ -2177,12 +2177,36 @@ def check_prose_agrees_with_data(plan: dict, errors: list[str], notes: list[str]
                    for s in _segments(day) if _num(s.get("duration_minutes")) > 0}
     if not leg_minutes:
         return
+    # Only a figure that reads as "this journey takes N minutes" counts. The first version
+    # flagged "walks over 30 minutes were converted" (30 is the traveller's limit, not a leg)
+    # and "about 20-35 minutes" (a range, not a single claim), which is how a rule earns the
+    # reputation that gets it routed around. A restatement is a bare number followed by the
+    # unit, not preceded by a comparison word and not one end of a range.
+    RESTATEMENT = re.compile(
+        r"(?<![-–—0-9])(\d{1,3})\s*(?:分钟|minutes|min\b)(?!\s*[-–—]\s*\d)")
+    COMPARISON = ("超过", "超出", "不超过", "以上", "以内", "上限", "至少", "最多",
+                  "over", "under", "within", "at least", "at most", "limit")
+    # "every 20 minutes" is a headway, not a journey time, and it lives in the same sentence as
+    # the journey time it is not: "€4.60, about 20-35 minutes, 24 hours, every 20 minutes".
+    # The first version read that last figure as a claim about the leg and was wrong twice over.
+    FREQUENCY = ("每", "间隔", "一班", "发车", "every", "headway", "interval")
     for index, note in enumerate(_seq(overview.get("notes"))):
-        for m in re.finditer(r"(\d{1,3})\s*(?:分钟|minutes|min\b)", str(note)):
+        text = str(note)
+        for m in RESTATEMENT.finditer(text):
             stated = int(m.group(1))
             if stated in leg_minutes:
                 continue
-            near = [v for v in leg_minutes if abs(v - stated) <= 5]
+            before = text[max(0, m.start() - 12):m.start()]
+            after = text[m.end():m.end() + 8]
+            if any(w in before for w in COMPARISON):
+                continue
+            if any(w in before or w in after for w in FREQUENCY):
+                continue
+            # Three minutes, not five: 40 sat within five of a 35-minute leg while describing
+            # a lift's last ascent, and a rule that has to be argued with is a rule that gets
+            # worked around. A stale figure is usually the old value of the same fact, which
+            # lands very close; an unrelated number rarely does.
+            near = [v for v in leg_minutes if abs(v - stated) <= 3]
             if near:
                 errors.append(
                     f"transport_overview.notes[{index}] says {stated} minutes, but the nearest "

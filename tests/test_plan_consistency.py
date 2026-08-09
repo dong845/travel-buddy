@@ -2367,10 +2367,11 @@ def main() -> int:
     # Prose that restates a leg's duration must restate it correctly.
     leg = min(int(s["duration_minutes"]) for d in base["days"]
               for s in d["route"]["segments"] if s.get("duration_minutes"))
-    # 13 sits within five minutes of a real leg -- close enough to read as a restatement of
-    # it, and not equal to any leg, which is exactly the drift shape.
+    # 15 sits within three minutes of a real leg -- close enough to read as a restatement,
+    # and not equal to any leg, which is the drift shape. The window is three rather than five
+    # because 40 once sat within five of a 35-minute leg while describing a lift's last ascent.
     p = copy.deepcopy(base)
-    p["transport_overview"]["notes"] = ["机场巴士约 13 分钟"]
+    p["transport_overview"]["notes"] = ["机场巴士约 15 分钟"]
     expect_fail("a note whose minutes drift from the leg they describe", p, "drifts from it")
 
     p = copy.deepcopy(base)
@@ -2381,6 +2382,16 @@ def main() -> int:
     p = copy.deepcopy(base)
     p["transport_overview"]["notes"] = ["电梯末班为闭馆前 40 分钟"]
     expect_ok("a minute figure about something other than a leg", p)
+
+    # Neither of these is a restatement, and the first version of the rule flagged both -- which
+    # is how a check earns the reputation that gets it routed around.
+    p = copy.deepcopy(base)
+    p["transport_overview"]["notes"] = ["两段原本超过 30 分钟的步行已改为公交接驳"]
+    expect_ok("a limit, introduced by a comparison word, not a leg duration", p)
+
+    p = copy.deepcopy(base)
+    p["transport_overview"]["notes"] = ["机场巴士约 20–35 分钟（视路况）"]
+    expect_ok("a range, where neither end is a single claim about a leg", p)
 
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
