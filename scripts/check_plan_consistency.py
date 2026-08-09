@@ -2121,6 +2121,76 @@ def _map_endpoints(url: str) -> list[tuple[str, str]]:
     return pairs
 
 
+MARKDOWN_IN_PROSE = re.compile(r"\*\*[^*\n]{1,80}\*\*|(?<![\w*])\*[^*\n]{1,60}\*(?![\w*])")
+
+
+def check_prose_rendering(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """Prose fields are printed verbatim: what you type is what the traveller reads.
+
+    The page has no Markdown renderer, so `**路线概览**` printed its asterisks on a delivered
+    plan -- beside a paragraph that had exploded into dot-separated characters, which is how it
+    was noticed at all. Emphasis in these fields is not styling; it is four stray asterisks in
+    the middle of a sentence.
+
+    Only paired markers are flagged. A lone asterisk is often a real footnote, and a rule that
+    fired on those would be argued with rather than obeyed.
+    """
+    def walk(value: object, path: str) -> None:
+        if isinstance(value, str):
+            if MARKDOWN_IN_PROSE.search(value):
+                sample = MARKDOWN_IN_PROSE.search(value).group(0)[:40]
+                errors.append(
+                    f"{path} contains Markdown emphasis ({sample!r}), which the page prints "
+                    f"literally -- there is no Markdown renderer. Write the sentence so the "
+                    f"emphasis is unnecessary, or say the important part first.")
+        elif isinstance(value, dict):
+            for k, v in value.items():
+                if k.endswith("_url") or k in {"id", "map_link_kind"}:
+                    continue
+                walk(v, f"{path}.{k}")
+        elif isinstance(value, (list, tuple)):
+            for i, v in enumerate(value):
+                walk(v, f"{path}[{i}]")
+
+    for key in ("assumptions", "recheck_before_purchase", "days", "transport_overview",
+                "booking_options", "destination_experience_anchors", "entry_context",
+                "regional_service_context", "budget"):
+        if key in plan:
+            walk(plan[key], key)
+
+
+def check_prose_agrees_with_data(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A minute figure written into prose must match the field it describes.
+
+    Prose duplicates data, and duplicated facts drift apart: an airport transfer corrected
+    everywhere else to 20-35 minutes still read "about 25 minutes" in the transport overview,
+    because that paragraph was written before the correction and nothing tied the two together.
+    The traveller has no way to know which of the two numbers is the current one.
+
+    Only the overview is checked, and only against the legs that actually exist, because that
+    is where the measured drift happened and a rule that guessed at every number in every
+    sentence would produce noise instead of findings.
+    """
+    overview = _obj(plan.get("transport_overview"))
+    leg_minutes = {int(_num(s.get("duration_minutes")))
+                   for day in [_obj(d) for d in _seq(plan.get("days"))]
+                   for s in _segments(day) if _num(s.get("duration_minutes")) > 0}
+    if not leg_minutes:
+        return
+    for index, note in enumerate(_seq(overview.get("notes"))):
+        for m in re.finditer(r"(\d{1,3})\s*(?:分钟|minutes|min\b)", str(note)):
+            stated = int(m.group(1))
+            if stated in leg_minutes:
+                continue
+            near = [v for v in leg_minutes if abs(v - stated) <= 5]
+            if near:
+                errors.append(
+                    f"transport_overview.notes[{index}] says {stated} minutes, but the nearest "
+                    f"leg in the plan declares {sorted(near)[0]}. Prose that restates a number "
+                    f"drifts from it -- one plan kept saying 'about 25 minutes' after the leg "
+                    f"had been corrected to 35. Quote the field or drop the figure.")
+
+
 def check_list_typed_fields(plan: dict, errors: list[str], notes: list[str]) -> None:
     """Fields the contract declares as lists must not be given a bare string.
 
@@ -2426,6 +2496,8 @@ PLAN_CHECKS = (
     check_budget,
     check_replan_context,
     check_list_typed_fields,
+    check_prose_rendering,
+    check_prose_agrees_with_data,
     check_map_endpoints,
     check_venue_quality,
     check_booking_identity,

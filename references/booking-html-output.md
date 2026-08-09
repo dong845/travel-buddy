@@ -308,6 +308,13 @@ has, and a five-day sum of every leg is a number nobody will ever travel in one 
 carries only the mode and the trip-wide fare range, whose scope is unambiguous, and the notes
 carry the substance.
 
+Prose in these fields is printed verbatim, which has two consequences worth stating because both
+shipped. **There is no Markdown renderer**, so `**路线概览**` prints its asterisks — emphasis here is
+not styling, it is four stray characters mid-sentence. And **a sentence that restates a number
+drifts from it**: an airport transfer corrected everywhere else to 20–35 minutes still read "about
+25 minutes" in this section, because the paragraph predated the correction and nothing tied them
+together. `check_plan_consistency.py` now refuses both.
+
 For the same reason the map button names the leg it opens. It used to read "transport overview"
 and open the airport transfer; a button may be a route overview, but it has to say which route.
 

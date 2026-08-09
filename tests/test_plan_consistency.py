@@ -2346,6 +2346,42 @@ def main() -> int:
     p["transport_overview"]["notes"] = ["first note", "second note"]
     expect_ok("notes as a real list of strings", p)
 
+    # 37. The second thing the same traveller reported, after the dot-separated characters: the
+    # overview's header printed a leg's duration beside the whole trip's fare, and one of its
+    # sentences still said "about 25 minutes" after the leg had been corrected to 35. Both are
+    # the prose class -- text that restates data and then drifts from it, or that assumes a
+    # renderer it does not have.
+    p = copy.deepcopy(base)
+    p["transport_overview"]["notes"] = ["这是**路线概览**，不是全天路线"]
+    expect_fail("Markdown emphasis in a prose field", p, "contains Markdown emphasis")
+
+    p = copy.deepcopy(base)
+    day(p, 1)["dining"][0]["why_this_stop"] = "**这家**是唯一的选择"
+    expect_fail("Markdown emphasis in a dining rationale", p, "contains Markdown emphasis")
+
+    # A lone asterisk is usually a footnote, and flagging those would make the rule arguable.
+    p = copy.deepcopy(base)
+    p["transport_overview"]["notes"] = ["票价见站台标示 * 以当日为准"]
+    expect_ok("a lone asterisk, which is a footnote and not emphasis", p)
+
+    # Prose that restates a leg's duration must restate it correctly.
+    leg = min(int(s["duration_minutes"]) for d in base["days"]
+              for s in d["route"]["segments"] if s.get("duration_minutes"))
+    # 13 sits within five minutes of a real leg -- close enough to read as a restatement of
+    # it, and not equal to any leg, which is exactly the drift shape.
+    p = copy.deepcopy(base)
+    p["transport_overview"]["notes"] = ["机场巴士约 13 分钟"]
+    expect_fail("a note whose minutes drift from the leg they describe", p, "drifts from it")
+
+    p = copy.deepcopy(base)
+    p["transport_overview"]["notes"] = [f"机场巴士约 {leg} 分钟"]
+    expect_ok("a note quoting the leg's own figure", p)
+
+    # And a number that describes something else entirely is not a drift.
+    p = copy.deepcopy(base)
+    p["transport_overview"]["notes"] = ["电梯末班为闭馆前 40 分钟"]
+    expect_ok("a minute figure about something other than a leg", p)
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 
