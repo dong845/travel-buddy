@@ -2324,6 +2324,28 @@ def main() -> int:
     expect_fail("two hotels in different stay groups sharing one comparison URL", p,
                 "share the same comparison")
 
+    # 36. A user opened a delivered page and found a whole paragraph printed as
+    # "这 · 是 · 路 · 线 · 概 · 览" -- every character of it, spaced by dots. transport_overview.notes
+    # is a list of strings, it was written as one string, and the renderer joins these: iterating a
+    # str yields its characters. Every gate passed, because the value was a perfectly good string
+    # and the join was perfectly good code, and nothing checked the TYPE.
+    for path, setter in (
+        ("transport_overview.notes",
+         lambda p, v: p["transport_overview"].__setitem__("notes", v)),
+        ("assumptions", lambda p, v: p.__setitem__("assumptions", v)),
+        ("recheck_before_purchase", lambda p, v: p.__setitem__("recheck_before_purchase", v)),
+        ("budget.included_categories",
+         lambda p, v: p["budget"].__setitem__("included_categories", v)),
+    ):
+        p = copy.deepcopy(base)
+        setter(p, "one paragraph written as a bare string instead of a one-element list")
+        expect_fail(f"{path} given a bare string", p, "the contract declares it a list")
+
+    # A correctly-typed list still passes, or the rule would just forbid the field.
+    p = copy.deepcopy(base)
+    p["transport_overview"]["notes"] = ["first note", "second note"]
+    expect_ok("notes as a real list of strings", p)
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 

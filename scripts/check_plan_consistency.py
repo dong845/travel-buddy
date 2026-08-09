@@ -2121,6 +2121,41 @@ def _map_endpoints(url: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def check_list_typed_fields(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """Fields the contract declares as lists must not be given a bare string.
+
+    The renderer joins these with a separator, and iterating a str yields its characters, so a
+    paragraph written as one string instead of a one-element list rendered as
+    "这 · 是 · 路 · 线 · 概 · 览" -- every character of a whole paragraph, spaced by dots, on a
+    page that passed every gate. The renderer now normalises a lone string so it can never emit
+    that again, but normalising quietly would leave the plan wrong and the next author would
+    write it the same way. So the shape is checked where the data lives.
+    """
+    LIST_FIELDS = [
+        ("assumptions", plan.get("assumptions")),
+        ("recheck_before_purchase", plan.get("recheck_before_purchase")),
+        ("sources", plan.get("sources")),
+        ("transport_overview.notes", _obj(plan.get("transport_overview")).get("notes")),
+        ("budget.included_categories", _obj(plan.get("budget")).get("included_categories")),
+        ("budget.unverified_categories", _obj(plan.get("budget")).get("unverified_categories")),
+    ]
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        number = day.get("number")
+        LIST_FIELDS.append((f"days[{number}].activities", day.get("activities")))
+        LIST_FIELDS.append((f"days[{number}].dining", day.get("dining")))
+        LIST_FIELDS.append((f"days[{number}].route.segments", _route(day).get("segments")))
+    for path, value in LIST_FIELDS:
+        if value is None:
+            continue
+        if isinstance(value, str):
+            errors.append(
+                f"{path} is a string, but the contract declares it a list. The renderer joins "
+                f"these, and joining a string joins its characters -- a paragraph written this "
+                f"way printed as every character separated by dots. Wrap it: [\"…\"].")
+        elif not isinstance(value, (list, tuple)):
+            errors.append(f"{path} must be a list, got {type(value).__name__}.")
+
+
 def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A map URL parameter is a geocoder query, not a caption.
 
@@ -2390,6 +2425,7 @@ PLAN_CHECKS = (
     check_meal_reachability,
     check_budget,
     check_replan_context,
+    check_list_typed_fields,
     check_map_endpoints,
     check_venue_quality,
     check_booking_identity,

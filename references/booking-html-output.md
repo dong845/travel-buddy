@@ -291,6 +291,22 @@ Generate one self-contained file: semantic HTML, inline CSS, minimal inline Java
 
 If a real cost does not fit a category, put it in the nearest one and explain it in that breakdown row’s `description`/`note`. Never invent a category name: the page cannot translate it and the gate will reject the file.
 
+### A field the contract calls a list is a list, even when it holds one thing
+
+`transport_overview.notes`, `assumptions`, `recheck_before_purchase`, the budget category lists and
+every `days[]` collection are lists of strings, and the renderer joins them with a separator.
+Iterating a Python string yields its characters, so a paragraph written as one bare string instead
+of a one-element list prints as *every character of it*, spaced by dots — a delivered page carried
+`这 · 是 · 路 · 线 · 概 · 览` for a whole paragraph, and every gate passed it, because the value was a
+perfectly good string and the join was perfectly good code. Nothing had checked the type.
+
+Two layers now stop it, and both are needed: the renderer normalises a lone string into a
+one-element list so that output is unreachable, and `check_plan_consistency.py` still reports the
+type mismatch, because normalising quietly would leave the plan wrong and the next author would
+write it exactly the same way.
+
+While you are there: these fields are **plain text, not Markdown**. `**bold**` prints its asterisks.
+
 ### Render what the plan collects
 
 A field that is required, researched, and never displayed is work the traveller paid for and cannot see. The page must show:
