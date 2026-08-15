@@ -203,6 +203,31 @@ The page must also render what the plan already collects, because a required fie
 
 For every shown booking category, expose its access status (`available`, `limited`, or `unknown`) and non-sensitive requirement/caveat in the page's booking-access check. Treat a visible search result as a shopping lead, not evidence that the traveller can complete the booking. For rail, intercity bus, ferry, transit, attractions, and rental cars, verify the official/operator conditions that can alter ticket eligibility, payment/deposit, required local phone, or licence feasibility; never ask the user to supply credentials, payment details, or document images.
 
+### The plan must carry what the traveller asked FOR, not only what they cannot have
+
+`trip.traveler_constraints` and `trip.traveler_preferences` come off the same intake form, and for
+a long time only the first survived into the plan: the skill remembered the allergy and forgot the
+reason for the trip. Everything downstream inherited that. The renderer counts experience anchors —
+three minimum on a multi-day city trip — but nothing ever asked whether an anchor *answered*
+anything, so rewriting every one of them as "somewhere / no particular reason" produced zero
+findings from any gate. "Do not substitute a list of famous sights for real fit" had a headcount
+behind it and nothing else.
+
+So carry `ranked_must_haves`, the natural and cultural subtypes, the pace and the avoid list into
+the plan — `new_plan_skeleton.py --from-intake` now does it — and **point an anchor at each
+must-have through `satisfies_preference`, quoting the traveller's own words.** Only the ranked
+must-haves bind; the softer preferences produce a note, because "prefer mild warmth" is a quality
+of a choice already made rather than a thing the days must contain, and a rule that failed on it
+would fire every winter. When the season or the place genuinely cannot deliver a must-have, say so
+in `unmet_preferences` with the reason — that is a different act from ignoring it, and the page
+shows the traveller which of their own words each anchor is answering, because they are the only
+reader who can tell whether "old-town lanes" is what they meant.
+
+Every entry in `avoid_list` needs an `avoid_list_handling` entry saying what keeps it out. Asked
+rather than pattern-matched: deciding from a plan's own fields whether it contains a red-eye, a
+crowd or a long transfer needs a different fact for every avoidance a traveller might write, while
+asking how each was honoured needs none.
+
 ### A map or venue URL parameter is a geocoder query, not a caption
 
 This is the highest-severity defect the skill has shipped, it is invisible to every structural

@@ -2703,6 +2703,142 @@ def check_service_market(plan: dict, errors: list[str], notes: list[str]) -> Non
 # here does nothing at all, which is the one failure mode worse than not writing it.
 # save_trip_deliverables.py imports this tuple, so adding a check here also arms the save path --
 # the only path that writes files a traveller keeps.
+def _blank(value: object) -> bool:
+    """Empty, missing, or still a placeholder.
+
+    Not the same question as _unfilled(), and the difference is a live trap rather than a nicety:
+    in THIS file _unfilled asks only "does this contain a TODO marker", so _unfilled("") is False.
+    check_shortlist_consistency.py defines a function of the same name that also treats None and
+    "" as unfilled. Two helpers, one name, two meanings, one skill. Writing the rules below
+    against the wrong one made two of their tests pass while asserting a failure -- the check
+    looked present and measured nothing, which is the exact defect class this file exists to
+    catch, arriving through a helper instead of through prose.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        text = value.strip()
+        return not text or _unfilled(text)
+    return False
+
+
+def check_preference_coverage(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """Did the trip deliver what the traveller came for?
+
+    Every other check in this file measures whether the plan is safe and agrees with itself. None
+    of them measures whether it is the trip that was asked for, and until the contract carried
+    `traveler_preferences` none of them could: the intake collected `ranked_must_haves`, the plan
+    had no field to put it in, and the sentence "coast is my must-have" was gone by the time any
+    JSON existed.
+
+    State the existing cover precisely, because the gap is narrower than "nothing checked this"
+    and the imprecise version is how a rule gets built twice. render_final_trip_html.validate_plan
+    already requires at least three anchors on a multi-day city trip, so a plan cannot ship with
+    none. What it counts is anchors; what it never asks is whether any of them answers anything.
+    Measured on a delivered plan: rewriting every anchor as "somewhere" / "no particular reason"
+    produced zero anchor findings from that rule and zero from all nineteen checks here.
+    SKILL.md's "do not substitute a list of famous sights for real fit" had a headcount behind it
+    and nothing else.
+
+    Only the ranked must-haves bind. A must-have is the traveller's own ranking of what the trip
+    is for, so an itinerary that never touches one is the wrong trip however well it validates.
+    The softer preferences produce a note instead, because "prefer mild warmth" is a dimension of
+    a choice already made rather than a thing the days must contain, and a rule that failed on it
+    would fire on correct work every winter.
+
+    The link is declared by the author on the anchor, never inferred. Guessing whether "Old town
+    lanes at dusk" satisfies "街区漫步" is exactly the judgement call this file has learned not to
+    make -- and the same guess, made in the other direction, is what a checker would need to
+    decide that it does not.
+    """
+    trip = _obj(plan.get("trip"))
+    if "traveler_preferences" not in trip:
+        # Required rather than optional, and an empty ranked_must_haves is a positive claim -- the
+        # traveller stated no must-have -- exactly as the skeleton already says of an empty
+        # traveler_constraints. Optional would make omission the escape from this rule, which is
+        # the shape of every hole this skill has had to close.
+        errors.append(
+            "trip.traveler_preferences is missing. It carries what the traveller asked FOR, and "
+            "without it nothing can check that the itinerary is the trip they wanted -- only that "
+            "it is internally consistent. Copy the block from templates/final-trip-plan.json; "
+            "empty lists are a claim that they stated no preference, not a placeholder.")
+        return
+    preferences = _obj(trip.get("traveler_preferences"))
+    must_haves = [str(m).strip() for m in _seq(preferences.get("ranked_must_haves"))
+                  if isinstance(m, str) and m.strip() and not _blank(m)]
+    anchors = [_obj(a) for a in _seq(plan.get("destination_experience_anchors"))]
+    satisfied: dict[str, list[str]] = {}
+    for anchor in anchors:
+        claim = anchor.get("satisfies_preference")
+        if _blank(claim):
+            continue
+        satisfied.setdefault(_fold(str(claim)), []).append(str(anchor.get("name") or "?"))
+
+    excused = {}
+    for entry in _seq(preferences.get("unmet_preferences")):
+        entry = _obj(entry)
+        name, reason = entry.get("preference"), entry.get("reason")
+        if _blank(name):
+            continue
+        if _blank(reason):
+            errors.append(
+                f"trip.traveler_preferences.unmet_preferences lists {name!r} with no reason. The "
+                f"reason is the entire content of the claim: 'the season cannot deliver it' is an "
+                f"answer, an empty field is a way to switch the rule off.")
+            continue
+        excused[_fold(str(name))] = str(reason)
+
+    for must in must_haves:
+        key = _fold(must)
+        if key in satisfied or key in excused:
+            continue
+        errors.append(
+            f"the traveller ranked {must!r} as a must-have and no experience anchor names it in "
+            f"satisfies_preference. Either point an anchor at it, or record it in "
+            f"trip.traveler_preferences.unmet_preferences with what the season or the place makes "
+            f"impossible. A plan that validates perfectly and misses what the trip was for is "
+            f"still the wrong trip.")
+
+    for soft_field in ("natural_subtypes", "human_cultural_subtypes"):
+        for value in _seq(preferences.get(soft_field)):
+            if _blank(value) or _fold(str(value)) in satisfied:
+                continue
+            notes.append(f"note: stated preference {str(value)!r} ({soft_field}) is not named by "
+                         f"any anchor. Not an error -- a softer preference can be a quality of the "
+                         f"days rather than a thing in them -- but worth a look.")
+
+    # An anchor claiming to satisfy something nobody asked for is a mislabel, not a bonus: it is
+    # the field the must-have rule reads, so a typo in it silently un-answers a must-have.
+    declared = {_fold(p) for p in must_haves}
+    declared |= {_fold(str(v)) for f in ("natural_subtypes", "human_cultural_subtypes")
+                 for v in _seq(preferences.get(f)) if isinstance(v, str)}
+    for key, names in sorted(satisfied.items()):
+        if declared and key not in declared:
+            errors.append(
+                f"anchor(s) {', '.join(names)} claim to satisfy a preference the traveller never "
+                f"stated. satisfies_preference must quote one of their own words, because that is "
+                f"the string the must-have rule matches on -- a near miss here reads as an "
+                f"unanswered must-have and nothing says the two are related.")
+
+    # The avoid list is answered rather than pattern-matched. Deciding from a plan's own fields
+    # whether it contains a red-eye, or a crowd, or a long transfer, needs a different fact for
+    # every entry the traveller might write; asking how each was honoured needs none.
+    handled = {_fold(str(_obj(h).get("item") or "")) for h in _seq(preferences.get("avoid_list_handling"))}
+    for entry in _seq(preferences.get("avoid_list_handling")):
+        entry = _obj(entry)
+        if not _blank(entry.get("item")) and _blank(entry.get("how_avoided")):
+            errors.append(
+                f"trip.traveler_preferences.avoid_list_handling names {entry.get('item')!r} with "
+                f"no how_avoided. Say what in the plan keeps it away.")
+    for item in _seq(preferences.get("avoid_list")):
+        if _blank(item) or _fold(str(item)) in handled:
+            continue
+        errors.append(
+            f"the traveller asked to avoid {str(item)!r} and the plan says nothing about it. Add "
+            f"an avoid_list_handling entry naming what keeps it out of this itinerary -- silence "
+            f"about an avoidance reads exactly like an itinerary that contains it.")
+
+
 def gates_stamp() -> dict:
     """What this plan was checked against, recorded so a later audit can tell two things apart.
 
@@ -2735,6 +2871,7 @@ PLAN_CHECKS = (
     check_venue_quality,
     check_booking_identity,
     check_service_market,
+    check_preference_coverage,
 )
 
 

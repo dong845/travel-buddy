@@ -392,6 +392,17 @@ def main() -> int:
                         "feasibility.dietary_or_religious_needs")
     mobility = pick_list("trip.traveler_constraints.mobility_notes",
                          "party.mobility_or_access_needs")
+    # What the traveller asked FOR. Carried across the same way the constraints are, because the
+    # form collects both and only the constraints used to survive: the plan remembered the allergy
+    # and forgot the reason for the trip. must_haves is the binding one -- every entry has to be
+    # answered by an anchor or excused in unmet_preferences before the plan will save.
+    must_haves = pick_list("trip.traveler_preferences.ranked_must_haves",
+                           "experience.ranked_must_haves")
+    natural = pick_list("trip.traveler_preferences.natural_subtypes",
+                        "experience.natural_subtypes")
+    cultural = pick_list("trip.traveler_preferences.human_cultural_subtypes",
+                         "experience.human_cultural_subtypes")
+    avoid = pick_list("trip.traveler_preferences.avoid_list", "experience.avoid_list")
 
     # Printed before the checks below, so that a run which then fails on a bad date still shows
     # the operator what was read out of the file and what the file said.
@@ -500,6 +511,23 @@ def main() -> int:
                 "allergy_card_text": None,
                 "max_continuous_walking_minutes": None,
                 "mobility_notes": mobility,
+            },
+            # The other half of the same form. traveler_constraints is what the traveller cannot
+            # have; this is what they came for, and until it existed nothing downstream could tell
+            # whether the itinerary delivered it -- a delivered plan had every anchor deleted and
+            # all nineteen checks stayed green. Each must-have needs an anchor naming it in
+            # satisfies_preference, or an unmet_preferences entry saying what makes it impossible.
+            "traveler_preferences": {
+                "ranked_must_haves": must_haves,
+                "natural_subtypes": natural,
+                "human_cultural_subtypes": cultural,
+                "pace": None,
+                "avoid_list": avoid,
+                "avoid_list_handling": [
+                    {"item": item, "how_avoided": f"{TODO}what in this plan keeps it out"}
+                    for item in avoid
+                ],
+                "unmet_preferences": [],
             },
         },
         "profile_context": {"profile_id": None, "profile_last_reviewed_at": None,

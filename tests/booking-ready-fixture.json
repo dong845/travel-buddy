@@ -17,6 +17,26 @@
     "destination_coords": {
       "lat": 30.5723,
       "lon": 104.0665
+    },
+    "traveler_preferences": {
+      "ranked_must_haves": [
+        "street food"
+      ],
+      "natural_subtypes": [],
+      "human_cultural_subtypes": [
+        "neighbourhood walking"
+      ],
+      "pace": "moderate",
+      "avoid_list": [
+        "red-eye arrivals"
+      ],
+      "avoid_list_handling": [
+        {
+          "item": "red-eye arrivals",
+          "how_avoided": "The only legs are daytime buses; no flight is booked."
+        }
+      ],
+      "unmet_preferences": []
     }
   },
   "regional_service_context": {
@@ -435,7 +455,8 @@
       "planned_day": 1,
       "why_it_matters": "Ensures the itinerary contains a locally rooted city experience, not only a single attraction.",
       "source_url": "https://www.chengdu.gov.cn",
-      "checked_at": "2026-07-30T10:00:00+08:00"
+      "checked_at": "2026-07-30T10:00:00+08:00",
+      "satisfies_preference": "street food"
     }
   ],
   "sources": [

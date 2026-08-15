@@ -14,6 +14,7 @@
   "segment_map": "Open this segment in maps",
   "segment_map_provider": "Open this segment in {provider}",
   "ticket_prefix": "Review ticket: ",
+  "anchor_serves_label": "You asked for: ",
   "unverified_banner_title": "Not fact-checked",
   "unverified_banner_body": "This plan skipped the five-domain verification pass. Its fares, opening hours, entry rules, and availability have not been checked against operators or official sources. Treat every figure as an estimate and verify before booking.",
   "pill_flight": "flight",

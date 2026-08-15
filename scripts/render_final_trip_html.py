@@ -166,6 +166,7 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "segment_map": "在地图中打开此路段",
             "segment_map_provider": "在 {provider} 中打开此路段",
             "ticket_prefix": "查看门票：",
+            "anchor_serves_label": "你要的是：",
             "unverified_banner_title": "未经事实核验",
             "unverified_banner_body": (
                 "本计划没有任何核验记录。其中的票价、营业时间、入境规则与可订状态"
@@ -363,6 +364,7 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
 # label set authored before they existed, silently dropping that page back to English -- so they
 # are optional, and localize_static_page falls back to the English source string when absent.
 OPTIONAL_UI_LABEL_KEYS = frozenset({
+    "anchor_serves_label",
     "unverified_banner_title",
     "unverified_banner_body",
     # Added with the booking-page fixes: the stated budget cap, dining opening hours and
@@ -602,6 +604,12 @@ def localize_static_page(page: str, language: object, custom_labels: object = No
                        "entry rules, and availability have not been checked against operators or "
                        "official sources. Treat every figure as an estimate and verify before "
                        "booking."),
+        # NOTE: keyed byte-identically on the sentence emitted by destination_anchor_cards.
+        # Editing one without the other leaks English onto a Chinese page, and the i18n gate
+        # then fails the file -- which is how this table is meant to work, but the failure is
+        # cheaper to avoid than to debug.
+        "<strong>You asked for: </strong>":
+            f"<strong>{labels.get('anchor_serves_label', 'You asked for: ')}</strong>",
         ">Your constraints<": f">{labels.get('constraints_heading', 'Your constraints')}<",
         "Allergy severity: ": labels.get("constraints_severity", "Allergy severity: "),
         "Dietary needs: ": labels.get("constraints_dietary", "Dietary needs: "),
@@ -1612,10 +1620,17 @@ def destination_anchor_cards(value: object) -> str:
     for anchor in ordered:
         if not isinstance(anchor, dict):
             continue
+        # The traveller stated what the trip was for; this is where the page answers them. The
+        # link exists in the data either way, but a field only they can verify is worth nothing
+        # while it stays in the JSON: they are the only reader who knows whether "old-town lanes"
+        # is really what they meant by "街区漫步".
+        serves = anchor.get("satisfies_preference")
+        serves_line = (f'<p class="meta anchor-serves"><strong>You asked for: </strong>'
+                       f'{esc(serves)}</p>') if serves else ""
         items.append(
             f'<article class="anchor"><span class="pill">Day {esc(anchor.get("planned_day"))}</span><h3>{esc(anchor.get("name"))}</h3>'
             f'<p>{esc(anchor.get("category"))} · {esc(anchor.get("neighborhood_or_area"))}</p>'
-            f'<p>{esc(anchor.get("why_it_matters"))}</p>'
+            f'<p>{esc(anchor.get("why_it_matters"))}</p>{serves_line}'
             f'<a class="anchor-link" data-verified-at="{attr(anchor.get("checked_at"))}" href="{attr(anchor.get("source_url"))}" target="_blank" rel="noopener noreferrer">View source</a></article>'
         )
     return f'<section id="destination-essentials" class="panel"><h2>Destination essentials</h2><div class="grid">{"".join(items)}</div></section>' if items else ""

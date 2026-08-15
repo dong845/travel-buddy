@@ -55,6 +55,16 @@
       "allergy_card_text": null,
       "max_continuous_walking_minutes": null,
       "mobility_notes": []
+    },
+    "traveler_preferences": {
+      "_comment": "What the traveller asked FOR, as opposed to traveler_constraints, which is what they cannot have. Both come off the same intake form and only one of them used to survive into the plan: the skill remembered the allergy and forgot the reason for the trip. ranked_must_haves is the binding half -- every entry must be answered by an anchor that names it, or by an entry in unmet_preferences saying why the season or the place cannot deliver it.",
+      "ranked_must_haves": [],
+      "natural_subtypes": [],
+      "human_cultural_subtypes": [],
+      "pace": null,
+      "avoid_list": [],
+      "avoid_list_handling": [],
+      "unmet_preferences": []
     }
   },
   "profile_context": {
@@ -474,6 +484,7 @@
       "neighborhood_or_area": null,
       "planned_day": null,
       "why_it_matters": null,
+      "satisfies_preference": null,
       "source_url": null,
       "checked_at": null
     }

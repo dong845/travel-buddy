@@ -2536,6 +2536,73 @@ def main() -> int:
     expect_fail("a verification report dated in the future", copy.deepcopy(base),
                 "which is in the future", report)
 
+    # 40. The first check in this file that measures whether the plan is the trip that was ASKED
+    # for rather than whether it is safe and self-consistent. validate_plan already counts anchors
+    # -- three minimum on a multi-day city trip -- so the gap is not that nothing looked, it is
+    # that nothing asked whether an anchor answers anything: rewriting every one of them as
+    # "somewhere" / "no particular reason" produced zero findings from that rule and zero from all
+    # nineteen checks here. The intake had collected "coast is my must-have"; the plan had no
+    # field to put it in, so SKILL.md's "do not substitute a list of famous sights for real fit"
+    # had a headcount behind it and nothing else.
+    p = copy.deepcopy(base)
+    p["trip"]["traveler_preferences"]["ranked_must_haves"] = ["street food", "harbour walking"]
+    expect_fail("a must-have no anchor answers", p, "ranked 'harbour walking' as a must-have")
+
+    # The escape is a declared reason, not an empty field -- the season really can make a
+    # must-have impossible, and saying so is a different act from ignoring it.
+    p = copy.deepcopy(base)
+    p["trip"]["traveler_preferences"]["ranked_must_haves"] = ["street food", "harbour walking"]
+    p["trip"]["traveler_preferences"]["unmet_preferences"] = [
+        {"preference": "harbour walking",
+         "reason": "The harbour promenade is closed for works through the travel window."}]
+    expect_ok("a must-have excused with what makes it impossible", p)
+
+    p = copy.deepcopy(base)
+    p["trip"]["traveler_preferences"]["ranked_must_haves"] = ["street food", "harbour walking"]
+    p["trip"]["traveler_preferences"]["unmet_preferences"] = [
+        {"preference": "harbour walking", "reason": ""}]
+    expect_fail("an unmet must-have with no reason", p, "no reason")
+
+    # A typo in satisfies_preference silently un-answers a must-have, so a claim that matches
+    # nothing the traveller said is the finding rather than a harmless extra.
+    p = copy.deepcopy(base)
+    p["destination_experience_anchors"][0]["satisfies_preference"] = "street foods"
+    expect_fail("an anchor answering a preference nobody stated", p, "never stated")
+
+    # Softer preferences advise rather than bind: "prefer mild warmth" is a quality of a choice
+    # already made, not a thing the days must contain, and failing on it would fire every winter.
+    p = copy.deepcopy(base)
+    p["trip"]["traveler_preferences"]["natural_subtypes"] = ["lakes"]
+    expect_ok("an unanswered soft preference is a note, not an error", p)
+
+    # The avoid list is answered rather than pattern-matched: deciding from a plan's own fields
+    # whether it contains a red-eye needs a different fact for every entry a traveller might
+    # write, while asking how each was honoured needs none.
+    p = copy.deepcopy(base)
+    p["trip"]["traveler_preferences"]["avoid_list_handling"] = []
+    expect_fail("an avoidance the plan says nothing about", p, "says nothing about it")
+
+    p = copy.deepcopy(base)
+    p["trip"]["traveler_preferences"]["avoid_list_handling"] = [
+        {"item": "red-eye arrivals", "how_avoided": ""}]
+    expect_fail("an avoidance handled with no explanation", p, "no how_avoided")
+
+    # Omission must not be the escape. Every hole this skill has closed had the same shape: a rule
+    # that only ran when the author filled in the field it read.
+    p = copy.deepcopy(base)
+    p["trip"].pop("traveler_preferences")
+    expect_fail("a plan carrying no preferences at all", p, "traveler_preferences is missing")
+
+    # An empty block is a claim -- the traveller stated no must-have -- and must stay legal, or
+    # the rule becomes impossible to satisfy for a traveller who genuinely wants "anywhere warm".
+    p = copy.deepcopy(base)
+    p["trip"]["traveler_preferences"] = {"ranked_must_haves": [], "natural_subtypes": [],
+                                         "human_cultural_subtypes": [], "pace": None,
+                                         "avoid_list": [], "avoid_list_handling": [],
+                                         "unmet_preferences": []}
+    p["destination_experience_anchors"][0]["satisfies_preference"] = None
+    expect_ok("a traveller who stated no preferences", p)
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 
