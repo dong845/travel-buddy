@@ -145,7 +145,52 @@ Exception: verify a *consequence* of a user-confirmed fact when the consequence 
 material. "You hold a multi-entry visa" is theirs to assert; "therefore you may self-book flights
 and hotels" is a claim about a rule, and that is fair game.
 
-## 7. What not to economise on
+## 7. Tokens are not time — measure the minutes separately
+
+Everything above buys tokens. The traveller experiences minutes, and the two optimise in
+different directions often enough that one number for both would mislead:
+
+- **Compute is a fan-out, so its wall-clock is the slowest agent, not the sum.** Adding a seventh
+  research agent to a six-agent phase costs a sixth of a token budget and almost no time.
+  Removing one saves tokens and no time at all. Every rule in sections 1–6 is a *token* rule; do
+  not expect any of them to make the run feel faster.
+- **Waiting on the traveller is a round-trip with a human in it, and it is unbounded.** This is
+  why the consolidated checkpoint in section 2 is a time rule rather than a tidiness rule, and
+  why asking a second question before design starts is expensive in a way no token count shows.
+
+Run `python scripts/trip_timer.py start <phase> --workspace "<ws>" --run <slug>` and `stop` around
+each phase, naming the traveller-facing waits `checkpoint...` or `wait...` so they are counted
+separately. `python scripts/trip_timer.py report --workspace "<ws>"` prints the split, and
+`audit_workspace.py` summarises it across runs. It records stamps rather than durations, because
+`now` is the only thing a caller can honestly assert.
+
+**Do not optimise this from intuition — there is not yet enough data.** Until this file can quote
+measured minutes the way it quotes measured tokens, the honest statement is that nobody knows
+where the time goes. Report what the timer printed.
+
+## 8. A stalled or dead agent is a finding, not a slow one
+
+A fan-out has stragglers, and the failure mode is specific: **a batch where most agents died
+returns the same shape as a batch that found nothing.** Measured on this repo's own design run,
+2026-08-15: 64 agents launched, **41 died on a session usage limit** and 23 completed, and the
+structured result came back as an empty list for one field. Read as "nothing survived review" it
+was completely wrong; the reviewers had simply not run. Agents also stalled — "no progress after
+200s — retrying" — which spends wall-clock on a barrier while producing nothing.
+
+So:
+
+- **Never read an empty or thin result without checking how many agents actually finished.** The
+  journal records one line per completed agent; the count is the first thing to look at, before
+  any conclusion is drawn from the content.
+- **Say the survival rate out loud** when reporting a fan-out's findings. "16 rules survived" and
+  "16 rules survived, and 41 of 64 reviewers never ran" support very different decisions.
+- **Prefer more, smaller invocations over one wide one** when a usage limit is plausible. A batch
+  that dies takes its whole barrier with it; three sequential batches lose a third.
+- **A phase that stalls has already failed its budget.** Stop it and report what is missing rather
+  than waiting it out — an unchecked fact that says so is a finding, one that stays quiet is a
+  defect, and that rule applies to a whole phase exactly as it applies to a single claim.
+
+## 9. What not to economise on
 
 **The verification pass in [verification.md](verification.md) earns its cost every time.**
 In two measured Construction runs it was the only stage that found trip-breaking defects, and in

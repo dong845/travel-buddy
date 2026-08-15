@@ -80,6 +80,40 @@ def audit_plan(path: Path) -> dict:
     }
 
 
+def summarize_timing(workspace: Path) -> list[str]:
+    """One line per measured run: where the elapsed time actually went.
+
+    Surfaced here because a measurement nobody reads changes nothing, and because the interesting
+    number only appears across runs. A single run tells you this trip took 57 minutes; ten runs
+    tell you whether the traveller's own answering time is the constant, in which case no amount
+    of token thrift will make the skill feel faster.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from trip_timer import durations, human, timing_dir  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - only if the tool is removed
+        return []
+    directory = timing_dir(workspace)
+    if not directory.is_dir():
+        return []
+    lines: list[str] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        spans, compute, wait = durations((data or {}).get("events") or [])
+        if not spans:
+            continue
+        total = compute + wait
+        unfinished = [phase for phase, seconds, _ in spans if seconds < 0]
+        share = f"{wait / total * 100:.0f}% waiting on you" if total > 0 else "no closed phase"
+        note = f"; unfinished: {', '.join(unfinished)}" if unfinished else ""
+        lines.append(f"{path.stem}: {human(total)} total — compute {human(compute)}, "
+                     f"wait {human(wait)} ({share}){note}")
+    return lines
+
+
 def audit_discovery_runs(plans_dir: Path) -> list[tuple[str, str]]:
     """Which saved discovery results came from a run that actually finished.
 
@@ -129,6 +163,11 @@ def main() -> int:
     results = [audit_plan(p) for p in sorted(plans_dir.glob("*.json")) if is_plan_file(p)]
     if not results:
         print(f"No plan files found in {plans_dir}.")
+        # Timing still prints. A workspace with measurements and no saved plan is a run that died
+        # before delivery, which is the run whose timing is most worth reading -- and the early
+        # return used to swallow exactly that case.
+        for line in summarize_timing(workspace):
+            print(f"  {line}")
         return 0
 
     if args.as_json:
@@ -149,6 +188,13 @@ def main() -> int:
         if args.verbose and result["total"]:
             for error in result["structure_errors"] + result["consistency_errors"]:
                 print(f"        - {error.splitlines()[0][:160]}")
+
+    timing = summarize_timing(workspace)
+    if timing:
+        print()
+        print("Planning time (from scripts/trip_timer.py):")
+        for line in timing:
+            print(f"  {line}")
 
     discovery = audit_discovery_runs(plans_dir)
     if discovery:
