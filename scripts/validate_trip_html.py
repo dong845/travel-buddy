@@ -507,16 +507,32 @@ def validate(
     required_booking_types: set[str],
     transport_mode: str | None,
     notes: list[str] | None = None,
+    require_unverified_banner: bool = False,
 ) -> list[str]:
     parser = TripHTMLParser()
     parser.feed(content)
     parser.close()
+    # SKILL.md promises that a plan saved without a verification report "prints a visible
+    # 'not fact-checked' banner at the top of the page itself". Until now that promise lived only
+    # in prose: the renderer did emit the banner, no gate asserted it, and a probe confirmed all
+    # four gates stayed green on a page with and without it. The traveller books from the page,
+    # so the one artifact that must carry the warning was the one nothing measured.
+    #
+    # Anchored on the section id rather than on the banner's words, because the words are
+    # translated -- an English-string assertion would pass on an English page and fail every
+    # Chinese one, which is how a gate teaches people to skip it.
     if notes is not None and parser.undecidable_provider_links:
         notes.append(
             "provider/target match undecidable for "
             f"{len(parser.undecidable_provider_links)} link(s) (no matchable token in the provider "
             "name); check these by eye: " + "; ".join(parser.undecidable_provider_links))
     errors = parser.errors
+    if require_unverified_banner and 'id="verification-notice"' not in content:
+        errors.append(
+            "page carries no verification notice while the plan is not marked verified. The "
+            "'not fact-checked' banner is what tells the person booking from this page that its "
+            "fares, hours and entry rules were never checked; recorded in the JSON alone it is a "
+            "gap the traveller never sees.")
     if re.search(r"\{\{[^}]+\}\}|\bTODO\b", content, re.IGNORECASE):
         errors.append("Final HTML still contains a template token or TODO.")
     if re.search(r"<script\b[^>]*\bsrc\s*=|<iframe\b", content, re.IGNORECASE):
@@ -735,6 +751,11 @@ def main() -> int:
         default=None,
         help="Apply the relevant car-link rule",
     )
+    parser.add_argument(
+        "--require-unverified-banner",
+        action="store_true",
+        help="Require the 'not fact-checked' notice, for a page whose plan is not verified",
+    )
     args = parser.parse_args()
     if args.expected_days is not None and args.expected_days < 1:
         parser.error("--expected-days must be positive")
@@ -750,6 +771,7 @@ def main() -> int:
         set(args.require_booking_type),
         args.transport_mode,
         notes,
+        require_unverified_banner=args.require_unverified_banner,
     )
     for note in notes:
         print(f"note: {note}")

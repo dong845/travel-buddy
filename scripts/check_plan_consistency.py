@@ -1535,6 +1535,16 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
             errors.append(
                 f"verification report is dated {checked_at[:10]}, before the plan's generated_at "
                 f"{generated}. It cannot have checked this plan.")
+        # And the other side of the same window, which was open: only the lower bound was
+        # checked, so a report stamped years ahead certified a plan happily. It matters because
+        # checked_at is the field a reader uses to judge how stale a fare or an opening time is,
+        # and a date in the future reads as "checked more recently than possible" -- the one
+        # direction that makes stale research look fresh.
+        if checked_at[:10] > dt.date.today().isoformat():
+            errors.append(
+                f"verification report is dated {checked_at[:10]}, which is in the future. "
+                f"checked_at records when the facts were confirmed, and a reader judges "
+                f"staleness by it.")
 
     # Bind the report to the plan, so one report cannot silently certify every trip.
     if plan_path:
@@ -1549,7 +1559,18 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
                 f"'{Path(plan_path).name}'.")
 
     domains = [_obj(d) for d in _seq(report.get("domains"))]
-    covered = {str(d.get("domain")) for d in domains}
+    # A block with no name key used to fold into the set as the string "None" and be reported as
+    # a domain "not part of the protocol: None" -- which names no field, suggests deleting
+    # something, and sends the author looking for a domain they never wrote. The key was simply
+    # absent. Say that instead; a message the reader cannot act on is a failed check even when
+    # the exit code is right.
+    unnamed = sum(1 for d in domains if not str(d.get("domain") or "").strip())
+    if unnamed:
+        errors.append(
+            f"{unnamed} verification block(s) under 'domains' have no 'domain' key naming which "
+            f"of {', '.join(sorted(REQUIRED_DOMAINS))} they cover. The name is what binds a block "
+            f"to the protocol, so an unnamed block counts as a missing domain.")
+    covered = {str(d.get("domain")) for d in domains if str(d.get("domain") or "").strip()}
     required, tier_reason = required_domains_for(plan)
     missing = required - covered
     if missing:
@@ -1590,7 +1611,12 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
     # cheapest way past the failure was to delete the two extra blocks. In the run that prompted
     # this, those two produced 27 of 55 findings and 5 of the 6 criticals.
     audits = [_obj(a) for a in _seq(report.get("audits"))]
-    audited = {str(a.get("audit")) for a in audits}
+    unnamed_audits = sum(1 for a in audits if not str(a.get("audit") or "").strip())
+    if unnamed_audits:
+        errors.append(
+            f"{unnamed_audits} verification block(s) under 'audits' have no 'audit' key naming "
+            f"which of {', '.join(sorted(REQUIRED_AUDITS))} they cover.")
+    audited = {str(a.get("audit")) for a in audits if str(a.get("audit") or "").strip()}
     if missing_audits := REQUIRED_AUDITS - audited:
         errors.append(
             "verification report is missing required audits: " + ", ".join(sorted(missing_audits))
@@ -2502,10 +2528,193 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
                      f"distance-checked against the leg they belong to.")
 
 
+# Hosts that do not answer, or answer uselessly, from inside a market that blocks them. Kept to
+# what the skill actually routes through rather than a general blocklist: each entry is a host
+# this repo's own code or docs propose as a default somewhere.
+GOOGLE_HOSTS = ("google.com", "google.co", "goo.gl", "gstatic.com", "youtube.com")
+
+# Declared-market spellings that mean "Google is not the working default here". Matched against
+# regional_service_context.destination_service_market, which the plan writes itself. Deliberately
+# NOT derived from the destination name or a coordinate box: this file already learned that
+# guessing a market from numbers produces a confident wrong answer (see _lon_first), and a
+# bounding box wide enough to hold mainland China also holds Mongolia, Nepal and the Koreas.
+#
+# Only explicit "mainland" spellings are listed, never a bare "china". That single decision is
+# what makes Hong Kong, Macau and Taiwan -- separate markets where Google works normally -- safe
+# here, because none of 'hong_kong', 'macau_sar' or 'taiwan_china' contains 'mainlandchina'. An
+# earlier draft carried an exclusion list for those three on top of the narrow tokens, which was
+# both redundant and unsafe in one direction: it could only ever turn a match OFF, so the one
+# case it changed was 'mainland_china_and_hong_kong' -- a trip whose mainland half genuinely
+# cannot open Google, quietly exempted. A rule about reachability must fail toward "unreachable".
+RESTRICTED_MARKET_TOKENS = ("mainlandchina", "中国大陆", "中國大陸", "prcmainland")
+
+
+def _plan_urls(node: object, path: str = "$") -> list[tuple[str, str]]:
+    """Every http(s) URL in the plan, with the pointer that holds it.
+
+    Walked recursively rather than read from a list of known fields, because a hand-kept field
+    list is a gate that falls behind the contract it guards -- this repo already carries one such
+    copy (save_trip_deliverables.py's required_booking_types) and says so in a comment. A new
+    link field added to the plan contract is covered here the day it appears.
+    """
+    found: list[tuple[str, str]] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            found.extend(_plan_urls(value, f"{path}.{key}"))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(_plan_urls(value, f"{path}[{index}]"))
+    elif isinstance(node, str) and node.startswith(("http://", "https://")):
+        found.append((path, node))
+    return found
+
+
+def _host_of(url: str) -> str:
+    return (urllib.parse.urlparse(url or "").hostname or "").casefold()
+
+
+def _is_google_host(url: str) -> bool:
+    host = _host_of(url)
+    return any(host == h or host.endswith("." + h) for h in GOOGLE_HOSTS)
+
+
+def _provider_owns(provider: str, url: str) -> bool | None:
+    """Does `provider` own `url`? True/False, or None when the name yields no matchable token.
+
+    Imported lazily so that check_plan_consistency.py keeps working as a standalone lint if
+    validate_trip_html.py is ever absent -- an undecidable answer degrades this rule to silent,
+    which is the safe direction, whereas an ImportError would take the other seventeen checks
+    down with it.
+    """
+    try:
+        from validate_trip_html import provider_target_verdict
+    except ImportError:  # pragma: no cover - only when the file is used outside the skill tree
+        return None
+    return provider_target_verdict(provider, url)
+
+
+def check_service_market(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """The links must work from where the traveller will be standing.
+
+    The coordinate rule fixed where a link *points*. This fixes who is allowed to *open* it, and
+    the two are genuinely different failures.
+
+    Partial cover already existed and is worth stating exactly, because the gap is narrower and
+    stranger than "nothing checked this". render_final_trip_html.map_link_allowed refuses a Google
+    map link when the market string equals "mainland_china" or access equals "unavailable" -- but
+    it runs only inside validate_plan, so this lint saw none of it (a Beijing plan with all 18
+    Amap links swapped for Google ones scored 36 errors before and 36 after), and it reads only
+    three fields. Measured, on the fixture, these all passed it:
+
+      - transport_overview.overall_route_map_url, the trip's top-level map button
+      - a market written "中国大陆" or "mainland_china_prc" rather than exactly "mainland_china"
+      - a dining card's venue_url, and every booking or comparison URL in the plan
+
+    So the escape was not the rule being absent; it was the rule being keyed to an exact string
+    and pointed at three fields out of a plan full of links. This check walks every URL, matches
+    the market by token, and treats `unknown` access as the unchecked state it is.
+
+    The plan's own declarations are what make that possible. regional_service_context carries
+    destination_service_market, google_services_access, primary_map_provider and an unused
+    primary_map_exception_reason; the renderer displayed all four and no consistency check read
+    any of them. A field nobody enforces is a field the next run is free to contradict.
+
+    check_link_targets.py cannot cover any of this, because it measures whether a host answers
+    *the machine running it*, which is never the machine inside the blocked market.
+    """
+    context = _obj(plan.get("regional_service_context"))
+    urls = _plan_urls(plan)
+    if not urls:
+        return
+    access = str(context.get("google_services_access") or "").strip().casefold()
+    market_raw = str(context.get("destination_service_market") or "")
+    market = _fold(market_raw)
+    provider = str(context.get("primary_map_provider") or "").strip()
+    exception_reason = context.get("primary_map_exception_reason")
+    google_links = [(pointer, url) for pointer, url in urls if _is_google_host(url)]
+
+    restricted = any(_fold(token) in market for token in RESTRICTED_MARKET_TOKENS)
+
+    if restricted and access != "unavailable":
+        errors.append(
+            f"regional_service_context declares destination_service_market "
+            f"{market_raw!r} but google_services_access is {access or 'unset'!r}. In that market "
+            f"Google services do not answer, so the honest value is 'unavailable' -- and it is "
+            f"that value, not the market string, that the link rule below reads.")
+
+    if access == "unavailable" and google_links:
+        listed = "\n    - ".join(f"{pointer} -> {url[:110]}" for pointer, url in google_links[:8])
+        more = f"\n    ... and {len(google_links) - 8} more" if len(google_links) > 8 else ""
+        errors.append(
+            f"the plan declares google_services_access 'unavailable' for "
+            f"{market_raw or 'this destination'} and then links to Google {len(google_links)} "
+            f"time(s). Every one of these is a button the traveller cannot open where they will "
+            f"be standing:\n    - {listed}{more}\n  Route them to the provider named in "
+            f"primary_map_provider instead.")
+
+    # A declared primary provider that the links do not use. The escape already exists in the
+    # contract and was never read; a plan may legitimately mix providers (an official venue map,
+    # a rail operator's own planner), so this asks for the reason rather than forbidding it.
+    #
+    # The comparison is delegated to validate_trip_html.provider_target_verdict rather than
+    # rewritten here, and that is not tidiness. The first version of this rule folded the
+    # provider name and looked for it in the host, which asks whether '高德地图' appears in
+    # 'uri.amap.com'. It does not, so a correct Beijing plan was accused of routing 18 links
+    # away from the provider they actually use -- and the identical false positive hit the one
+    # Alicante plan that passes every other check. That function already carries the 高德->amap
+    # alias table and, crucially, returns None for a name that yields no matchable token, so an
+    # undecidable case stays undecided instead of becoming an accusation.
+    if provider and not _unfilled(provider):
+        route_links = [(pointer, url) for pointer, url in urls
+                       if "map_url" in pointer or "map_links" in pointer]
+        off_provider = [(pointer, url) for pointer, url in route_links
+                        if _provider_owns(provider, url) is False]
+        undecidable = [p for p, u in route_links if _provider_owns(provider, u) is None]
+        if off_provider and (not exception_reason or _unfilled(exception_reason)):
+            listed = "\n    - ".join(f"{p} -> {u[:110]}" for p, u in off_provider[:6])
+            errors.append(
+                f"primary_map_provider is {provider!r} but {len(off_provider)} map link(s) "
+                f"open a different provider, and primary_map_exception_reason is empty:"
+                f"\n    - {listed}\n  Either route them through {provider}, or write the "
+                f"reason in primary_map_exception_reason so the mix is a decision rather "
+                f"than an oversight.")
+        if undecidable:
+            notes.append(
+                f"note: primary_map_provider {provider!r} yields no token matchable against a "
+                f"host, so {len(undecidable)} map link(s) could not be checked against it. Open "
+                f"one yourself -- this is the set no gate can decide for you.")
+
+    # 'unknown' is not a neutral value once you are asking the traveller to press the button.
+    if access in ("", "unknown") and google_links:
+        errors.append(
+            f"the plan ships {len(google_links)} Google link(s) while google_services_access is "
+            f"{access or 'unset'!r} -- nobody established that the traveller can open them at "
+            f"{market_raw or 'the destination'}. Check once and record 'available' or "
+            f"'unavailable'; an unchecked link reads as researched to the traveller.")
+
+    if not market_raw.strip():
+        errors.append(
+            "regional_service_context.destination_service_market is empty while the plan carries "
+            f"{len(urls)} link(s). The market is what decides which map, rail and booking hosts "
+            "are reachable, so leaving it blank means no check can defend any of them.")
+
+
 # Every plan check this script runs, in report order. A check that is written but never added
 # here does nothing at all, which is the one failure mode worse than not writing it.
 # save_trip_deliverables.py imports this tuple, so adding a check here also arms the save path --
 # the only path that writes files a traveller keeps.
+def gates_stamp() -> dict:
+    """What this plan was checked against, recorded so a later audit can tell two things apart.
+
+    Auditing the eleven saved plans in a real workspace meant separating "fails a rule that did
+    not exist yet" from "fails a rule it always broke", and the only way to do that was to read
+    every finding by hand and classify it. The answer mattered -- most findings turned out to be
+    the second kind -- and nothing in the plan recorded which gates had ever run on it. A stamp
+    costs one field and makes that question answerable instead of archaeological.
+    """
+    return {"checks": len(PLAN_CHECKS), "checked_by": "check_plan_consistency.PLAN_CHECKS"}
+
+
 PLAN_CHECKS = (
     check_routes,
     check_walking_budget,
@@ -2525,6 +2734,7 @@ PLAN_CHECKS = (
     check_map_endpoints,
     check_venue_quality,
     check_booking_identity,
+    check_service_market,
 )
 
 

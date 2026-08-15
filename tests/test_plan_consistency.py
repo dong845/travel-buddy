@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1017,6 +1018,22 @@ def main() -> int:
             failures.append(
                 f"{name}: expected failure naming {needles!r} (missing {missing!r}), "
                 f"got exit {code}\n{out}")
+
+    def open_market(plan: dict) -> dict:
+        """Move a plan to a market where Google is the working default.
+
+        For cases that need a Google URL to exercise a rule about something else -- coordinate
+        dialect, anchor radius -- without also asserting that a mainland-China itinerary may ship
+        links nobody there can open. Mutates and returns the plan for use inline.
+        """
+        plan["regional_service_context"].update({
+            "destination_service_market": "united_states",
+            "google_services_access": "available",
+            "primary_map_provider": "Google Maps",
+            "primary_map_exception_reason":
+                "Amap deep links remain for the legs whose venues publish Amap coordinates.",
+        })
+        return plan
 
     expect_ok("clean fixture passes", copy.deepcopy(base))
     expect_ok("clean fixture with full verification", copy.deepcopy(base), full_verification())
@@ -2255,6 +2272,11 @@ def main() -> int:
     route["distance_km"] = sum(s["distance_km"] for s in route["segments"])
     route["duration_minutes"] = sum(s["duration_minutes"] for s in route["segments"])
     route["detour_reason"] = seg["detour_reason"]
+    # This case and the anchor case below reach for a Google URL because Google's lat,lon dialect
+    # is what the coordinate rule under test reads. The fixture's market is mainland China, where
+    # a Google link is now a finding in its own right, so the market moves with the link -- a
+    # coordinate test must not depend on shipping an unopenable button.
+    open_market(p)
     expect_ok("a genuine detour declared in detour_reason", p)
 
     # Without the declaration the same shape is still refused, or the field would be a way to
@@ -2278,6 +2300,7 @@ def main() -> int:
     seg["distance_km"] = 1.8
     route = day(p, 1)["route"]
     route["distance_km"] = sum(s["distance_km"] for s in route["segments"])
+    open_market(p)
     expect_ok("a second city declared as a second anchor", p)
 
     # And a point near neither base is still wrong.
@@ -2392,6 +2415,126 @@ def main() -> int:
     p = copy.deepcopy(base)
     p["transport_overview"]["notes"] = ["机场巴士约 20–35 分钟（视路况）"]
     expect_ok("a range, where neither end is a single claim about a leg", p)
+
+    # 38. The other half of the map-link problem: the coordinate rule fixed where a link points,
+    # not who can open it. render_final_trip_html.map_link_allowed already covered part of this,
+    # and saying so matters -- each case below sits in the part it did not reach: it keys on the
+    # market string being exactly "mainland_china", reads three route fields, and never looks at
+    # `unknown` access. This lint saw none of it at all: the shipped Beijing plan scored 36 errors
+    # before its 18 Amap links were swapped for Google ones and 36 after. check_link_targets.py
+    # cannot cover it either -- it asks whether a host answers the machine running it, which is
+    # never the machine inside the blocked market.
+    p = copy.deepcopy(base)
+    day(p, 1)["route"]["verified_map_url"] = (
+        "https://www.google.com/maps/dir/?api=1&origin=30.657,104.066"
+        "&destination=30.664,104.083&travelmode=transit")
+    expect_fail("a Google link in a market the plan itself calls unavailable", p,
+                "cannot open where they will be standing")
+
+    # The declaration must not contradict itself in the other direction either: a plan cannot
+    # call its market mainland China and then claim Google works there.
+    p = copy.deepcopy(base)
+    p["regional_service_context"]["google_services_access"] = "available"
+    expect_fail("a restricted market declared with Google available", p,
+                "the honest value is 'unavailable'")
+
+    # 'unknown' is the value that looks harmless and is not: it means nobody checked, on a button
+    # the traveller is being asked to press. Two shipped plans sat in exactly this state.
+    p = copy.deepcopy(base)
+    p["regional_service_context"]["destination_service_market"] = "united_states"
+    p["regional_service_context"]["google_services_access"] = "unknown"
+    p["regional_service_context"]["primary_map_provider"] = "Google Maps"
+    day(p, 1)["route"]["verified_map_url"] = (
+        "https://www.google.com/maps/dir/?api=1&origin=30.657,104.066"
+        "&destination=30.664,104.083&travelmode=transit")
+    expect_fail("Google links shipped while access is unknown", p, "nobody established")
+
+    # An unnamed market cannot be defended by any of the rules above, so the omission is the
+    # finding rather than a silent exemption from all three.
+    p = copy.deepcopy(base)
+    p["regional_service_context"]["destination_service_market"] = ""
+    expect_fail("no declared market at all", p, "destination_service_market is empty")
+
+    # Both false positives this rule produced on its first draft, kept as tests because each one
+    # accused a plan that was doing exactly the right thing. The cause was one mistake made
+    # twice: comparing a provider's display name to a host, i.e. asking whether '高德地图'
+    # appears in 'uri.amap.com'. It does not, and neither does 'Google 地图' appear in
+    # 'www.google.com'. A rule that fires on correct work is worse than no rule -- it is the
+    # rule everyone learns to route around.
+    p = copy.deepcopy(base)
+    p["regional_service_context"]["primary_map_provider"] = "高德地图 / Amap"
+    expect_ok("a Chinese provider name against its Latin host", p)
+
+    # The same false positive in its other language. Built by converting the fixture's own Amap
+    # links to Google ones -- same places, coordinate order flipped to Google's dialect -- so the
+    # plan stays internally true and the only thing under test is whether 'Google 地图' is
+    # recognised as owning google.com.
+    def to_google(plan: dict) -> dict:
+        def convert(url: str) -> str:
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            ends = []
+            for key in ("from", "to"):
+                lon, lat = query[key][0].split(",")[:2]
+                ends.append(f"{lat},{lon}")
+            return (f"https://www.google.com/maps/dir/?api=1&origin={ends[0]}"
+                    f"&destination={ends[1]}&travelmode=transit")
+
+        def walk(node):
+            if isinstance(node, dict):
+                return {k: (convert(v) if isinstance(v, str) and "uri.amap.com" in v else walk(v))
+                        for k, v in node.items()}
+            if isinstance(node, list):
+                return [walk(v) for v in node]
+            return node
+
+        return walk(plan)
+
+    p = to_google(copy.deepcopy(base))
+    p["regional_service_context"]["destination_service_market"] = "spain_eu"
+    p["regional_service_context"]["google_services_access"] = "available"
+    p["regional_service_context"]["primary_map_provider"] = "Google 地图"
+    expect_ok("a Chinese-labelled Google provider against google.com", p)
+
+    # Hong Kong, Macau and Taiwan are separate markets where Google works. They stay clear of the
+    # restricted rule because it matches only explicit 'mainland' spellings, never a bare 'china'.
+    p = copy.deepcopy(base)
+    p["regional_service_context"]["destination_service_market"] = "hong_kong_china"
+    p["regional_service_context"]["google_services_access"] = "available"
+    expect_ok("a market whose name contains china but is not mainland", p)
+
+    # The escape hatch has to actually work, or the rule becomes unsatisfiable for the legitimate
+    # mixed case -- an official venue map, a rail operator's own planner.
+    p = copy.deepcopy(base)
+    p["regional_service_context"]["primary_map_provider"] = "Baidu Maps"
+    p["regional_service_context"]["primary_map_exception_reason"] = (
+        "Amap deep links are used for navigation because the venue pages publish Amap "
+        "coordinates; Baidu remains the traveller's default app for search.")
+    expect_ok("an off-provider map link with the declared reason", p)
+
+    p = copy.deepcopy(base)
+    p["regional_service_context"]["primary_map_provider"] = "Baidu Maps"
+    expect_fail("an off-provider map link with no reason", p,
+                "primary_map_exception_reason is empty")
+
+    # 39. Two messages that were right about the exit code and wrong about the reason, which is a
+    # failure mode this skill keeps rediscovering: the Ürümqi coordinate error told an author to
+    # "fix the order" and handed them a green gate with every pin in the Arctic.
+    report = full_verification()
+    report["domains"][0].pop("domain")
+    expect_fail("a verification block with no domain key", copy.deepcopy(base),
+                "have no 'domain' key naming which", report)
+
+    report = full_verification()
+    report["audits"][0].pop("audit")
+    expect_fail("a verification block with no audit key", copy.deepcopy(base),
+                "have no 'audit' key naming which", report)
+
+    # Only the lower bound of the date window was checked, so a report could be stamped years
+    # ahead -- the one direction that makes stale research look freshly confirmed.
+    report = full_verification()
+    report["checked_at"] = "2099-01-01"
+    expect_fail("a verification report dated in the future", copy.deepcopy(base),
+                "which is in the future", report)
 
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)

@@ -231,6 +231,22 @@ provider's own search box.
   `87.6168,43.8256` was read as latitude 87.6 and reported 4,946 km away, and an author who
   followed the error message and "fixed the order" got a green gate with every button pointing at
   the Arctic. Kashgar and Shigatse were out by 4,439 km and 6,691 km the same way.
+- **The provider must be one the traveller can open where they will be standing, and this is a
+  separate failure from where the link points.** A link can carry perfect coordinates in the right
+  dialect and still be useless. The renderer has long refused a Google map link on a
+  `mainland_china` plan, but only for three route fields and only on an exact market string, which
+  left the trip's own top-level map button, every `venue_url`, every booking URL, and any market
+  spelled `中国大陆` outside it. `check_link_targets.py` cannot close that either: it asks whether
+  a host answers *the machine running the check*, and that machine is never inside the blocked
+  market. So
+  `regional_service_context` is now binding rather than decorative: fill
+  `destination_service_market`, and set `google_services_access` to `available` or `unavailable`
+  after actually establishing which — `unknown` is refused once the plan ships Google links,
+  because it means nobody checked a button the traveller is being asked to press. A plan that
+  declares a mainland-China market must declare Google `unavailable`, and may then carry no Google
+  link at all. Mixing map providers is allowed but must be a decision: write why in
+  `primary_map_exception_reason`, a field that existed in the contract for three versions while no
+  check read it.
 - **Declare `trip.destination_coords`** — one object, or a **list of them for a multi-city trip**,
   since each endpoint is judged against the nearest base. New York plus Los Angeles is 3,936 km
   apart and Beijing plus Ürümqi 2,411, so a single anchor rejected trips that were perfectly real. The leg-length rule is *relative*, so it cannot see a
@@ -320,6 +336,16 @@ Keep unaffected, still-feasible choices. Return a concise change log: retained i
 Use [templates/replan-request.json](templates/replan-request.json) as the shape of that `replan_context` block.
 
 ## Quality gate
+
+**When the traveller asks about a trip they already have saved — to reuse it, revise it, or ask
+whether it still holds — run `python scripts/audit_workspace.py --workspace "<workspace>"` first,
+and read the result before answering.** Every gate here was written against the plan being built
+at the time and nothing ever looked back: on a real workspace of eleven saved plans, only the most
+recent passed, the rest carrying 25–126 findings each. Most were not newly-required fields but the
+defects the traveller had reported — map endpoints that could not geocode, opening times asserted
+with no evidence, walking legs whose implied speed was a run. Those pages are still openable and
+say nothing. The tool reports and never edits, because re-plan, re-verify or discard is the
+traveller's decision; surface what it found and let them make it.
 
 Before delivering a recommendation or plan, verify:
 

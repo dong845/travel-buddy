@@ -166,6 +166,8 @@ Four checks were added — `check_implied_speed`, `check_list_typed_fields`, `ch
 
 `save_trip_deliverables.py` refuses to save without a verification report. `--unverified` remains, because a gate people route around warns nobody, but it costs visibility rather than silence: the saved plan records `verification_status: unverified` and the page renders a localized **"not fact-checked"** banner above everything else.
 
+**`audit_workspace.py`** re-runs today's gates over every plan already saved, and reports without touching anything. Every rule in this skill was written against the plan being built at the time, and nothing ever looked back: on a real workspace of eleven saved plans only the most recent passed, the rest carrying 25–126 findings each. The comfortable reading — "the rules got stricter, of course old plans fail" — turned out to be wrong for most of them. Classifying the findings by hand showed the majority were not newly-required fields but the defects the traveller had actually reported: 52–80 map endpoints per plan that could not geocode, 21–31 opening times asserted with no evidence, five walking legs whose implied speed was a run. Newly saved plans now carry a `gates_passed` stamp so that classification stops being archaeology; it repairs nothing on purpose, because re-plan, re-verify or discard is the traveller's call.
+
 ```bash
 python scripts/new_plan_skeleton.py --start 2026-09-11 --end 2026-09-14 \
   --origin Amsterdam --destination Malaga --language en --currency EUR \

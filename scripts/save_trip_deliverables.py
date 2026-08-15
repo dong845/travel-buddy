@@ -17,6 +17,7 @@ from pathlib import Path
 from check_plan_consistency import (
     PLAN_CHECKS,
     check_verification,
+    gates_stamp,
 )
 from render_final_trip_html import read_json, render, validate_plan
 from validate_trip_html import validate as validate_html
@@ -94,6 +95,8 @@ def main() -> int:
         )
         return 1
 
+    # Stamped before render, not after, so the page and the JSON agree about what was run.
+    plan["gates_passed"] = gates_stamp()
     for note in notes:
         print(f"note: {note}")
     if consistency_errors:
@@ -117,6 +120,10 @@ def main() -> int:
         len(plan["days"]),
         required_booking_types,
         plan["transport_preference"]["mode"],
+        # The banner is the only place an unverified plan announces itself to the person actually
+        # booking. Asserted here rather than trusted, because this is the exact point where the
+        # JSON gap and the page's silence would diverge.
+        require_unverified_banner=plan.get("verification_status") != "verified",
     )
     if html_errors:
         print("RENDERING ERROR", file=sys.stderr)

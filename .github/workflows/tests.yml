@@ -1,0 +1,55 @@
+name: tests
+
+# Until this file existed the suite ran only when someone remembered to run it, which meant the
+# gates guarding a traveller's itinerary were themselves unguarded. Every check in scripts/ is
+# there because a defect shipped once; a regression in one of them is a defect shipping twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor is what the skill promises to run on; the ceiling catches a deprecation
+        # before it becomes a broken gate on somebody's laptop.
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+      - name: Run the suite
+        run: python -m pytest tests/ -q
+      - name: Every check in PLAN_CHECKS must be reachable from the save path
+        # The one invariant no individual test can state: save_trip_deliverables.py imports the
+        # tuple rather than restating it, and a check that exists but is not in the tuple does
+        # nothing at all. Asserted here so the wiring cannot rot quietly between releases.
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "scripts")
+          import check_plan_consistency as cpc
+          from save_trip_deliverables import CONSISTENCY_CHECKS
+
+          # Compared as function objects, not names. check_walking is a back-compat alias for
+          # check_walking_budget, so a name comparison reports it as a check that never runs --
+          # which is exactly the false positive that gets an invariant deleted instead of fixed.
+          wired = {id(check) for check in CONSISTENCY_CHECKS}
+          orphaned = sorted(
+              name for name in dir(cpc)
+              if name.startswith("check_") and name != "check_verification"
+              and callable(getattr(cpc, name))
+              and id(getattr(cpc, name)) not in wired)
+          if orphaned:
+              raise SystemExit(
+                  "these checks are defined but never run, so they protect nothing: "
+                  + ", ".join(orphaned))
+          print(f"{len(wired)} plan checks defined and all wired into the save path")
+          PY
