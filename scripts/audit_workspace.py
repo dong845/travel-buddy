@@ -80,6 +80,36 @@ def audit_plan(path: Path) -> dict:
     }
 
 
+def audit_discovery_runs(plans_dir: Path) -> list[tuple[str, str]]:
+    """Which saved discovery results came from a run that actually finished.
+
+    run_destination_discovery.py streams the child assistant's output into a .md and its exit code
+    into the sibling .log. In a real workspace, of four runs only one exited 0: two exited 1 and
+    left .md files containing a CLI usage error and "API Error: Connection closed mid-response"
+    respectively, and one recorded no exit code at all because the process was killed before it
+    could write its own ending. The .md files read like finished answers in every case.
+
+    The runner now marks its own result file on a non-zero exit, which covers the first two. It
+    cannot cover the third -- a process that is killed cannot write anything -- so that one is
+    detected here instead, by the absence of a terminal line in the log.
+    """
+    results: list[tuple[str, str]] = []
+    for log_path in sorted(plans_dir.glob("destination-discovery-*.log")):
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        result_path = log_path.with_suffix(".md")
+        exit_line = [line for line in text.splitlines() if line.startswith("Exit code:")]
+        if not exit_line:
+            verdict = "INTERRUPTED (no exit)"
+        elif exit_line[-1].strip() != "Exit code: 0":
+            verdict = f"FAILED ({exit_line[-1].strip().lower()})"
+        else:
+            verdict = "ok"
+        if verdict != "ok" and result_path.exists():
+            verdict += " + result saved"
+        results.append((result_path.name if result_path.exists() else log_path.name, verdict))
+    return results
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--workspace", default=str(DEFAULT_WORKSPACE),
@@ -119,6 +149,13 @@ def main() -> int:
         if args.verbose and result["total"]:
             for error in result["structure_errors"] + result["consistency_errors"]:
                 print(f"        - {error.splitlines()[0][:160]}")
+
+    discovery = audit_discovery_runs(plans_dir)
+    if discovery:
+        print()
+        print("Discovery runs:")
+        for name, verdict in discovery:
+            print(f"  {verdict:<24} {name}")
 
     print()
     if stale:

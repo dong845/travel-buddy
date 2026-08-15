@@ -204,6 +204,18 @@ def main() -> int:
                     result.flush()
             return_code = process.wait()
             log.write(f"\nFinished: {datetime.now().astimezone().isoformat()}\nExit code: {return_code}\n")
+            # Mark the RESULT file too, not only the log. The exit code used to land exclusively
+            # in the .log, so a run that died left a .md in plans/ that read like a deliverable.
+            # Measured in a real workspace: of three saved discovery results, two were failures --
+            # one a CLI usage error, one "API Error: Connection closed mid-response" -- and
+            # neither file said so anywhere. A later reader, human or assistant, finds an error
+            # message formatted exactly like a finished answer.
+            if result and return_code:
+                result.write(
+                    f"\n\n---\n\n**RUN FAILED — exit code {return_code}.** "
+                    f"Everything above is partial output from a discovery run that did not "
+                    f"finish, not a result. Do not plan from it. Full log: {log_path}\n")
+                result.flush()
         finally:
             if result:
                 result.close()

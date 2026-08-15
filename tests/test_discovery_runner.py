@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Regression tests for scripts/run_destination_discovery.py.
+
+The runner streams a child assistant's output into a .md result file inside the workspace. Until
+now the exit code landed only in the sibling .log, so a run that died left a result file that read
+exactly like a finished answer. Measured in a real workspace: of three saved discovery results two
+were failures -- one a CLI usage error ("Input must be provided either through stdin..."), one
+"API Error: Connection closed mid-response" -- and neither file said so anywhere in its own text.
+
+That is the same shape as every other defect this skill has fixed: the artifact of a failure is
+indistinguishable from the artifact of a success, so nothing makes a noise.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import io
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_runner():
+    spec = importlib.util.spec_from_file_location(
+        "run_destination_discovery", ROOT / "scripts" / "run_destination_discovery.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeProcess:
+    """A child that prints some output and then exits with the given code."""
+
+    def __init__(self, lines: list[str], return_code: int):
+        self.stdout = iter(lines)
+        # The claude branch writes the prompt to stdin and closes it, so this has to be a real
+        # writable object rather than None.
+        self.stdin = io.StringIO()
+        self._return_code = return_code
+
+    def wait(self) -> int:
+        return self._return_code
+
+
+def run_with_exit(module, workspace: Path, return_code: int, lines: list[str]) -> str:
+    """Drive main() with a stubbed child process; return the result file's text."""
+    plans = workspace / "plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    intake = plans / "intake-test.json"
+    intake.write_text(json.dumps({"mode": "discovery"}), encoding="utf-8")
+    result_path = plans / f"result-{return_code}.md"
+    log_path = plans / f"log-{return_code}.log"
+
+    original_popen = module.subprocess.Popen
+    original_argv = sys.argv
+    try:
+        module.subprocess.Popen = lambda *a, **k: FakeProcess(lines, return_code)
+        sys.argv = [
+            "run_destination_discovery.py",
+            "--assistant", "claude",
+            "--workspace", str(workspace),
+            "--intake", str(intake),
+            "--result-path", str(result_path),
+            "--log-path", str(log_path),
+        ]
+        module.main()
+    finally:
+        module.subprocess.Popen = original_popen
+        sys.argv = original_argv
+    return result_path.read_text(encoding="utf-8")
+
+
+def main() -> int:
+    module = load_runner()
+    failures: list[str] = []
+
+    def check(name: str, condition: bool, detail: str = "") -> None:
+        if not condition:
+            failures.append(f"{name}\n{detail}")
+
+    partial = ["All research is in. Building the plan JSON now.\n",
+               "API Error: Connection closed mid-response.\n"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        text = run_with_exit(module, Path(tmp), 1, partial)
+        check("a failed run marks its own result file",
+              "RUN FAILED" in text, text[-300:])
+        check("the failure marker names the exit code",
+              "exit code 1" in text, text[-300:])
+        check("the failure marker says not to plan from it",
+              "Do not plan from it" in text, text[-300:])
+        check("the partial output is kept rather than discarded",
+              "All research is in" in text,
+              "the child's output was dropped; a partial answer is still evidence of what ran")
+
+    # And the marker must not appear on a run that succeeded, or it becomes noise everyone learns
+    # to ignore -- the same way a check that false-positives gets routed around.
+    with tempfile.TemporaryDirectory() as tmp:
+        text = run_with_exit(module, Path(tmp), 0, ["Shortlist ready. Three candidates.\n"])
+        check("a successful run carries no failure marker",
+              "RUN FAILED" not in text, text[-300:])
+        check("a successful run keeps its output",
+              "Shortlist ready" in text, text)
+
+    if failures:
+        print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
+        for failure in failures:
+            print(f"--- {failure}\n", file=sys.stderr)
+        return 1
+    print("all discovery-runner regression cases passed")
+    return 0
+
+
+def test_discovery_runner() -> None:
+    assert main() == 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
