@@ -1,0 +1,246 @@
+{
+  "_comment": "A clean Discovery shortlist that must pass every Discovery check. Names are deliberately fictional, as in booking-ready-fixture.json, so no case in the suite asserts a fact about a real place. The shape is one trip_context plus a list of candidate records from templates/destination-evaluation.json.",
+  "mode": "discovery",
+  "generated_at": "2026-08-15",
+  "trip_context": {
+    "origin": "Fixture Origin City",
+    "date_range": "2027-02-12 to 2027-02-16",
+    "nights": 4,
+    "party_size": 1,
+    "currency": "EUR",
+    "budget_scope": [
+      "flight",
+      "accommodation"
+    ],
+    "budget_cap_per_person": 750,
+    "calculation_basis": "per_person"
+  },
+  "candidates": [
+    {
+      "destination": {
+        "name": "Fixture Coast",
+        "country_or_region": "Fixture Region A",
+        "arrival_airports": [
+          "FXA"
+        ]
+      },
+      "eligibility": {
+        "hard_filter_status": "passed",
+        "confirmed_constraints": [
+          "no new visa needed",
+          "under 10h one-way",
+          "no red-eye"
+        ],
+        "failed_constraints": [],
+        "unresolved_constraints": [],
+        "assumptions": []
+      },
+      "trip_context": {
+        "origin": "Fixture Origin City",
+        "date_range": "2027-02-12 to 2027-02-16",
+        "party_size": 1,
+        "currency": "EUR",
+        "budget_scope": [
+          "flight",
+          "accommodation"
+        ]
+      },
+      "cost_estimate": {
+        "total_low": 610,
+        "total_high": 720,
+        "cost_basis": "per_person",
+        "included_categories": [
+          "flight",
+          "accommodation"
+        ],
+        "budget_fit": "within",
+        "price_confidence": "researched",
+        "as_of": "2026-08-14"
+      },
+      "fit": {
+        "experience_matches": [
+          "coast",
+          "old-town walking"
+        ],
+        "tradeoffs": [
+          "one connection outbound"
+        ],
+        "ranking_sensitivity": "Falls behind if direct fares rise above EUR 260.",
+        "score": 82,
+        "score_dimensions": {
+          "experience_fit": 25,
+          "all_in_value": 18,
+          "seasonal_fit": 14
+        },
+        "confidence": "high"
+      },
+      "evidence": [
+        {
+          "claim": "typical February daytime high",
+          "source_url": "https://fixture.example/climate",
+          "accessed_on": "2026-08-14"
+        },
+        {
+          "claim": "return fare range for these dates",
+          "source_url": "https://fixture.example/fares",
+          "accessed_on": "2026-08-14"
+        }
+      ],
+      "research_status": "complete",
+      "recommendation_state": "researched"
+    },
+    {
+      "destination": {
+        "name": "Fixture Harbour",
+        "country_or_region": "Fixture Region B",
+        "arrival_airports": [
+          "FXB"
+        ]
+      },
+      "eligibility": {
+        "hard_filter_status": "passed",
+        "confirmed_constraints": [
+          "no new visa needed",
+          "under 10h one-way"
+        ],
+        "failed_constraints": [],
+        "unresolved_constraints": [],
+        "assumptions": []
+      },
+      "trip_context": {
+        "origin": "Fixture Origin City",
+        "date_range": "2027-02-12 to 2027-02-16",
+        "party_size": 1,
+        "currency": "EUR",
+        "budget_scope": [
+          "flight",
+          "accommodation"
+        ]
+      },
+      "cost_estimate": {
+        "total_low": 560,
+        "total_high": 690,
+        "cost_basis": "per_person",
+        "included_categories": [
+          "flight",
+          "accommodation"
+        ],
+        "budget_fit": "within",
+        "price_confidence": "researched",
+        "as_of": "2026-08-14"
+      },
+      "fit": {
+        "experience_matches": [
+          "coast",
+          "quiet neighbourhoods"
+        ],
+        "tradeoffs": [
+          "fewer indoor options if it rains"
+        ],
+        "ranking_sensitivity": "Wins if rainfall in that week stays under the regional average.",
+        "score": 76,
+        "score_dimensions": {
+          "experience_fit": 22,
+          "all_in_value": 20,
+          "seasonal_fit": 11
+        },
+        "confidence": "medium"
+      },
+      "evidence": [
+        {
+          "claim": "typical February rainfall",
+          "source_url": "https://fixture.example/rain",
+          "accessed_on": "2026-08-14"
+        },
+        {
+          "claim": "lodging nightly range for these dates",
+          "source_url": "https://fixture.example/stay",
+          "accessed_on": "2026-08-14"
+        }
+      ],
+      "research_status": "complete",
+      "recommendation_state": "researched"
+    },
+    {
+      "destination": {
+        "name": "Fixture Lakeside",
+        "country_or_region": "Fixture Region C",
+        "arrival_airports": [
+          "FXC"
+        ]
+      },
+      "eligibility": {
+        "hard_filter_status": "passed",
+        "confirmed_constraints": [
+          "no new visa needed"
+        ],
+        "failed_constraints": [],
+        "unresolved_constraints": [
+          "ferry service in February not yet confirmed"
+        ],
+        "assumptions": []
+      },
+      "trip_context": {
+        "origin": "Fixture Origin City",
+        "date_range": "2027-02-12 to 2027-02-16",
+        "party_size": 1,
+        "currency": "EUR",
+        "budget_scope": [
+          "flight",
+          "accommodation"
+        ]
+      },
+      "cost_estimate": {
+        "total_low": 700,
+        "total_high": 745,
+        "cost_basis": "per_person",
+        "included_categories": [
+          "flight",
+          "accommodation"
+        ],
+        "budget_fit": "tight",
+        "price_confidence": "estimate",
+        "as_of": "2026-08-14"
+      },
+      "fit": {
+        "experience_matches": [
+          "lakes",
+          "forest walking"
+        ],
+        "tradeoffs": [
+          "closest to the budget cap",
+          "seasonal ferry unconfirmed"
+        ],
+        "ranking_sensitivity": "Drops out entirely if the February ferry does not run.",
+        "score": 64,
+        "score_dimensions": {
+          "experience_fit": 20,
+          "all_in_value": 12,
+          "seasonal_fit": 12
+        },
+        "confidence": "low"
+      },
+      "evidence": [
+        {
+          "claim": "off-season ferry timetable page",
+          "source_url": "https://fixture.example/ferry",
+          "accessed_on": "2026-08-14"
+        }
+      ],
+      "research_status": "partial",
+      "recommendation_state": "idea"
+    }
+  ],
+  "excluded": [
+    {
+      "destination": "Fixture Highlands",
+      "reason": "Removed because the only February arrivals are red-eyes, which the traveller excluded.",
+      "failed_constraint": "no red-eye"
+    }
+  ],
+  "recommendation": {
+    "winner": "Fixture Coast",
+    "runner_up": "Fixture Harbour",
+    "why_not_runner_up": "Fixture Harbour is cheaper but its indoor options are thinner in a wet week."
+  }
+}

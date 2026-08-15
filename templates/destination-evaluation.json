@@ -21,7 +21,11 @@
   "cost_estimate": {
     "total_low": null,
     "total_high": null,
+    "cost_basis": "per_person",
+    "not_priced_reason": null,
     "included_categories": [],
+    "not_applicable_categories": [],
+    "unverified_categories": [],
     "budget_fit": "unknown",
     "price_confidence": "unknown",
     "as_of": null
