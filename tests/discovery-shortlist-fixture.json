@@ -15,6 +15,12 @@
     "budget_cap_per_person": 750,
     "calculation_basis": "per_person"
   },
+  "outcome": {
+    "state": "shortlist",
+    "blocking_constraints": [],
+    "minimum_relaxation": null,
+    "blocking_fact": null
+  },
   "candidates": [
     {
       "destination": {
@@ -27,13 +33,36 @@
       "eligibility": {
         "hard_filter_status": "passed",
         "confirmed_constraints": [
-          "no new visa needed",
-          "under 10h one-way",
-          "no red-eye"
+          {
+            "constraint_id": "origin.max_one_way_travel_time",
+            "note": "Direct 3h05 outbound, one connection back."
+          },
+          {
+            "constraint_id": "party.mobility_or_access_needs[0]",
+            "note": "Old town is flat; stops within 600 m."
+          },
+          {
+            "constraint_id": "feasibility.climate_preferences[0]",
+            "note": "Driest February on the shortlist."
+          },
+          {
+            "constraint_id": "feasibility.climate_preferences[1]",
+            "note": "February daytime highs in the upper teens."
+          },
+          {
+            "constraint_id": "budget.hard_cap_amount",
+            "note": "EUR 610-720 against a 750 cap."
+          },
+          {
+            "constraint_id": "entry",
+            "note": "Residence permit admits without a new visa."
+          }
         ],
         "failed_constraints": [],
         "unresolved_constraints": [],
-        "assumptions": []
+        "assumptions": [],
+        "not_applicable_constraints": [],
+        "not_pursued_reason": null
       },
       "trip_context": {
         "origin": "Fixture Origin City",
@@ -100,12 +129,37 @@
       "eligibility": {
         "hard_filter_status": "passed",
         "confirmed_constraints": [
-          "no new visa needed",
-          "under 10h one-way"
+          {
+            "constraint_id": "origin.max_one_way_travel_time",
+            "note": "Direct 2h50 both ways."
+          },
+          {
+            "constraint_id": "party.mobility_or_access_needs[0]",
+            "note": "Harbour front is level and short."
+          },
+          {
+            "constraint_id": "feasibility.climate_preferences[1]",
+            "note": "Mild, a degree or two below the first."
+          },
+          {
+            "constraint_id": "budget.hard_cap_amount",
+            "note": "EUR 560-690 against a 750 cap."
+          },
+          {
+            "constraint_id": "entry",
+            "note": "Residence permit admits without a new visa."
+          }
         ],
         "failed_constraints": [],
-        "unresolved_constraints": [],
-        "assumptions": []
+        "unresolved_constraints": [
+          {
+            "constraint_id": "feasibility.climate_preferences[0]",
+            "note": "Wetter than the first candidate; week-level forecast not yet available."
+          }
+        ],
+        "assumptions": [],
+        "not_applicable_constraints": [],
+        "not_pursued_reason": null
       },
       "trip_context": {
         "origin": "Fixture Origin City",
@@ -170,15 +224,40 @@
         ]
       },
       "eligibility": {
-        "hard_filter_status": "passed",
+        "hard_filter_status": "failed",
         "confirmed_constraints": [
-          "no new visa needed"
+          {
+            "constraint_id": "origin.max_one_way_travel_time",
+            "note": "One connection, 6h10 total."
+          },
+          {
+            "constraint_id": "feasibility.climate_preferences[0]",
+            "note": "Low February rainfall inland."
+          },
+          {
+            "constraint_id": "budget.hard_cap_amount",
+            "note": "EUR 700-745, inside the 750 cap but tight."
+          },
+          {
+            "constraint_id": "entry",
+            "note": "Residence permit admits without a new visa."
+          }
         ],
-        "failed_constraints": [],
+        "failed_constraints": [
+          {
+            "constraint_id": "feasibility.climate_preferences[1]",
+            "note": "Cold: February highs near 4C, below the stated preference."
+          }
+        ],
         "unresolved_constraints": [
-          "ferry service in February not yet confirmed"
+          {
+            "constraint_id": "party.mobility_or_access_needs[0]",
+            "note": "Lakeside path grade not established."
+          }
         ],
-        "assumptions": []
+        "assumptions": [],
+        "not_applicable_constraints": [],
+        "not_pursued_reason": null
       },
       "trip_context": {
         "origin": "Fixture Origin City",
@@ -212,6 +291,7 @@
           "seasonal ferry unconfirmed"
         ],
         "ranking_sensitivity": "Drops out entirely if the February ferry does not run.",
+        "conditional_on_relaxation": "Only rankable if the mild-warmth preference is relaxed: February highs sit near 4C.",
         "score": 64,
         "score_dimensions": {
           "experience_fit": 20,
@@ -242,5 +322,11 @@
     "winner": "Fixture Coast",
     "runner_up": "Fixture Harbour",
     "why_not_runner_up": "Fixture Harbour is cheaper but its indoor options are thinner in a wet week."
-  }
+  },
+  "conditional_options": [
+    {
+      "destination": "Fixture Lakeside",
+      "conditional_on_relaxation": "Possible if a cold-weather week is acceptable."
+    }
+  ]
 }

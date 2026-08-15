@@ -22,7 +22,9 @@ Usage: python check_shortlist_consistency.py <shortlist.json>
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -39,7 +41,16 @@ PLACEHOLDER_MARKERS = ("TODO:", "example.invalid")
 # because 'accommodation' is its own surface and cannot be folded away.
 ARRIVAL_SURFACE = {"flight", "rail", "intercity_bus", "ferry", "rental_car", "fuel_tolls_parking"}
 
-PASSING_STATUSES = {"passed", "pass", "conditional"}
+TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
+
+# How stale a priced figure may be relative to the document that ranks it. Fares and lodging are
+# the most volatile facts in the skill, and a figure researched months before the comparison is
+# not a figure about the same trip. Declared here rather than inline so the number is arguable in
+# one place.
+MAX_PRICE_AGE_DAYS = 45
+
+
+PASSING_STATUSES = {"passed"}
 
 
 def _obj(value) -> dict:
@@ -68,6 +79,45 @@ def _unfilled(*values: object) -> bool:
             if not text or any(marker in text for marker in PLACEHOLDER_MARKERS):
                 return True
     return False
+
+
+def _fold(text: str) -> str:
+    """Case-folded, punctuation-free, script-agnostic form for substring comparison.
+
+    str.isalnum() rather than a character allow-list. The Construction side wrote this as an
+    allow-list twice and was wrong twice: the first version tokenised on Latin letters and
+    exempted every CJK string, the second added CJK and exempted Cyrillic, Greek, Thai, Arabic,
+    Hebrew and Devanagari. An allow-list protects only the scripts its author happened to think of.
+    """
+    return "".join(ch for ch in (text or "").casefold() if ch.isalnum())
+
+
+def _load_enums(filename: str) -> dict:
+    """Read the declared vocabularies out of the contract file rather than restating them.
+
+    Restating them here would create the drift this project has already paid for: a checker that
+    invents its own field names is the defect it exists to prevent, and a vocabulary written in
+    two places is a vocabulary that will disagree with itself. Adding a state is now a contract
+    edit, and the checker follows.
+    """
+    try:
+        doc = json.loads((TEMPLATES / filename).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {key: value for key, value in _obj(doc.get("_enums")).items()
+            if isinstance(value, list) and all(isinstance(v, str) for v in value)}
+
+
+# Resolved once at import. A missing or malformed template degrades the enum rules to silent
+# rather than taking the other checks down with it, and main() says so instead of pretending.
+CANDIDATE_ENUMS = _load_enums("destination-evaluation.json")
+SHORTLIST_ENUMS = _load_enums("discovery-shortlist.json")
+
+
+def _enum_error(where: str, field: str, value: object, allowed: list[str]) -> str:
+    return (f"{where} {field} is {value!r}, which is not one of {', '.join(allowed)}. "
+            f"The vocabulary is closed and declared in templates/; a value outside it is read as "
+            f"'not that state' by every rule keyed on it, so a typo silently switches them off.")
 
 
 def _surfaces(categories) -> set[str]:
@@ -291,6 +341,36 @@ def check_no_infeasible_winner(doc: dict, errors: list[str], notes: list[str]) -
                 f"reached or afforded, and it is being presented as the best option. Run the "
                 f"filter or say plainly that this one is unverified.")
 
+    # A failing candidate may still be shown -- SKILL.md allows "possible if X changes" -- but it
+    # must say what would have to change. Scored and ranked beside feasible options with nothing
+    # said, it reads as a normal choice, which is the disguise the whole section forbids.
+    # This is also what keeps conditional_on_relaxation from being a field nobody reads: the
+    # contract carried primary_map_exception_reason unread for three versions on the other side
+    # of this skill, and an unenforced field is one the next run is free to leave blank.
+    #
+    # Silent under a declared constraint conflict, and that narrowing was earned rather than
+    # assumed: the first version fired on every candidate of an honestly reported conflict, where
+    # all of them failing IS the finding and outcome.minimum_relaxation already answers "what
+    # would have to change" once for the whole document. Asking each candidate to repeat it is the
+    # ceremony that teaches people to route a check around.
+    declared_conflict = str(_obj(doc.get("outcome")).get("state") or "").strip() == "constraint_conflict"
+    conditional_names = {_fold(str(_obj(o).get("destination") or ""))
+                         for o in _seq(doc.get("conditional_options"))}
+    for index, candidate in enumerate([] if declared_conflict else candidates):
+        eligibility = _obj(candidate.get("eligibility"))
+        if not [f for f in _seq(eligibility.get("failed_constraints")) if f]:
+            continue
+        if _num(_obj(candidate.get("fit")).get("score")) is None:
+            continue
+        declared = (not _unfilled(_obj(candidate.get("fit")).get("conditional_on_relaxation"))
+                    or _fold(_name(candidate)) in conditional_names)
+        if not declared:
+            errors.append(
+                f"candidates[{index}] ({_name(candidate)}) fails a hard constraint and still "
+                f"carries a score, with nothing saying it is conditional. Name what would have to "
+                f"change in fit.conditional_on_relaxation, or list it under conditional_options; "
+                f"ranked silently beside feasible candidates it reads as an ordinary choice.")
+
     feasible = [c for c in candidates
                 if str(_obj(c.get("eligibility")).get("hard_filter_status") or "").strip().casefold()
                 in PASSING_STATUSES]
@@ -302,18 +382,389 @@ def check_no_infeasible_winner(doc: dict, errors: list[str], notes: list[str]) -
             "alternative explicitly conditional.")
 
 
+def check_declared_enums(doc: dict, errors: list[str], notes: list[str]) -> None:
+    """Every closed vocabulary, checked against the contract that declares it.
+
+    A status outside its enum is worse than a wrong status, because every rule keyed on it reads
+    the unknown value as 'not that state' and quietly stops firing. `feasible` instead of
+    `passed` is not a near miss: it turns off the winner check, the conflict check and the
+    coverage check at once, and nothing reports that they were turned off.
+    """
+    if not CANDIDATE_ENUMS or not SHORTLIST_ENUMS:
+        notes.append("note: enum vocabularies could not be read from templates/; enum rules did "
+                     "not run. Restore templates/destination-evaluation.json and "
+                     "templates/discovery-shortlist.json.")
+        return
+    state = _obj(doc.get("outcome")).get("state")
+    allowed_states = SHORTLIST_ENUMS.get("outcome_state", [])
+    if _unfilled(state):
+        errors.append(
+            "outcome.state is missing. It is required on every Discovery artifact, and not "
+            "because bookkeeping is nice: every rule about constraint conflicts keys on it, so "
+            "omitting the field is the escape from all of them at once. Declare "
+            f"{' | '.join(allowed_states)}.")
+    elif allowed_states and str(state).strip() not in allowed_states:
+        errors.append(_enum_error("outcome", "state", state, allowed_states))
+
+    fields = (("eligibility", "hard_filter_status"), ("cost_estimate", "budget_fit"),
+              ("cost_estimate", "price_confidence"))
+    for index, candidate in enumerate(_seq(doc.get("candidates"))):
+        candidate = _obj(candidate)
+        where = f"candidates[{index}] ({_name(candidate)})"
+        for block, field in fields:
+            allowed = CANDIDATE_ENUMS.get(field, [])
+            value = _obj(candidate.get(block)).get(field)
+            if allowed and value is not None and str(value).strip() not in allowed:
+                errors.append(_enum_error(where, f"{block}.{field}", value, allowed))
+        for field in ("research_status", "recommendation_state"):
+            allowed = CANDIDATE_ENUMS.get(field, [])
+            value = candidate.get(field)
+            if allowed and value is not None and str(value).strip() not in allowed:
+                errors.append(_enum_error(where, field, value, allowed))
+
+
+def check_settled_status_has_its_reason(doc: dict, errors: list[str], notes: list[str]) -> None:
+    """`not_pursued` is a claim about what was deliberately skipped, so it owes a sentence.
+
+    It exists to keep an honest research budget from looking like an unfinished filter: a
+    candidate further from origin than three already over the cap need not be priced, and saying
+    so is different from saying nobody looked. But an escape nobody has to justify is a way to
+    switch a rule off rather than to answer it -- the same reason detour_reason and
+    rating_below_floor_reason are checked for presence.
+    """
+    for index, candidate in enumerate(_seq(doc.get("candidates"))):
+        candidate = _obj(candidate)
+        eligibility = _obj(candidate.get("eligibility"))
+        if str(eligibility.get("hard_filter_status") or "").strip() != "not_pursued":
+            continue
+        if _unfilled(eligibility.get("not_pursued_reason")):
+            errors.append(
+                f"candidates[{index}] ({_name(candidate)}) is marked not_pursued with no "
+                f"not_pursued_reason. State what was skipped and why it could not change the "
+                f"ranking; without it this is indistinguishable from a filter nobody finished.")
+
+
+def check_budget_fit_is_computed(doc: dict, errors: list[str], notes: list[str]) -> None:
+    """A verdict about money that was asserted rather than computed.
+
+    A candidate that cleared the hard filters while its own cost block still says `unknown` was
+    never measured against the cap it supposedly cleared. And the arithmetic half needs no join
+    at all: a low estimate above the declared cap cannot be `within` or `tight`, whatever the
+    author typed.
+
+    Quiet on `over`, deliberately. An author correctly dropping a candidate on price should not
+    owe a full researched range for it -- that is the research-a-rejected-candidate-twice cost
+    the research budget exists to prevent.
+    """
+    cap = _num(_obj(doc.get("trip_context")).get("budget_cap_per_person"))
+    for index, candidate in enumerate(_seq(doc.get("candidates"))):
+        candidate = _obj(candidate)
+        cost = _obj(candidate.get("cost_estimate"))
+        where = f"candidates[{index}] ({_name(candidate)})"
+        status = str(_obj(candidate.get("eligibility")).get("hard_filter_status") or "").strip()
+        fit = str(cost.get("budget_fit") or "unknown").strip()
+        if status in PASSING_STATUSES and fit in ("", "unknown"):
+            if _unfilled(cost.get("budget_fit_unpriced_reason")):
+                errors.append(
+                    f"{where} passed the hard filters while its budget_fit is still 'unknown'. "
+                    f"Budget is one of those filters, so it was either measured -- say within, "
+                    f"tight or over -- or it was not, in which case the candidate did not pass "
+                    f"it. Write budget_fit_unpriced_reason if this destination clears the money "
+                    f"question without a researched range.")
+        if fit in ("within", "tight"):
+            missing = [f for f in ("total_low", "total_high", "as_of")
+                       if _unfilled(cost.get(f)) and _num(cost.get(f)) is None]
+            if not _seq(cost.get("included_categories")):
+                missing.append("included_categories")
+            if missing:
+                errors.append(
+                    f"{where} claims budget_fit {fit!r} while {', '.join(missing)} "
+                    f"{'is' if len(missing) == 1 else 'are'} empty. That verdict is a comparison "
+                    f"between a researched figure and the cap; without the figure it is an "
+                    f"opinion wearing the word 'within'.")
+            low = _num(cost.get("total_low"))
+            if cap is not None and low is not None and low > cap:
+                errors.append(
+                    f"{where} says budget_fit {fit!r} while its own total_low {low} exceeds the "
+                    f"declared cap {cap}. Pure arithmetic on two numbers the shortlist already "
+                    f"carries -- the verdict contradicts them.")
+
+
+def check_price_figures_are_current(doc: dict, errors: list[str], notes: list[str]) -> None:
+    """A figure researched long before the comparison is not a figure about the same trip.
+
+    Fares and lodging are the most volatile facts this skill handles. A candidate priced months
+    before the others is ranked against them as if the two numbers meant the same thing, and the
+    traveller cannot see the difference. Dates only -- no rate table, no conversion, nothing this
+    check would have to guess at.
+    """
+    generated = str(doc.get("generated_at") or "")[:10]
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", generated):
+        return
+    document_day = dt.date.fromisoformat(generated)
+    for index, candidate in enumerate(_seq(doc.get("candidates"))):
+        candidate = _obj(candidate)
+        if not _priced(candidate):
+            continue
+        cost = _obj(candidate.get("cost_estimate"))
+        where = f"candidates[{index}] ({_name(candidate)})"
+        as_of = str(cost.get("as_of") or "")[:10]
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", as_of):
+            errors.append(
+                f"{where} carries a cost range with no ISO as_of date. The date is what tells a "
+                f"reader whether the figure is still true, and it is the first thing a comparison "
+                f"between two candidates depends on.")
+            continue
+        if not _unfilled(cost.get("as_of_exception_reason")):
+            continue
+        priced_day = dt.date.fromisoformat(as_of)
+        if priced_day > document_day:
+            errors.append(
+                f"{where} was priced {as_of}, after the shortlist's own generated_at {generated}. "
+                f"One of the two dates is wrong, and staleness is judged by this field.")
+        elif (document_day - priced_day).days > MAX_PRICE_AGE_DAYS:
+            errors.append(
+                f"{where} was priced {as_of}, {(document_day - priced_day).days} days before this "
+                f"shortlist was written. Re-check it or say why it holds in "
+                f"as_of_exception_reason -- a contracted fare or a fixed package legitimately "
+                f"keeps its own date.")
+
+
+def check_conflict_agrees_with_the_pool(doc: dict, errors: list[str], notes: list[str]) -> None:
+    """Telling a traveller to give up a requirement is expensive, so the claim has to be earned.
+
+    Two failures this catches, both of which end with the traveller changing real plans for
+    nothing. A declared conflict while a candidate actually passed: something survived and the
+    conflict is a story. And a conflict declared over a filter nobody finished -- an unfinished
+    filter and a real conflict produce the same empty pass set, and the traveller is asked to
+    relax a genuine requirement to escape the difference. That is what the `blocked` state is
+    for, and why `unknown` is not allowed to stand in for either.
+
+    Also the converse, which needs no new fields and is the more valuable half: every candidate
+    failed and the artifact still calls itself a shortlist.
+    """
+    state = str(_obj(doc.get("outcome")).get("state") or "").strip()
+    candidates = [_obj(c) for c in _seq(doc.get("candidates"))]
+    outcome = _obj(doc.get("outcome"))
+    statuses = [str(_obj(c.get("eligibility")).get("hard_filter_status") or "unknown").strip()
+                for c in candidates]
+
+    if state == "constraint_conflict":
+        survivors = [_name(c) for c, s in zip(candidates, statuses) if s in PASSING_STATUSES]
+        if survivors:
+            errors.append(
+                f"outcome.state is 'constraint_conflict' while {', '.join(survivors)} "
+                f"{'is' if len(survivors) == 1 else 'are'} marked passed. Something survived, so "
+                f"there is no conflict to report -- present the survivor.")
+        unfinished = [_name(c) for c, s in zip(candidates, statuses) if s in ("", "unknown")]
+        if unfinished:
+            errors.append(
+                f"outcome.state is 'constraint_conflict' while the filter never settled "
+                f"{', '.join(unfinished)}. An unfinished filter and a real conflict produce the "
+                f"same empty pass set; only one of them justifies asking the traveller to give up "
+                f"a requirement. Finish those, mark them not_pursued with a reason, or use "
+                f"outcome.state 'blocked' with a blocking_fact.")
+        if not _unfilled(_obj(doc.get("recommendation")).get("winner")):
+            errors.append(
+                "outcome.state is 'constraint_conflict' but recommendation.winner still names a "
+                "destination. A conditional option belongs in conditional_options -- an offer is "
+                "not a recommendation.")
+        if not _seq(outcome.get("blocking_constraints")):
+            errors.append(
+                "outcome.state is 'constraint_conflict' with no outcome.blocking_constraints. "
+                "Name the smallest conflicting set; 'nothing works' is not something a traveller "
+                "can act on.")
+        if _unfilled(outcome.get("minimum_relaxation")):
+            errors.append(
+                "outcome.state is 'constraint_conflict' with no outcome.minimum_relaxation. Say "
+                "which single constraint, relaxed, most likely restores feasibility.")
+        # Every adjudicated rejection must trace to a constraint the conflict actually claims,
+        # or the traveller is asked to relax something that removed hardly any of the pool.
+        claimed = {_fold(c) for c in _seq(outcome.get("blocking_constraints")) if isinstance(c, str)}
+        if claimed:
+            cited: list[str] = []
+            for candidate in candidates:
+                cited += [str(f) for f in _seq(_obj(candidate.get("eligibility")).get("failed_constraints"))]
+            for entry in _seq(doc.get("excluded")):
+                value = _obj(entry).get("failed_constraint")
+                if isinstance(value, str) and value.strip():
+                    cited.append(value)
+            orphans = sorted({c for c in cited
+                              if not any(claim in _fold(c) or _fold(c) in claim for claim in claimed)})
+            if orphans:
+                errors.append(
+                    "these rejections name constraints the declared conflict does not claim: "
+                    + "; ".join(orphans)
+                    + ". Either add them to outcome.blocking_constraints or the traveller is "
+                      "being asked to relax a constraint that removed only part of the pool.")
+
+    if state == "blocked" and _unfilled(outcome.get("blocking_fact")):
+        errors.append(
+            "outcome.state is 'blocked' with no outcome.blocking_fact. Name what could not be "
+            "established; 'blocked' without it is indistinguishable from giving up.")
+
+    if state == "shortlist" and candidates and all(s == "failed" for s in statuses):
+        errors.append(
+            "every candidate is marked failed while outcome.state is 'shortlist'. An empty "
+            "feasible set is an outcome, not a scoring error: declare 'constraint_conflict' and "
+            "name what to relax.")
+
+
+CLIMATE_SENTINELS = ("无特别气候限制", "no particular climate", "none")
+
+
+def constraint_roster(intake: dict) -> list[tuple[str, str]]:
+    """The hard constraints the traveller actually declared, computed from their saved intake.
+
+    Computed rather than authored, and that is the whole design. A roster written into the
+    shortlist can be under-declared: the author lists the four constraints they remembered to
+    apply, every candidate covers all four, and the gate reports full coverage on exactly the run
+    that motivated it. An intake field the traveller filled is their declaration and nothing is
+    inferred from it -- the id is the field path, and the text is theirs.
+
+    Two hard constraints are deliberately absent. `destination_scope.excluded_places` is
+    discharged once, before candidates are generated, so per-candidate bookkeeping about it proves
+    nothing -- it gets a direct check instead. The travel window is a property of the run rather
+    than of any candidate.
+    """
+    roster: list[tuple[str, str]] = []
+    origin = _obj(intake.get("origin"))
+    if not _unfilled(origin.get("max_one_way_travel_time")):
+        roster.append(("origin.max_one_way_travel_time",
+                       str(origin["max_one_way_travel_time"])))
+    for index, need in enumerate(_seq(_obj(intake.get("party")).get("mobility_or_access_needs"))):
+        if not _unfilled(need):
+            roster.append((f"party.mobility_or_access_needs[{index}]", str(need)))
+    feasibility = _obj(intake.get("feasibility"))
+    for index, pref in enumerate(_seq(feasibility.get("climate_preferences"))):
+        if _unfilled(pref) or any(s in str(pref) for s in CLIMATE_SENTINELS):
+            continue
+        roster.append((f"feasibility.climate_preferences[{index}]", str(pref)))
+    for index, need in enumerate(_seq(feasibility.get("dietary_or_religious_needs"))):
+        if not _unfilled(need):
+            roster.append((f"feasibility.dietary_or_religious_needs[{index}]", str(need)))
+    if _num(_obj(intake.get("budget")).get("hard_cap_amount")) is not None:
+        roster.append(("budget.hard_cap_amount",
+                       str(_obj(intake.get("budget")).get("hard_cap_amount"))))
+    scope = str(_obj(intake.get("trip_geography")).get("scope") or "").strip()
+    if scope and scope != "domestic":
+        roster.append(("entry", f"entry feasibility (trip scope: {scope})"))
+    return roster
+
+
+def _declared_ids(bucket) -> set[str]:
+    """Constraint ids named in one of the eligibility buckets.
+
+    Objects carry `constraint_id`; a plain string is accepted and simply names no id, which is
+    why coverage is reported against ids rather than text. Matching a computed field path against
+    free prose would be exactly the fuzzy guess this project keeps removing.
+    """
+    found = set()
+    for entry in _seq(bucket):
+        if isinstance(entry, dict) and not _unfilled(entry.get("constraint_id")):
+            found.add(str(entry["constraint_id"]).strip())
+    return found
+
+
+def check_constraint_coverage(doc: dict, errors: list[str], notes: list[str],
+                              intake: dict | None = None) -> None:
+    """Every constraint the traveller declared, answered for every candidate they are shown.
+
+    The defect is a winner that passed the four constraints someone happened to think of and was
+    never tested against the fifth -- the stated maximum journey time, or the walking limit. It
+    survives to the top of the list carrying no failure, because nobody looked, and a record that
+    is silent about a constraint is indistinguishable from one that cleared it.
+
+    `not_applicable` is a separate bucket from `unresolved` on purpose. 'The constraint has no
+    subject here' and 'nobody established it' are different statements, and conflating them makes
+    the rule fire on correct work -- an entry filter on a domestic candidate under a mixed-scope
+    run is not an unanswered question.
+    """
+    if intake is None:
+        return
+    roster = constraint_roster(intake)
+    if not roster:
+        notes.append("note: the intake declares no hard constraints, so coverage is vacuous "
+                     "here. That is a fact about the intake, not a pass.")
+        return
+    notes.append("note: constraints this shortlist is held to — "
+                 + "; ".join(f"{cid} ({text})" for cid, text in roster))
+    roster_ids = {cid for cid, _ in roster}
+    buckets = ("confirmed_constraints", "failed_constraints", "unresolved_constraints",
+               "not_applicable_constraints")
+    for index, candidate in enumerate(_seq(doc.get("candidates"))):
+        candidate = _obj(candidate)
+        eligibility = _obj(candidate.get("eligibility"))
+        where = f"candidates[{index}] ({_name(candidate)})"
+        seen: dict[str, list[str]] = {}
+        for bucket in buckets:
+            for cid in _declared_ids(eligibility.get(bucket)):
+                seen.setdefault(cid, []).append(bucket)
+        for cid, found_in in sorted(seen.items()):
+            if len(found_in) > 1:
+                errors.append(
+                    f"{where} answers constraint {cid!r} in more than one bucket "
+                    f"({', '.join(found_in)}). One verdict per constraint, or the record says two "
+                    f"different things and every reader picks the one it reads first.")
+        missing = sorted(roster_ids - set(seen))
+        if missing:
+            errors.append(
+                f"{where} says nothing about {', '.join(missing)}. The traveller declared "
+                f"{'it' if len(missing) == 1 else 'them'} in their intake, and a candidate silent "
+                f"about a constraint is indistinguishable from one that cleared it. Put each in "
+                f"confirmed, failed, unresolved or not_applicable_constraints.")
+        for entry in _seq(eligibility.get("not_applicable_constraints")):
+            entry = _obj(entry)
+            if not _unfilled(entry.get("constraint_id")) and _unfilled(entry.get("reason")):
+                errors.append(
+                    f"{where} marks {entry.get('constraint_id')!r} not applicable with no reason. "
+                    f"The reason is the claim; without it the bucket is a way to switch coverage "
+                    f"off rather than to answer it.")
+        extra = sorted(set(seen) - roster_ids)
+        if extra:
+            notes.append(f"note: {where} records constraints the intake never declared: "
+                         f"{', '.join(extra)}. Not an error -- a candidate may honestly carry one.")
+
+    # The exclusion list is discharged once, before generation, so check the thing itself rather
+    # than the bookkeeping: no candidate and no exclusion-log entry may name an excluded place.
+    excluded_places = [str(p) for p in
+                       _seq(_obj(intake.get("destination_scope")).get("excluded_places"))
+                       if isinstance(p, str) and p.strip()]
+    if excluded_places:
+        folded = {(_fold(p), p) for p in excluded_places}
+        offered = [(_name(_obj(c)), "candidates") for c in _seq(doc.get("candidates"))]
+        offered += [(str(_obj(e).get("destination") or ""), "excluded")
+                    for e in _seq(doc.get("excluded"))]
+        for name, where in offered:
+            for folded_place, original in folded:
+                if folded_place and folded_place in _fold(name):
+                    errors.append(
+                        f"{where} names {name!r}, which the traveller excluded ({original!r}). "
+                        f"An excluded place is a hard filter applied before candidates are "
+                        f"generated, so it should never have reached the list at all.")
+
+
 SHORTLIST_CHECKS = (
+    check_declared_enums,
     check_cost_category_vocabulary,
     check_cost_comparable,
     check_cost_scope_identity,
+    check_price_figures_are_current,
+    check_budget_fit_is_computed,
+    check_settled_status_has_its_reason,
     check_status_contradicts_its_own_failures,
     check_no_infeasible_winner,
+    check_conflict_agrees_with_the_pool,
 )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("shortlist", help="Discovery shortlist JSON path")
+    parser.add_argument(
+        "--intake", default=None,
+        help="Saved trip intake JSON. Supplying it computes the hard-constraint roster from what "
+             "the traveller actually declared and requires every candidate to answer each one.")
     args = parser.parse_args()
     try:
         doc = json.loads(Path(args.shortlist).read_text(encoding="utf-8"))
@@ -323,11 +774,26 @@ def main() -> int:
     if not isinstance(doc, dict):
         print("ERROR: shortlist JSON must be an object.", file=sys.stderr)
         return 2
+    intake = None
+    if args.intake:
+        try:
+            intake = json.loads(Path(args.intake).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: Could not read intake JSON: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(intake, dict):
+            print("ERROR: intake JSON must be an object.", file=sys.stderr)
+            return 2
 
     errors: list[str] = []
     notes: list[str] = []
     for check in SHORTLIST_CHECKS:
         check(doc, errors, notes)
+    check_constraint_coverage(doc, errors, notes, intake=intake)
+    if intake is None:
+        notes.append("note: no --intake supplied, so constraint coverage did not run. That is the "
+                     "check which catches a winner never tested against a constraint the "
+                     "traveller stated; pass the saved intake to arm it.")
     for note in notes:
         print(f"note: {note}")
     if errors:
