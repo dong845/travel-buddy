@@ -55,9 +55,16 @@ def run_with_exit(module, workspace: Path, return_code: int, lines: list[str]) -
     log_path = plans / f"log-{return_code}.log"
 
     original_popen = module.subprocess.Popen
+    original_which = module.shutil.which
     original_argv = sys.argv
     try:
         module.subprocess.Popen = lambda *a, **k: FakeProcess(lines, return_code)
+        # command_for() resolves the assistant on PATH before anything is spawned, so stubbing
+        # Popen alone is not enough. Without this the test passes only on a machine that happens
+        # to have the Claude CLI installed -- which is why it went green locally and red on CI,
+        # on CI's first real run. A test whose result depends on the developer's PATH is measuring
+        # the developer.
+        module.shutil.which = lambda name: f"/usr/bin/{name}"
         sys.argv = [
             "run_destination_discovery.py",
             "--assistant", "claude",
@@ -69,6 +76,7 @@ def run_with_exit(module, workspace: Path, return_code: int, lines: list[str]) -
         module.main()
     finally:
         module.subprocess.Popen = original_popen
+        module.shutil.which = original_which
         sys.argv = original_argv
     return result_path.read_text(encoding="utf-8")
 
