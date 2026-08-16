@@ -176,6 +176,8 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "fig_budget_caption": "占人均总额的比例，以及用掉了多少上限",
             "fig_shape_caption": "当天的固定时间点",
             "fig_longest_walk": "最长单次步行",
+            "photo_credit_label": "图片来源",
+            "photo_source_label": "经 Wikimedia，取自条目",
             "unverified_banner_title": "未经事实核验",
             "unverified_banner_body": (
                 "本计划没有任何核验记录。其中的票价、营业时间、入境规则与可订状态"
@@ -379,6 +381,8 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "fig_budget_caption",
     "fig_shape_caption",
     "fig_longest_walk",
+    "photo_credit_label",
+    "photo_source_label",
     "unverified_banner_title",
     "unverified_banner_body",
     # Added with the booking-page fixes: the stated budget cap, dining opening hours and
@@ -637,6 +641,13 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
         # cheaper to avoid than to debug.
         "<strong>You asked for: </strong>":
             f"<strong>{labels.get('anchor_serves_label', 'You asked for: ')}</strong>",
+        # The photo credit. Not politeness: these are CC BY / CC BY-SA files and the attribution
+        # is the condition under which they may sit in this file at all, so it localizes like any
+        # other renderer sentence rather than staying English on a Chinese page.
+        "<figcaption class=\"photo-credit\">Photo credit: ":
+            f"<figcaption class=\"photo-credit\">{labels.get('photo_credit_label', 'Photo credit')}: ",
+        " · via Wikimedia, from the article ":
+            f" · {labels.get('photo_source_label', 'via Wikimedia, from the article')} ",
         # The four figure captions. They are also each figure's SVG <title>, so one entry
         # localizes both the visible caption and the accessible name. Added here because the
         # i18n gate only fails English it already knows about -- a caption invented after the
@@ -1663,7 +1674,31 @@ def dining_cards(value: object) -> str:
     return f'<div class="dining-grid">{"".join(cards)}</div>'
 
 
-def destination_anchor_cards(value: object) -> str:
+def imagery_figure(entry: object, alt: object) -> str:
+    """A verified photograph with the attribution its licence requires.
+
+    The credit line is not decoration and not politeness: these are CC BY / CC BY-SA files, and
+    the licence is the reason they may be in this file at all. The caption names the article the
+    image came from rather than asserting "this is X", because what was verified is the
+    provenance -- a lead image is chosen by editors and can show the subject from an angle nobody
+    would caption that way.
+    """
+    entry = entry if isinstance(entry, dict) else {}
+    source = entry.get("data_uri")
+    if not source:
+        return ""
+    credit = " · ".join(str(part) for part in
+                        (entry.get("artist"), entry.get("license")) if part)
+    link = entry.get("file_url") or entry.get("page_url") or ""
+    return (f'<figure class="anchor-photo"><img src="{attr(source)}" alt="{attr(alt)}" '
+            f'loading="lazy" decoding="async">'
+            f'<figcaption class="photo-credit">Photo credit: '
+            + (f'<a href="{attr(link)}" target="_blank" rel="noopener noreferrer">{esc(credit)}</a>'
+               if link else esc(credit))
+            + f' · via Wikimedia, from the article {esc(entry.get("page"))}</figcaption></figure>')
+
+
+def destination_anchor_cards(value: object, imagery: object = None) -> str:
     if not isinstance(value, list):
         return ""
     items = []
@@ -1671,9 +1706,13 @@ def destination_anchor_cards(value: object) -> str:
         (anchor for anchor in value if isinstance(anchor, dict)),
         key=lambda anchor: anchor.get("planned_day") if isinstance(anchor.get("planned_day"), int) else 10**6,
     )
+    images = imagery if isinstance(imagery, dict) else {}
+    positions = {id(a): i for i, a in enumerate(value) if isinstance(a, dict)}
     for anchor in ordered:
         if not isinstance(anchor, dict):
             continue
+        photo = imagery_figure(images.get(f"anchor:{positions.get(id(anchor))}"),
+                               anchor.get("name"))
         # The traveller stated what the trip was for; this is where the page answers them. The
         # link exists in the data either way, but a field only they can verify is worth nothing
         # while it stays in the JSON: they are the only reader who knows whether "old-town lanes"
@@ -1684,7 +1723,7 @@ def destination_anchor_cards(value: object) -> str:
         items.append(
             f'<article class="anchor"><span class="pill">Day {esc(anchor.get("planned_day"))}</span><h3>{esc(anchor.get("name"))}</h3>'
             f'<p>{esc(anchor.get("category"))} · {esc(anchor.get("neighborhood_or_area"))}</p>'
-            f'<p>{esc(anchor.get("why_it_matters"))}</p>{serves_line}'
+            f'<p>{esc(anchor.get("why_it_matters"))}</p>{serves_line}{photo}'
             f'<a class="anchor-link" data-verified-at="{attr(anchor.get("checked_at"))}" href="{attr(anchor.get("source_url"))}" target="_blank" rel="noopener noreferrer">View source</a></article>'
         )
     return f'<section id="destination-essentials" class="panel"><h2>Destination essentials</h2><div class="grid">{"".join(items)}</div></section>' if items else ""
@@ -2550,8 +2589,11 @@ def render_unlocalized(plan: dict) -> str:
         walking_caption += (f" · Longest single walk: {longest_leg:.0f} / {walk_cap:.0f} min")
     walking_figure = plan_visuals.walking_bars(
         walking_rows, None, walking_caption, walking_caption, "")
+    hero_photo = imagery_figure((plan.get("imagery") or {}).get("hero"), trip["destination"])
+    if hero_photo:
+        hero_photo = f'<section class="hero-photo">{hero_photo}</section>'
     recheck = "<br>".join(esc(value) for value in as_list(plan.get("recheck_before_purchase")) if value) or "Recheck price, availability, entry requirements, and operating conditions before purchase."
-    anchors = destination_anchor_cards(plan.get("destination_experience_anchors"))
+    anchors = destination_anchor_cards(plan.get("destination_experience_anchors"), plan.get("imagery"))
     overview_scope = overview.get("overall_map_scope")
     # "transport overview" promised a trip-wide route and opened one leg -- the airport hop the
     # traveller already has on day 1. Name the leg it actually opens; the daily segment
@@ -2686,7 +2728,7 @@ def render_unlocalized(plan: dict) -> str:
         + (f'<p class="meta">Platform selection: {esc(regional.get("booking_platform_selection_note"))}</p>'
            if regional.get("booking_platform_selection_note") else "")
     )
-    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}{plan_visuals.VISUAL_CSS}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{unverified_banner}{constraints_panel}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div>{cap_fact}<div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div>{budget_figure}{walking_figure}</section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(overview_headline)}</p>{"".join(f"<p>{esc(note)}</p>" for note in as_list(overview.get("notes")) if note)}<a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details open><summary>Recheck before purchase</summary><p>{recheck}</p></details></section></main></body></html>'''
+    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}.anchor-photo{{margin:10px 0 0}}.anchor-photo img{{width:100%;height:auto;border-radius:10px;display:block}}.photo-credit{{color:var(--muted);font-size:.72rem;margin-top:4px}}.hero-photo{{margin:20px 0}}.hero-photo img{{width:100%;max-height:340px;object-fit:cover;border-radius:16px}}@media print{{.hero-photo img{{max-height:200px}}}}{plan_visuals.VISUAL_CSS}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{hero_photo}{unverified_banner}{constraints_panel}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div>{cap_fact}<div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div>{budget_figure}{walking_figure}</section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(overview_headline)}</p>{"".join(f"<p>{esc(note)}</p>" for note in as_list(overview.get("notes")) if note)}<a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details open><summary>Recheck before purchase</summary><p>{recheck}</p></details></section></main></body></html>'''
 
 
 def render(plan: dict) -> str:

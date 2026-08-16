@@ -206,5 +206,7 @@
   "fig_map_caption": "Relative positions, in visit order. Use the map button to navigate.",
   "fig_budget_caption": "Share of the per-person total, and how much of the cap it uses",
   "fig_shape_caption": "Fixed points across the day",
-  "fig_longest_walk": "Longest single walk"
+  "fig_longest_walk": "Longest single walk",
+  "photo_credit_label": "Photo credit",
+  "photo_source_label": "via Wikimedia, from the article"
 }

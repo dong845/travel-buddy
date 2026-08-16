@@ -228,6 +228,34 @@ rather than pattern-matched: deciding from a plan's own fields whether it contai
 crowd or a long transfer needs a different fact for every avoidance a traveller might write, while
 asking how each was honoured needs none.
 
+### Illustrate the page, but never with a picture you cannot vouch for
+
+The page is read on a phone in a city the traveller does not know, and it was 96KB of unbroken
+text. Two things fix that, and they are not the same kind of thing.
+
+**Figures are free and always on.** `plan_visuals.py` draws each day's stops at their true
+relative positions, minutes on foot per day, budget composition against the cap, and where the
+day's fixed points fall on a clock — all from numbers the plan already carries, so they need no
+network, no licence and about 15KB. They also answer the questions text cannot: a list of stops
+gives you the order, only a map gives you the shape.
+
+**Photographs are earned, and optional.** Run
+`python scripts/fetch_plan_imagery.py <plan.json>` **during the verification stage, not after
+it** — it is network-bound and independent of every verification block, so it costs no extra
+wall-clock when it runs alongside them, and about 13 seconds when it does not. It fills only the
+destination hero and the experience anchors; restaurants are left alone because Commons coverage
+of an individual restaurant is near zero and the only way to fill those slots would be a generic
+photo of food, which is decoration pretending to be information.
+
+**A photograph that cannot be verified is not added.** Coordinate proximity proves "near the
+place", never "of the place": a real search for "Alicante Central Market" matched the article
+*Bombing of Alicante*, 400 m away, whose lead image genuinely is the market — and that provenance
+would have been printed under the photo. So the article's title must also be about what was
+asked for, a search that falls through to the destination's own article is refused, and no file
+appears twice. When a slot cannot be filled to that standard it stays empty. Never substitute a
+stock image, and never hot-link one: the page must keep working on a phone with no signal, which
+is exactly when it is needed.
+
 ### A map or venue URL parameter is a geocoder query, not a caption
 
 This is the highest-severity defect the skill has shipped, it is invisible to every structural
