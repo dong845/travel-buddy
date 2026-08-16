@@ -60,6 +60,21 @@ def main() -> int:
                 f"manifest field {field!r} differs: plugin.json={plugin.get(field)!r} "
                 f"marketplace.json={entry.get(field)!r}")
 
+    # 1b. The fourth copy of the version, which the check above cannot see. Wikimedia asks
+    #     clients to identify themselves, so fetch_plan_imagery.py sends the release in its
+    #     User-Agent -- and being a string in a Python file rather than a manifest field, it is
+    #     the one that drifts: nothing failed when the manifests went to 2.2.0 and it did not.
+    #     Only major.minor is carried there, so only major.minor is compared.
+    agent_source = (ROOT / "scripts" / "fetch_plan_imagery.py").read_text(encoding="utf-8")
+    agent_match = re.search(r"travel-buddy/(\d+\.\d+)", agent_source)
+    expected_agent = ".".join(plugin["version"].split(".")[:2])
+    if not agent_match:
+        failures.append("fetch_plan_imagery.py sends no travel-buddy/<version> User-Agent")
+    elif agent_match.group(1) != expected_agent:
+        failures.append(
+            f"User-Agent version {agent_match.group(1)!r} does not match the manifest's "
+            f"{expected_agent!r} (plugin.json says {plugin['version']!r})")
+
     # 2. SKILL.md must not point at anything that is not shipped.
     skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
     referenced = set(re.findall(r"\]\((references/[^)]+|templates/[^)]+|assets/[^)]+)\)", skill))
