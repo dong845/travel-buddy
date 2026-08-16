@@ -201,5 +201,10 @@
   "group_flight": "Flight options",
   "group_hotel": "Accommodation options",
   "group_ticket": "Ticket options",
-  "group_car": "Rental-car options"
+  "group_car": "Rental-car options",
+  "fig_walking_caption": "Minutes on foot per day: connecting legs plus time on foot at each stop",
+  "fig_map_caption": "Relative positions, in visit order. Use the map button to navigate.",
+  "fig_budget_caption": "Share of the per-person total, and how much of the cap it uses",
+  "fig_shape_caption": "Fixed points across the day",
+  "fig_longest_walk": "Longest single walk"
 }

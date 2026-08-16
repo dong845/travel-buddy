@@ -686,6 +686,46 @@ def language_coverage_cases(base: dict) -> list[str]:
     # 4. No renderer-owned Chinese may reach a page in a third language. Ten strings were hardcoded
     #    inside a function every non-English page runs, so a French itinerary shipped 82公里 on every
     #    segment and 酒店 on every booking card while all four gates called it valid.
+    # 4b. The general form of the same rule, and the backstop for a hole the validator has: it
+    #     fails only English it already knows about, so a string invented after it was written is
+    #     invisible to it. Four figure captions shipped English onto a Chinese page exactly that
+    #     way and every gate stayed green. The keys of static_replacements ARE, by construction,
+    #     the complete list of renderer-owned English, so none of them may survive localization.
+    from render_final_trip_html import labels_for, static_replacements  # noqa: PLC0415
+
+    chinese = copy.deepcopy(base)
+    chinese["trip"]["language"] = "Chinese"
+    zh_page = render(chinese)
+    zh_body = re.sub(r"<(style|script).*?</\1>", "", zh_page, flags=re.S)
+    survivors = sorted(
+        source for source in static_replacements(labels_for("zh-CN"))
+        # A key whose localization is identical to itself is a no-op entry (a platform name, a
+        # unit that does not translate) and cannot leak anything.
+        if static_replacements(labels_for("zh-CN"))[source] != source and source in zh_body
+    )
+    if survivors:
+        failures.append(
+            "i18n: renderer-owned English survived localization on a Chinese page: "
+            + "; ".join(repr(s[:60]) for s in survivors[:6])
+            + (f" (+{len(survivors) - 6} more)" if len(survivors) > 6 else ""))
+
+    # The assertion above catches a table entry that stopped matching -- the byte-identical-key
+    # hazard the table documents. It cannot catch a string that was never ADDED to the table,
+    # which is the hole itself. This one can, for the elements that are renderer-owned by
+    # construction: every figure caption and every SVG accessible name is written by the renderer,
+    # never by the traveller, so on a Chinese page each must contain Chinese.
+    # figcaption only. An SVG <title> holds the accessible name of a single mark, which is the
+    # traveller's own activity or venue name -- user content, legitimately in any language -- and
+    # the document <title> is the trip title. Captions are the renderer's own sentences.
+    renderer_owned = re.findall(r"<figcaption>(.*?)</figcaption>", zh_body, flags=re.S)
+    english_only = [re.sub(r"<[^>]+>", "", text).strip() for text in renderer_owned]
+    english_only = [text for text in english_only
+                    if text and not re.search(r"[一-鿿]", text)]
+    if english_only:
+        failures.append(
+            "i18n: a renderer-owned caption or accessible name carries no Chinese on a Chinese "
+            "page: " + "; ".join(repr(t[:60]) for t in english_only[:5]))
+
     french = copy.deepcopy(base)
     french["trip"]["language"] = "fr"
     french["ui_labels"] = json.loads(
