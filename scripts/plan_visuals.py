@@ -112,7 +112,21 @@ def day_map(route: dict, title: str, caption: str) -> str:
     if len(points) < 2:
         return ""
     lats = [p[1] for p in points]
-    lons = [p[2] for p in points]
+    # Longitudes are unwrapped relative to the first stop before anything is drawn. Without this a
+    # day that crosses the 180th meridian -- Fiji, Kiribati, Chukotka, the Chatham Islands -- puts
+    # 178.06 and -179.90 at opposite ends of the figure although they are 215 km apart, while the
+    # distance caption stays correct because haversine does not care. Measured: two adjacent stops
+    # landed 261px apart on a 320px drawing. The map rendered perfectly and was inside out, which
+    # is the only kind of wrong this file can produce silently.
+    lons = []
+    for _, _, lon in points:
+        if lons:
+            while lon - lons[0] > 180:
+                lon -= 360
+            while lon - lons[0] < -180:
+                lon += 360
+        lons.append(lon)
+    points = [(name, lat, lon) for (name, lat, _), lon in zip(points, lons)]
     mid_lat = sum(lats) / len(lats)
     stretch = max(math.cos(math.radians(mid_lat)), 0.05)
     xs = [lon * stretch for lon in lons]
@@ -166,7 +180,13 @@ def walking_bars(rows: list[tuple[str, float]], cap: float | None,
     missing was the one glance that makes "day 3 is nearly double the rest" obvious without
     reading five day cards and adding up.
     """
-    rows = [(str(label), float(value)) for label, value in rows if value is not None]
+    # Rows are unpacked defensively rather than trusted. Today every caller builds them inline so
+    # a malformed row cannot reach here, but this file's neighbours all hold to the same rule:
+    # malformed input produces a finding or an empty figure, never a traceback, because an
+    # operator who sees a stack trace learns nothing and stops running the thing.
+    rows = [(str(row[0]), float(row[1])) for row in rows
+            if isinstance(row, (list, tuple)) and len(row) == 2
+            and isinstance(row[1], (int, float)) and not isinstance(row[1], bool)]
     if not rows:
         return ""
     peak = max([value for _, value in rows] + ([cap] if cap else []) + [1.0])
@@ -206,7 +226,9 @@ def budget_bar(rows: list[tuple[str, float]], total: float, cap: float | None,
     trip or a hotel trip" in one look, and shows the headroom against a stated cap -- the number
     a traveller actually acts on.
     """
-    rows = [(str(label), float(value)) for label, value in rows if value]
+    rows = [(str(row[0]), float(row[1])) for row in rows
+            if isinstance(row, (list, tuple)) and len(row) == 2
+            and isinstance(row[1], (int, float)) and not isinstance(row[1], bool) and row[1]]
     if not rows or total <= 0:
         return ""
     width, height = 320.0, 46.0
@@ -249,7 +271,8 @@ def day_timeline(entries: list[tuple[str, object, str]], title: str, caption: st
     flexible item at an invented hour would be the chart telling a story the plan does not.
     """
     day_start, day_end = 7 * 60, 23 * 60
-    placed = [(kind, _minutes(when), str(label)) for kind, when, label in entries]
+    placed = [(str(row[0]), _minutes(row[1]), str(row[2])) for row in entries
+              if isinstance(row, (list, tuple)) and len(row) == 3]
     timed = [(kind, minute, label) for kind, minute, label in placed if minute is not None]
     if not timed:
         return ""

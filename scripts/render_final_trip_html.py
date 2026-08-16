@@ -161,13 +161,26 @@ TRIP_PALETTES = {
 # clever: a word list can be read and argued with, while a classifier cannot be told why it was
 # wrong about somebody's holiday.
 PALETTE_HINTS = {
-    "coast": ("coast", "beach", "sea", "island", "ocean", "seaside", "海", "岛", "滨", "沙滩"),
+    # Multilingual on purpose. The first version held English and Chinese only, so a French plan
+    # saying "forêt et lac" scored zero everywhere and fell to the default -- silently, which is
+    # the worst way for a styling decision to be wrong. The traveller writes these words in their
+    # own language and the plan records that language, so the vocabulary has to travel too.
+    "coast": ("coast", "beach", "sea", "island", "ocean", "seaside",
+              "playa", "costa", "mar", "isla", "plage", "côte", "mer", "île",
+              "strand", "küste", "meer", "insel", "spiaggia", "costiera", "praia",
+              "пляж", "море", "ビーチ", "海岸", "海", "岛", "滨", "沙滩", "바다"),
     "highland": ("forest", "lake", "mountain", "hik", "trail", "nature", "wood", "valley",
-                 "森林", "湖", "山", "徒步", "自然"),
-    "alpine": ("snow", "ski", "glacier", "winter sport", "雪", "滑雪", "冰川"),
-    "arid": ("desert", "dune", "canyon", "oasis", "沙漠", "戈壁", "峡谷"),
+                 "bosque", "lago", "montaña", "sender", "forêt", "lac", "montagne", "randonn",
+                 "wald", "see", "berg", "wander", "foresta", "lago", "montagna",
+                 "лес", "озеро", "гора", "森", "湖", "山", "徒步", "自然", "숲", "산"),
+    "alpine": ("snow", "ski", "glacier", "winter sport", "nieve", "esquí", "neige", "glacier",
+               "schnee", "gletscher", "neve", "снег", "лыж", "雪", "滑雪", "冰川", "スキー"),
+    "arid": ("desert", "dune", "canyon", "oasis", "desierto", "duna", "cañón",
+             "désert", "wüste", "deserto", "пустын", "沙漠", "戈壁", "峡谷", "砂漠"),
     "urban": ("city", "street", "museum", "food", "market", "nightlife", "architect", "art",
-              "街区", "美食", "博物馆", "建筑", "市集", "城市"),
+              "ciudad", "calle", "museo", "gastronom", "mercado", "ville", "rue", "musée",
+              "stadt", "straße", "città", "cidade", "город", "музей",
+              "街区", "美食", "博物馆", "建筑", "市集", "城市", "都市", "グルメ", "도시"),
 }
 
 

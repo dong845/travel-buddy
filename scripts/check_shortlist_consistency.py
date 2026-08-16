@@ -63,12 +63,26 @@ def _seq(value) -> list:
     return value if isinstance(value, list) else []
 
 
-def _num(value):
+def _number(value):
+    """The value if it is a real number, else None -- never 0.0.
+
+    check_plan_consistency._num returns 0.0 for a missing value, which is right there and wrong
+    here: these checks compare declared costs, and reading an absent total as zero would make a
+    candidate look free rather than unpriced.
+    """
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def _unfilled(*values: object) -> bool:
-    """Is this still the template's placeholder rather than an answer? Content rules must not run
+def _missing(*values: object) -> bool:
+    """Empty, absent, or still the template's placeholder.
+
+    Named _missing rather than _unfilled deliberately. check_plan_consistency.py has a function
+    called _unfilled that asks a NARROWER question -- does this contain a TODO marker -- so
+    _unfilled("") is False there and True here. Two names would have been fine; one name with two
+    meanings is a trap, and it caught me: a rule written in that file against the wrong one of the
+    pair looked present and measured nothing, and two of its tests passed while asserting a
+    failure. The same divergence exists for _num, which returns 0.0 there and None here, so a
+    missing number reads as zero on one side of the skill and as absent on the other. Content rules must not run
     on a record nobody has filled in, because the error they produce describes a candidate that
     does not exist yet -- a skeleton once opened with 38 errors, most of them about nothing."""
     for value in values:
@@ -127,7 +141,7 @@ def _surfaces(categories) -> set[str]:
 
 def _priced(candidate: dict) -> bool:
     cost = _obj(candidate.get("cost_estimate"))
-    return _num(cost.get("total_low")) is not None or _num(cost.get("total_high")) is not None
+    return _number(cost.get("total_low")) is not None or _number(cost.get("total_high")) is not None
 
 
 def _name(candidate: dict) -> str:
@@ -192,7 +206,7 @@ def check_cost_comparable(doc: dict, errors: list[str], notes: list[str]) -> Non
         if not _priced(candidate):
             # An unpriced candidate is a legitimate output -- it was not researched that far --
             # but it must say so, or "no number" is indistinguishable from "nobody looked".
-            if _unfilled(cost.get("not_priced_reason")):
+            if _missing(cost.get("not_priced_reason")):
                 errors.append(
                     f"{where} shows no cost range and no cost_estimate.not_priced_reason. Say why "
                     f"it is unpriced; an absent figure otherwise reads as an oversight, and the "
@@ -213,7 +227,7 @@ def check_cost_comparable(doc: dict, errors: list[str], notes: list[str]) -> Non
                     f"{where} prices in {field}={mine!r} while the shortlist's trip_context says "
                     f"{shared!r}. Two figures on different {field} bases cannot be ranked against "
                     f"each other, and the page shows them side by side.")
-        low, high = _num(cost.get("total_low")), _num(cost.get("total_high"))
+        low, high = _number(cost.get("total_low")), _number(cost.get("total_high"))
         if low is not None and high is not None and low > high:
             errors.append(f"{where} cost_estimate.total_low {low} exceeds total_high {high}.")
 
@@ -250,7 +264,7 @@ def check_cost_scope_identity(doc: dict, errors: list[str], notes: list[str]) ->
             for entry in _seq(cost.get(field)):
                 entry = _obj(entry)
                 declared |= _surfaces([entry.get("category")])
-                if _unfilled(entry.get("reason")):
+                if _missing(entry.get("reason")):
                     errors.append(
                         f"{where} lists {entry.get('category')!r} under {field} with no reason. "
                         f"The reason is the whole content of the claim -- without it the field is "
@@ -310,14 +324,24 @@ def check_no_infeasible_winner(doc: dict, errors: list[str], notes: list[str]) -
     a fuzzy match here would either miss a real winner or invent one.
     """
     candidates = [_obj(c) for c in _seq(doc.get("candidates"))]
-    if not candidates:
-        return
     by_name = {_name(c): c for c in candidates}
     recommendation = _obj(doc.get("recommendation"))
+    # No early return on an empty candidate list. That guard was added for safety and created the
+    # loudest version of the very defect this check exists for: a shortlist naming a winner while
+    # carrying no candidates at all passed silently, because the loop below had nothing to
+    # iterate. An empty pool with a winner is a recommendation with no evidence under it.
+    if not candidates and not _missing(recommendation.get("winner")):
+        errors.append(
+            f"recommendation.winner names {recommendation.get('winner')!r} while the shortlist "
+            f"carries no candidates at all. There is nothing behind the recommendation -- no "
+            f"cost, no eligibility, no evidence the traveller can check.")
+        return
+    if not candidates:
+        return
 
     for role in ("winner", "runner_up"):
         named = recommendation.get(role)
-        if _unfilled(named):
+        if _missing(named):
             continue
         candidate = by_name.get(str(named).strip())
         if candidate is None:
@@ -360,9 +384,9 @@ def check_no_infeasible_winner(doc: dict, errors: list[str], notes: list[str]) -
         eligibility = _obj(candidate.get("eligibility"))
         if not [f for f in _seq(eligibility.get("failed_constraints")) if f]:
             continue
-        if _num(_obj(candidate.get("fit")).get("score")) is None:
+        if _number(_obj(candidate.get("fit")).get("score")) is None:
             continue
-        declared = (not _unfilled(_obj(candidate.get("fit")).get("conditional_on_relaxation"))
+        declared = (not _missing(_obj(candidate.get("fit")).get("conditional_on_relaxation"))
                     or _fold(_name(candidate)) in conditional_names)
         if not declared:
             errors.append(
@@ -374,7 +398,7 @@ def check_no_infeasible_winner(doc: dict, errors: list[str], notes: list[str]) -
     feasible = [c for c in candidates
                 if str(_obj(c.get("eligibility")).get("hard_filter_status") or "").strip().casefold()
                 in PASSING_STATUSES]
-    if not feasible and not _unfilled(recommendation.get("winner")):
+    if not feasible and not _missing(recommendation.get("winner")):
         errors.append(
             "no candidate passed the hard filters, yet the shortlist still names a winner. An "
             "empty feasible set is an outcome, not a scoring error: report the constraint "
@@ -397,7 +421,7 @@ def check_declared_enums(doc: dict, errors: list[str], notes: list[str]) -> None
         return
     state = _obj(doc.get("outcome")).get("state")
     allowed_states = SHORTLIST_ENUMS.get("outcome_state", [])
-    if _unfilled(state):
+    if _missing(state):
         errors.append(
             "outcome.state is missing. It is required on every Discovery artifact, and not "
             "because bookkeeping is nice: every rule about constraint conflicts keys on it, so "
@@ -437,7 +461,7 @@ def check_settled_status_has_its_reason(doc: dict, errors: list[str], notes: lis
         eligibility = _obj(candidate.get("eligibility"))
         if str(eligibility.get("hard_filter_status") or "").strip() != "not_pursued":
             continue
-        if _unfilled(eligibility.get("not_pursued_reason")):
+        if _missing(eligibility.get("not_pursued_reason")):
             errors.append(
                 f"candidates[{index}] ({_name(candidate)}) is marked not_pursued with no "
                 f"not_pursued_reason. State what was skipped and why it could not change the "
@@ -456,7 +480,7 @@ def check_budget_fit_is_computed(doc: dict, errors: list[str], notes: list[str])
     owe a full researched range for it -- that is the research-a-rejected-candidate-twice cost
     the research budget exists to prevent.
     """
-    cap = _num(_obj(doc.get("trip_context")).get("budget_cap_per_person"))
+    cap = _number(_obj(doc.get("trip_context")).get("budget_cap_per_person"))
     for index, candidate in enumerate(_seq(doc.get("candidates"))):
         candidate = _obj(candidate)
         cost = _obj(candidate.get("cost_estimate"))
@@ -464,7 +488,7 @@ def check_budget_fit_is_computed(doc: dict, errors: list[str], notes: list[str])
         status = str(_obj(candidate.get("eligibility")).get("hard_filter_status") or "").strip()
         fit = str(cost.get("budget_fit") or "unknown").strip()
         if status in PASSING_STATUSES and fit in ("", "unknown"):
-            if _unfilled(cost.get("budget_fit_unpriced_reason")):
+            if _missing(cost.get("budget_fit_unpriced_reason")):
                 errors.append(
                     f"{where} passed the hard filters while its budget_fit is still 'unknown'. "
                     f"Budget is one of those filters, so it was either measured -- say within, "
@@ -473,7 +497,7 @@ def check_budget_fit_is_computed(doc: dict, errors: list[str], notes: list[str])
                     f"question without a researched range.")
         if fit in ("within", "tight"):
             missing = [f for f in ("total_low", "total_high", "as_of")
-                       if _unfilled(cost.get(f)) and _num(cost.get(f)) is None]
+                       if _missing(cost.get(f)) and _number(cost.get(f)) is None]
             if not _seq(cost.get("included_categories")):
                 missing.append("included_categories")
             if missing:
@@ -482,7 +506,7 @@ def check_budget_fit_is_computed(doc: dict, errors: list[str], notes: list[str])
                     f"{'is' if len(missing) == 1 else 'are'} empty. That verdict is a comparison "
                     f"between a researched figure and the cap; without the figure it is an "
                     f"opinion wearing the word 'within'.")
-            low = _num(cost.get("total_low"))
+            low = _number(cost.get("total_low"))
             if cap is not None and low is not None and low > cap:
                 errors.append(
                     f"{where} says budget_fit {fit!r} while its own total_low {low} exceeds the "
@@ -515,7 +539,7 @@ def check_price_figures_are_current(doc: dict, errors: list[str], notes: list[st
                 f"reader whether the figure is still true, and it is the first thing a comparison "
                 f"between two candidates depends on.")
             continue
-        if not _unfilled(cost.get("as_of_exception_reason")):
+        if not _missing(cost.get("as_of_exception_reason")):
             continue
         priced_day = dt.date.fromisoformat(as_of)
         if priced_day > document_day:
@@ -564,7 +588,7 @@ def check_conflict_agrees_with_the_pool(doc: dict, errors: list[str], notes: lis
                 f"same empty pass set; only one of them justifies asking the traveller to give up "
                 f"a requirement. Finish those, mark them not_pursued with a reason, or use "
                 f"outcome.state 'blocked' with a blocking_fact.")
-        if not _unfilled(_obj(doc.get("recommendation")).get("winner")):
+        if not _missing(_obj(doc.get("recommendation")).get("winner")):
             errors.append(
                 "outcome.state is 'constraint_conflict' but recommendation.winner still names a "
                 "destination. A conditional option belongs in conditional_options -- an offer is "
@@ -574,7 +598,7 @@ def check_conflict_agrees_with_the_pool(doc: dict, errors: list[str], notes: lis
                 "outcome.state is 'constraint_conflict' with no outcome.blocking_constraints. "
                 "Name the smallest conflicting set; 'nothing works' is not something a traveller "
                 "can act on.")
-        if _unfilled(outcome.get("minimum_relaxation")):
+        if _missing(outcome.get("minimum_relaxation")):
             errors.append(
                 "outcome.state is 'constraint_conflict' with no outcome.minimum_relaxation. Say "
                 "which single constraint, relaxed, most likely restores feasibility.")
@@ -598,7 +622,7 @@ def check_conflict_agrees_with_the_pool(doc: dict, errors: list[str], notes: lis
                     + ". Either add them to outcome.blocking_constraints or the traveller is "
                       "being asked to relax a constraint that removed only part of the pool.")
 
-    if state == "blocked" and _unfilled(outcome.get("blocking_fact")):
+    if state == "blocked" and _missing(outcome.get("blocking_fact")):
         errors.append(
             "outcome.state is 'blocked' with no outcome.blocking_fact. Name what could not be "
             "established; 'blocked' without it is indistinguishable from giving up.")
@@ -629,21 +653,21 @@ def constraint_roster(intake: dict) -> list[tuple[str, str]]:
     """
     roster: list[tuple[str, str]] = []
     origin = _obj(intake.get("origin"))
-    if not _unfilled(origin.get("max_one_way_travel_time")):
+    if not _missing(origin.get("max_one_way_travel_time")):
         roster.append(("origin.max_one_way_travel_time",
                        str(origin["max_one_way_travel_time"])))
     for index, need in enumerate(_seq(_obj(intake.get("party")).get("mobility_or_access_needs"))):
-        if not _unfilled(need):
+        if not _missing(need):
             roster.append((f"party.mobility_or_access_needs[{index}]", str(need)))
     feasibility = _obj(intake.get("feasibility"))
     for index, pref in enumerate(_seq(feasibility.get("climate_preferences"))):
-        if _unfilled(pref) or any(s in str(pref) for s in CLIMATE_SENTINELS):
+        if _missing(pref) or any(s in str(pref) for s in CLIMATE_SENTINELS):
             continue
         roster.append((f"feasibility.climate_preferences[{index}]", str(pref)))
     for index, need in enumerate(_seq(feasibility.get("dietary_or_religious_needs"))):
-        if not _unfilled(need):
+        if not _missing(need):
             roster.append((f"feasibility.dietary_or_religious_needs[{index}]", str(need)))
-    if _num(_obj(intake.get("budget")).get("hard_cap_amount")) is not None:
+    if _number(_obj(intake.get("budget")).get("hard_cap_amount")) is not None:
         roster.append(("budget.hard_cap_amount",
                        str(_obj(intake.get("budget")).get("hard_cap_amount"))))
     scope = str(_obj(intake.get("trip_geography")).get("scope") or "").strip()
@@ -661,7 +685,7 @@ def _declared_ids(bucket) -> set[str]:
     """
     found = set()
     for entry in _seq(bucket):
-        if isinstance(entry, dict) and not _unfilled(entry.get("constraint_id")):
+        if isinstance(entry, dict) and not _missing(entry.get("constraint_id")):
             found.add(str(entry["constraint_id"]).strip())
     return found
 
@@ -715,7 +739,7 @@ def check_constraint_coverage(doc: dict, errors: list[str], notes: list[str],
                 f"confirmed, failed, unresolved or not_applicable_constraints.")
         for entry in _seq(eligibility.get("not_applicable_constraints")):
             entry = _obj(entry)
-            if not _unfilled(entry.get("constraint_id")) and _unfilled(entry.get("reason")):
+            if not _missing(entry.get("constraint_id")) and _missing(entry.get("reason")):
                 errors.append(
                     f"{where} marks {entry.get('constraint_id')!r} not applicable with no reason. "
                     f"The reason is the claim; without it the bucket is a way to switch coverage "

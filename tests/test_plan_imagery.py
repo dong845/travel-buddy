@@ -119,6 +119,59 @@ def main() -> int:
           len(points) == 2 and abs(points[0][1] - 39.9510) < 1e-4
           and abs(points[0][2] - 116.4470) < 1e-4, str(points))
 
+    # --- generalization: everything above was built against one Spanish coastal city ---------
+    # A day that crosses the 180th meridian put two stops 215 km apart at opposite ends of a
+    # 320px drawing, because longitude was interpolated raw. The distance caption stayed correct
+    # -- haversine does not care -- so the map rendered perfectly and was inside out. Fiji,
+    # Kiribati, Chukotka and the Chatham Islands all live there.
+    import re as _re  # noqa: PLC0415
+
+    def x_positions(points: list[tuple[float, float]]) -> list[float]:
+        segments = [{"verified_map_url":
+                     f"https://www.google.com/maps/dir/?api=1&origin={a[0]},{a[1]}"
+                     f"&destination={b[0]},{b[1]}&travelmode=transit"}
+                    for a, b in zip(points, points[1:])]
+        drawing = visuals.day_map(
+            {"stops_in_order": [f"S{i}" for i in range(len(points))], "segments": segments},
+            "t", "c")
+        return [float(m) for m in _re.findall(r'<circle cx="([\d.]+)"', drawing)]
+
+    across = x_positions([(-17.7134, 178.0650), (-17.7500, -179.9000), (-17.7300, 179.9500)])
+    check("a day crossing the antimeridian is not drawn inside out",
+          len(across) == 3 and abs(across[0] - across[1]) > abs(across[1] - across[2]),
+          f"215 km apart drew closer than 27 km apart: {across}")
+
+    # The southern hemisphere, the equator and 69°N are all ordinary cases the one test city
+    # never exercised.
+    for label, points in (("equator", [(-0.18, -78.47), (-0.22, -78.51)]),
+                          ("69 north", [(69.6492, 18.9553), (69.6800, 18.9900)]),
+                          ("southern", [(-41.2866, 174.7756), (-41.2924, 174.7787)])):
+        check(f"a day at {label} still draws", len(x_positions(points)) == 2, label)
+
+    # A single stop has no segment, so no coordinates, so no map -- rather than a figure with one
+    # dot and an invented scale.
+    check("a one-stop day draws nothing",
+          visuals.day_map({"stops_in_order": ["A"], "segments": []}, "t", "c") == "", "")
+
+    # Names arrive in whatever scripts the traveller and the destination use.
+    for name, expected in (
+            ("サンタバルバラ城（Castillo de Santa Bárbara）", "Castillo de Santa Bárbara"),
+            ("Санкт-Петербург (Saint Petersburg)", "Saint Petersburg"),
+            ("Castillo de Santa Bárbara (Santa Bàrbara Castle)", "Santa Bàrbara Castle")):
+        check(f"the bracketed local name is extracted from {name[:12]}",
+              expected in imagery.name_variants(name), str(imagery.name_variants(name)))
+
+    # Rows are unpacked defensively: a malformed row must cost a figure, never a traceback.
+    for builder, argument in ((visuals.walking_bars, [None]),
+                              (visuals.budget_bar, [None]),
+                              (visuals.day_timeline, [None])):
+        try:
+            builder(argument, *(([30, "t", "c", "l"]) if builder is visuals.walking_bars
+                                else ([1, None, "t", "c"]) if builder is visuals.budget_bar
+                                else (["t", "c"])))
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{builder.__name__} raised on a malformed row: {exc}")
+
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:

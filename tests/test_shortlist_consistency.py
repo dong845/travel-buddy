@@ -349,6 +349,20 @@ def main() -> int:
     expect_fail("a candidate the traveller had excluded", doc, "which the traveller excluded",
                 intake=True)
 
+    # An early return added for safety created the loudest version of the defect this file exists
+    # for: a shortlist naming a winner while carrying no candidates passed silently, because the
+    # loop that checks the winner had nothing to iterate.
+    doc = copy.deepcopy(base)
+    doc["candidates"] = []
+    expect_fail("a winner named over an empty candidate pool", doc, "no candidates at all")
+
+    # And an empty pool with no winner stays legal: a constrained run that excluded everything
+    # says so through outcome.state, and demanding candidates there would fire on correct work.
+    doc = copy.deepcopy(base)
+    doc["candidates"] = []
+    doc["recommendation"] = {"winner": None, "runner_up": None, "why_not_runner_up": None}
+    expect_ok("an empty pool that claims no winner", doc)
+
     # Malformed input is a finding, never a traceback.
     code, out = run({"candidates": "not a list", "trip_context": None})
     if "Traceback" in out:

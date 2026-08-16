@@ -2780,7 +2780,19 @@ def check_prose_texture(plan: dict, errors: list[str], notes: list[str]) -> None
                      f"across different days. Sometimes honest, often a day nobody wrote: "
                      f"{'; '.join(cross_day[:3])}")
 
-    dashed = [where for where, text, _ in narrative if "——" in text or " — " in text]
+    # Every dash a writer of any language actually reaches for. The first version matched the
+    # Chinese —— and the typographic em dash only, so an English plan written with the ASCII "--"
+    # or an en dash escaped the rule completely -- the tell is the sentence shape, and the shape
+    # does not change with the codepoint.
+    def leans_on_a_dash(text: str) -> bool:
+        # A dash between digits is a RANGE -- "09:00–18:00", "20–35 minutes", "2014-07-04" -- and
+        # is correct typography, not a sentence shape. Counting those fired on an opening-hours
+        # line, which is exactly the false positive that gets a style rule routed around. Only a
+        # dash joining clauses counts, so ranges are removed before looking.
+        prose = re.sub(r"\d\s*[—–-]+\s*\d", " ", text)
+        return bool(re.search(r"——|\s[—–]\s|\s--\s|[—–]", prose))
+
+    dashed = [where for where, text, _ in narrative if leans_on_a_dash(text)]
     if len(dashed) > max(2, int(len(narrative) * 0.35)):
         errors.append(
             f"{len(dashed)} of {len(narrative)} narrative fields build their sentence around a "

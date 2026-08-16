@@ -2686,6 +2686,36 @@ def main() -> int:
     day(p, 1)["focus"] = "市场开到 15:00，城堡冬季开到 18:00——两件事排在同一天"
     expect_ok("a dash used once, where it earns its place", p)
 
+    # 42. The prose rule was built and measured on Chinese plans, so it recognised —— and the
+    # typographic em dash and nothing else. An English plan written with the ASCII "--" or an en
+    # dash escaped it entirely: the tell is the sentence shape and the shape does not change with
+    # the codepoint.
+    def every_field(text: str) -> dict:
+        p = copy.deepcopy(base)
+        for index, d in enumerate(p["days"]):
+            d["focus"] = f"{text} ({index}a)"
+            d["contingency"] = f"{text} ({index}b)"
+            d["route"]["route_logic"] = f"{text} ({index}c)"
+            d["route"]["fallback_plan"] = f"{text} ({index}d)"
+        return p
+
+    for label, text in (
+            ("an ASCII double hyphen",
+             "The market shuts at 15:00 and the castle at 18:00 -- both land on one day"),
+            ("an en dash",
+             "The market shuts at 15:00 and the castle at 18:00 – both land on one day")):
+        expect_fail(f"one sentence shape built with {label}", every_field(text),
+                    "one shape for everything")
+
+    # And the narrowing that rule needed immediately: a dash BETWEEN DIGITS is a range, which is
+    # correct typography rather than a sentence shape. Counting those fired on an opening-hours
+    # line, which is precisely the false positive that gets a style rule routed around.
+    for label, text in (
+            ("opening hours", "Open 09:00–18:00 in winter and 09:00–20:00 in summer, shut Mondays"),
+            ("a duration range", "Bus 20-35 minutes to the centre, runs 06:20-22:30, fare EUR 4.60"),
+            ("hyphenated words", "The state-of-the-art lift is well-signposted and step-free")):
+        expect_ok(f"a dash inside {label} is not a sentence shape", every_field(text))
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 
