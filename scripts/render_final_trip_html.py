@@ -554,6 +554,39 @@ def localize_enum_values(page: str, labels: dict[str, str]) -> str:
     modes = {"self-drive": labels["mode_self_drive"], "public-transit": labels["mode_public_transit"]}
     categories = {value: labels[f"cat_{value}"] for value in BUDGET_CATEGORIES}
 
+    # The budget figure prints its own legend and alt text, and both were built from the raw
+    # category keys while the breakdown table beside them was translated. A zh page therefore
+    # read "市内交通: €47–62" in the table and "local_transport 54" in the chart directly above
+    # it -- the same fact in two languages, from one untranslated call site.
+    #
+    # Scoped to that one figure rather than applied page-wide, which is not tidiness. An
+    # unscoped version of this rewrote author prose: a note reading "分类如下: food 120;
+    # accommodation 300; local_transport 54" came back with the first two translated and the
+    # third left alone, because only the first two happened to be followed by a semicolon.
+    # Half a sentence in each language is worse than the defect being fixed.
+    category_alternation = "|".join(sorted(BUDGET_CATEGORIES, key=len, reverse=True))
+
+    def localize_budget_figure(figure: str) -> str:
+        # Inside the figure every "<category> <number>" IS a legend entry -- in the pv-key spans
+        # and again in the svg aria-label/<title>, where a screen reader reads it aloud.
+        # Two prefixes, because the same token is punctuated differently in the two places it
+        # appears: `">flight 225` opens a legend span with no space, while `: flight 225;`
+        # separates entries inside the aria-label. A single lookbehind cannot cover both -- it
+        # would have to be variable-width -- and the first version silently translated only the
+        # aria-label while the visible legend beside it stayed English.
+        return re.sub(
+            r'(">|[>;:] )(' + category_alternation + r')(?= \d)',
+            lambda match: f"{match.group(1)}{categories[match.group(2)]}",
+            figure,
+        )
+
+    page = re.sub(
+        r'<figure class="pv-figure pv-budget">.*?</figure>',
+        lambda match: localize_budget_figure(match.group(0)),
+        page,
+        flags=re.S,
+    )
+
     page = re.sub(
         r'(<p class="eyebrow">Plan status · )(' + "|".join(BOOKING_STATES) + r')(</p>)',
         lambda match: f"{match.group(1)}{states[match.group(2)]}{match.group(3)}",

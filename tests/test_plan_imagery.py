@@ -56,6 +56,83 @@ def main() -> int:
           not imagery._relevant("阿利坎特", "阿利坎特-埃爾切機場",
                                 "阿利坎特（西班牙，瓦伦西亚自治区）"), "")
 
+    # --- the fall-through guard, across scripts and past the stopword list ----------------
+    # Forms are built here rather than by destination_forms(), which asks Wikipedia for the
+    # Latin title; the rule itself is what this file is allowed to assert.
+    zh_forms = [imagery._tokens_raw("拉纳卡"), imagery._tokens_raw("Larnaca")]
+    en_forms = [imagery._tokens_raw("Chengdu")]
+    # Measured on a delivered zh plan: the anchor 拉纳卡市政市场 has no article of its own, fell
+    # through to *Larnaca*, and was captioned with a photograph of the Finikoudes promenade --
+    # a different place, under the market's heading. The guard existed and could not fire,
+    # because a Latin title is never a subset of a Chinese one.
+    check("a zh plan refuses its own destination article",
+          imagery.is_destination_article("Larnaca", zh_forms), "")
+    check("a zh plan refuses the destination article in its own script",
+          imagery.is_destination_article("拉纳卡", zh_forms), "")
+    # And the repair must not swallow real articles. `castle`, `church`, `museum`, `market` and
+    # `beach` are all stopwords, so a stopword-stripped comparison collapses every "<City> <Type>"
+    # article to the bare city and drops its photograph -- which it did, to Larnaca Castle.
+    for title in ("Larnaca Castle", "Larnaca Salt Lake", "Larnaca Municipal Market"):
+        check(f"'{title}' is its own subject, not the destination",
+              not imagery.is_destination_article(title, zh_forms), "")
+    check("an en plan still refuses its own destination article",
+          imagery.is_destination_article("Chengdu", en_forms), "")
+    check("an en plan keeps a '<City> <Type>' article",
+          not imagery.is_destination_article("Chengdu Museum", en_forms), "")
+    check("an empty title is not treated as a fall-through",
+          not imagery.is_destination_article("", zh_forms), "")
+
+    # The forms themselves, with the one network call stubbed. Asserting the guard while
+    # hand-building its input tests the consumer and leaves the producer uncovered -- and the
+    # producer is where the fix lives: without the Latin form the guard cannot fire on a zh plan
+    # at all. Verified by mutation: deleting the latin_title branch keeps every check above green.
+    original_latin_title = imagery.latin_title
+    try:
+        imagery.latin_title = lambda title, lang: "Larnaca" if title == "拉纳卡" else None
+        forms = imagery.destination_forms("拉纳卡")
+        check("destination_forms yields the plan's script and the Latin one",
+              {"拉纳卡"} in forms and {"larnaca"} in forms, repr(forms))
+        check("the guard fires on a Latin article through the real forms",
+              imagery.is_destination_article("Larnaca", forms), repr(forms))
+        check("...and still spares a '<City> <Type>' article",
+              not imagery.is_destination_article("Larnaca Castle", forms), repr(forms))
+        imagery.latin_title = lambda title, lang: None
+        offline = imagery.destination_forms("拉纳卡")
+        check("an unreachable Wikipedia degrades to one form instead of raising",
+              offline == [{"拉纳卡"}], repr(offline))
+        check("a destination that is only whitespace yields no forms at all",
+              imagery.destination_forms("   ") == [], "")
+    finally:
+        imagery.latin_title = original_latin_title
+
+    # --- what may open the page ----------------------------------------------------------
+    # A hero is a photograph OF a place. "Larnaca 01-2017 img37 LCA Airport.jpg" names the city
+    # first, passes the position rule, and was selected as a real trip's cover photograph.
+    larnaca = imagery._tokens("Larnaca")
+    alicante = imagery._tokens("Alicante")
+    check("a hero refuses a terminal that names the city first",
+          not imagery.file_names_the_subject("Larnaca 01-2017 img37 LCA Airport.jpg",
+                                             larnaca, is_hero=True), "")
+    check("a hero refuses a single monument",
+          not imagery.file_names_the_subject("Larnaca 01-2017 img01 Larnaca Fort.jpg",
+                                             larnaca, is_hero=True), "")
+    # The repair must stay narrower than "no other word may appear". That version rejected the
+    # España case below too, which turns the Quality-image upgrade off for every destination and
+    # silently returns the feature to the plain lead images it was built to replace.
+    check("a hero still accepts a country-qualified view of the place",
+          imagery.file_names_the_subject("Vista de Alicante, España, 2014-07-04, DD 49.JPG",
+                                         alicante, is_hero=True), "")
+    check("a hero accepts a named quarter of the place",
+          imagery.file_names_the_subject("Larnaca 01-2017 img14 Finikoudes.jpg",
+                                         larnaca, is_hero=True), "")
+    # An anchor's subject IS a facility, so the same file is fine under a fort's own heading.
+    check("an anchor accepts the facility a hero refused",
+          imagery.file_names_the_subject("Larnaca 01-2017 img01 Larnaca Fort.jpg",
+                                         imagery._tokens("Larnaca Castle"), is_hero=False), "")
+    check("position still separates a church one town over",
+          not imagery.file_names_the_subject("Iglesia de San Miguel Arcángel, Altea, Alicante.jpg",
+                                             alicante, is_hero=False), "")
+
     # --- names a human wrote, made searchable -------------------------------------------
     # Plans name places for a reader: "圣巴巴拉城堡（Castillo de Santa Bárbara）". Searching that
     # whole string finds nothing in any Wikipedia, which is why the first real run verified zero

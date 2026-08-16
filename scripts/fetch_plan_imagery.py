@@ -74,6 +74,16 @@ STOPWORDS = {"the", "of", "de", "del", "la", "el", "les", "des", "du", "and", "i
              "city", "town", "old", "new", "square", "street", "beach", "park", "market",
              "museum", "church", "castle", "island", "port", "centre", "center"}
 
+# A destination hero is a photograph OF a place. These name a building inside one, so a file
+# whose name carries any of them depicts a rival subject however well it names the city first --
+# measured, "Larnaca 01-2017 img37 LCA Airport.jpg" was selected as a Larnaca trip's cover.
+# Only the hero consults this: an anchor's subject IS a facility, which is the whole point of it.
+FACILITY_WORDS = {"airport", "aeropuerto", "aeroport", "aeroporto", "flughafen", "luchthaven",
+                  "terminal", "station", "bahnhof", "estacion", "stadium", "arena", "hospital",
+                  "university", "mall", "hotel", "museum", "cathedral", "catedral", "mosque",
+                  "church", "iglesia", "castle", "castillo", "fort", "fortress", "monument",
+                  "statue", "interior", "runway", "platform"}
+
 
 def _request(url: str, *, binary: bool = False, tries: int = 3):
     for attempt in range(tries):
@@ -101,9 +111,75 @@ def _km(a: tuple[float, float], b: tuple[float, float]) -> float:
     return 6371.0 * 2 * math.asin(math.sqrt(h))
 
 
+def _tokens_raw(text: str) -> set[str]:
+    """Every word, stopwords kept.
+
+    Used only to ask "is this article the destination itself?". Stripping stopwords for that
+    question is wrong: the generic half of a title is exactly what distinguishes "Larnaca Castle"
+    from "Larnaca", and with `castle`, `church`, `museum`, `market` and `beach` all on the
+    stopword list, every "<City> <Type>" article collapses to the bare city name and reads as a
+    fall-through to it.
+    """
+    return set(re.findall(r"[^\W\d_]{3,}", str(text or "").casefold(), flags=re.UNICODE))
+
+
 def _tokens(text: str) -> set[str]:
-    words = re.findall(r"[^\W\d_]{3,}", str(text or "").casefold(), flags=re.UNICODE)
-    return {w for w in words if w not in STOPWORDS}
+    return {w for w in _tokens_raw(text) if w not in STOPWORDS}
+
+
+def destination_forms(destination: str) -> list[set[str]]:
+    """Every script the destination's own article could be titled in.
+
+    Module-level so the rule below has a test that exercises *it* rather than a copy of it.
+    """
+    forms = [_tokens_raw(destination)]
+    latin = latin_title(destination, "zh")
+    if latin:
+        forms.append(_tokens_raw(latin))
+    return [form for form in forms if form]
+
+
+def is_destination_article(page_title: str, forms: list[set[str]]) -> bool:
+    """Did this anchor's search fall through to the destination's own article?
+
+    Raw tokens on both sides, and both of those choices are load-bearing:
+
+    - **Stopwords kept.** With `castle`, `church`, `museum`, `market` and `beach` all stopwords,
+      `_tokens("Larnaca Castle")` is `{"larnaca"}` -- indistinguishable from the city, so the
+      castle's own article reads as a fall-through and its photograph is dropped.
+    - **Every script.** The plan writes the destination in the traveller's language. On a Chinese
+      plan `_tokens_raw("Larnaca") <= _tokens_raw("拉纳卡")` is False for the same city, so this
+      guard passed everything: measured, the anchor 拉纳卡市政市场 took the article *Larnaca* and
+      was captioned with a photograph of the Finikoudes promenade.
+    """
+    tokens = _tokens_raw(page_title)
+    return bool(tokens) and any(tokens <= form for form in forms)
+
+
+def file_names_the_subject(filename: str, subject_tokens: set[str], is_hero: bool) -> bool:
+    """Is this Commons file about the subject, or merely filed near it?
+
+    A different test from the one used on article titles, and using that one here was the bug:
+    it demands the title introduce no new words, which is right for "Alicante Airport" and
+    wrong for "Vista de Alicante, España, 2014-07-04, DD 49.JPG" -- a file name is descriptive
+    by nature, so every candidate was rejected and the destination kept its plain lead image.
+
+    Position carries the meaning instead. Photographers name a file for its subject first:
+    "Vista de Alicante, ..." is of Alicante, while "Iglesia de San Miguel Arcángel, Altea,
+    Alicante, ..." is a church in a town fifty kilometres away that happens to share a province.
+
+    Position alone, though, cannot separate "Vista de Alicante, España" from "Larnaca 01-2017
+    img37 LCA Airport": both open with the place name, and the second won a real trip's cover
+    photograph. The tempting repair -- "a hero's file name may introduce no other word" -- also
+    rejects the España case this heuristic exists to accept, which turns the upgrade off
+    everywhere and leaves every destination on its plain lead image. So only a named FACILITY
+    disqualifies a hero: a country or a photographer's initials qualify the place, a terminal
+    replaces it. Anchors are exempt, because a facility is exactly what they depict.
+    """
+    words = re.findall(r"[^\W\d_]{3,}", filename.casefold(), flags=re.UNICODE)
+    if not subject_tokens & set(words[:4]):
+        return False
+    return not (is_hero and set(words) & FACILITY_WORDS)
 
 
 def _relevant(query: str, page_title: str, place_name: str) -> bool:
@@ -244,21 +320,7 @@ def better_candidate(subject: str, place_name: str, prefer_landscape: bool) -> s
     subject_tokens = _tokens(subject)
 
     def names_the_subject(filename: str) -> bool:
-        """Is this file about the subject, or merely filed under its province?
-
-        A different test from the one used on article titles, and using that one here was the bug:
-        it demands the title introduce no new words, which is right for "Alicante Airport" and
-        wrong for "Vista de Alicante, España, 2014-07-04, DD 49.JPG" -- a file name is descriptive
-        by nature, so every candidate was rejected and the destination kept its plain lead image.
-
-        Position carries the meaning instead. Photographers name a file for its subject first:
-        "Vista de Alicante, ..." is of Alicante, while "Iglesia de San Miguel Arcángel, Altea,
-        Alicante, ..." is a church in a town fifty kilometres away that happens to share a
-        province. Requiring the subject early in the name separates them.
-        """
-        words = re.findall(r"[^\W\d_]{3,}", filename.casefold(), flags=re.UNICODE)
-        head = words[:4]
-        return bool(subject_tokens & set(head))
+        return file_names_the_subject(filename, subject_tokens, is_hero=prefer_landscape)
 
     for category in ("Quality images", "Featured pictures"):
         data = _api(COMMONS_API, {
@@ -395,6 +457,14 @@ def fetch(plan: dict, limit: int, dry_run: bool = False) -> tuple[dict, list[str
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
         matches = list(pool.map(lambda slot: (slot, resolve_slot(slot, languages)), wanted))
 
+    # The destination as the traveller's plan writes it, plus its Latin form. The fall-through
+    # guard below compares an article title against the destination name, and on a Chinese plan
+    # those are never the same script: `_tokens("Larnaca") <= _tokens("拉纳卡")` is False for the
+    # same city, so the guard silently passed everything. Measured on a real zh plan, the anchor
+    # "拉纳卡市政市场" resolved to the article "Larnaca" and was captioned with a photograph of the
+    # Finikoudes promenade -- a different place, under the market's heading.
+    forms = destination_forms(str((plan.get("trip") or {}).get("destination") or ""))
+
     imagery: dict[str, dict] = {}
     used_files: set[str] = set()
     for slot, match in matches:
@@ -404,7 +474,7 @@ def fetch(plan: dict, limit: int, dry_run: bool = False) -> tuple[dict, list[str
         # The generic-fallback case, seen on two of five real anchors: the search fell through to
         # the destination's own article, which would have put one city photo under three
         # different headings.
-        if slot["key"] != "hero" and _tokens(match["page"]) <= _tokens(slot["place"]):
+        if slot["key"] != "hero" and is_destination_article(match["page"], forms):
             notes.append(f"{slot['label']}: search fell back to the destination article — no image")
             continue
         if match["file"] in used_files:
