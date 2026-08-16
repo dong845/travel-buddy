@@ -228,6 +228,35 @@ rather than pattern-matched: deciding from a plan's own fields whether it contai
 crowd or a long transfer needs a different fact for every avoidance a traveller might write, while
 asking how each was honoured needs none.
 
+### Write the page like a person who went there, not like a form being filled in
+
+The prose in the delivered plans is already specific and reason-led — no "vibrant tapestry", no
+"nestled in the heart of", every rationale tied to a real opening time or the traveller's own
+walking limit. It still reads generated, and measuring it showed why. The tell is not vocabulary,
+it is **sameness**.
+
+- **Half the narrative fields were built as fact — dash — significance.** Measured: 50% of them.
+  Wikipedia's [Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing)
+  lists em-dash overuse for exactly this reason, alongside the rule of three, "not only X but
+  also Y", and copula avoidance ("serves as", "boasts", "stands as" where "is" was the word).
+  The dash is a good device; it is the *default sentence shape* that reads mechanical.
+  `check_plan_consistency.py` refuses a plan where more than 35% of narrative fields lean on it.
+- **The same sentence appeared twice under two headings.** `focus` and `route_logic` came back
+  byte-identical on 4 of 5 days of one shipped plan and 5 of 8 of another, and `fallback_plan`
+  duplicated `contingency` on nearly every day. Each field alone looked filled in. Now refused
+  within a day; across days it is a note, because two days can honestly share a wet-weather
+  fallback.
+
+So: **vary the shape.** Some rationales are one blunt sentence. Some are two. Some name the
+constraint first and the consequence second, some the reverse, and some just state a fact and
+stop — not every line owes the reader a moral. Cut the closing flourish that explains why what
+you just said matters; if it needed explaining, the sentence was wrong. Where two fields want the
+same sentence, one of them has nothing to say, so leave it out rather than pad it.
+
+What not to do: swap the banned words for synonyms. A word list is satisfied by "bustling" →
+"lively" while the writing stays exactly as hollow, and it fires on the traveller's own phrasing.
+Structure is what these checks can see honestly, and structure is what actually reads wrong.
+
 ### Illustrate the page, but never with a picture you cannot vouch for
 
 The page is read on a phone in a city the traveller does not know, and it was 96KB of unbroken

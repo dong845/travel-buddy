@@ -2643,6 +2643,49 @@ def main() -> int:
     p["destination_experience_anchors"][0]["satisfies_preference"] = None
     expect_ok("a traveller who stated no preferences", p)
 
+    # 41. How the page reads, which no gate had ever looked at. Two faults, both measured on
+    # delivered plans rather than imagined -- and neither is purple prose: the writing in those
+    # plans is specific and reason-led, with no "vibrant tapestry" anywhere, and it still reads
+    # generated.
+    #
+    # The page printing one sentence twice. `focus` and `route_logic` came back byte-identical on
+    # 4 of 5 days of one shipped plan and 5 of 8 of another, and `fallback_plan` duplicated
+    # `contingency` on nearly every day of the first. Each field alone was filled in and sensible,
+    # so nothing fired.
+    p = copy.deepcopy(base)
+    day(p, 1)["route"]["route_logic"] = day(p, 1)["focus"]
+    expect_fail("one sentence printed under two headings on the same card", p, "repeats")
+
+    # Across days it must stay quiet: two days can honestly carry the same wet-weather fallback,
+    # and an error there fires on correct work -- it fired on a test that clones a day on purpose
+    # to exercise replanning.
+    p = copy.deepcopy(base)
+    p["days"].append(copy.deepcopy(day(p, 1)))
+    p["days"][1]["number"] = 2
+    p["days"][1]["date"] = "2026-09-29"
+    p["trip"]["end_date"] = "2026-09-29"
+    code, out = run(p)
+    if "repeats" in out:
+        failures.append(f"identical prose on two different days must not be an error\n{out}")
+
+    # One sentence shape used for everything. The dash is not the fault; the monotony is, and
+    # Wikipedia's "Signs of AI writing" lists em-dash overuse for exactly that reason. Measured at
+    # 50% of narrative fields on a shipped plan, so the ceiling is 35% -- available where it earns
+    # its place, refused as the default way a sentence is built.
+    p = copy.deepcopy(base)
+    for index, d in enumerate(p["days"]):
+        d["focus"] = f"第 {index + 1} 天中央市场开到 15:00、城堡开到 18:00——把两件事排在同一天走完"
+        d["contingency"] = f"第 {index + 1} 天遇雨改走有顶的拱廊——今天没有任何预约会因此作废"
+        d["route"]["route_logic"] = f"第 {index + 1} 天市场 15:00 收市而城堡不闭馆——所以先市场后城堡"
+        d["route"]["fallback_plan"] = f"第 {index + 1} 天若电梯停运则改为海滩与长廊——都不依赖开门时间"
+    expect_fail("every rationale built as fact-dash-significance", p, "one shape for everything")
+
+    # And a plan that uses the dash sparingly is fine, or the rule would just ban a punctuation
+    # mark rather than the habit.
+    p = copy.deepcopy(base)
+    day(p, 1)["focus"] = "市场开到 15:00，城堡冬季开到 18:00——两件事排在同一天"
+    expect_ok("a dash used once, where it earns its place", p)
+
     failures += constraints_panel_cases(base)
     failures += cli_contract_cases(base)
 

@@ -53,8 +53,16 @@ COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 # Measured, not guessed: eight concurrent requests to the Wikipedia API returned HTTP 429. Three
 # with backoff completed six lookups in 0.9s, which is fast enough that the ceiling costs nothing.
 MAX_CONCURRENCY = 3
-THUMB_WIDTH = 800
+# Sized to how each slot is actually displayed rather than to one number. The hero runs the full
+# 1120px content width, so an 800px thumbnail was being upscaled and looked soft -- the first
+# thing a reader noticed. Anchor cards sit in a ~250-350px grid, where 640 is already generous
+# and anything larger is bytes nobody sees.
+THUMB_WIDTH = 640
+HERO_THUMB_WIDTH = 1600
+# The hero is deliberately allowed more: it is one image, shown large, and the
+# difference between 400KB and 900KB there is the difference between sharp and soft.
 MAX_IMAGE_BYTES = 400_000
+HERO_MAX_BYTES = 900_000
 DEFAULT_MAX_IMAGES = 6
 # A matched article must sit within this of the place it is supposed to depict. Generous because
 # an article's coordinate is its centroid, not the venue door; the title rule below is what makes
@@ -203,7 +211,85 @@ def resolve(query: str, near: tuple[float, float] | None, place_name: str,
     return None
 
 
-def commons_details(filename: str, lang: str = "en") -> dict | None:
+def latin_title(title: str, lang: str) -> str | None:
+    """The article's English title, for searching a file repository that names things in Latin.
+
+    Commons file names are overwhelmingly Latin-script, so searching it for 阿利坎特 returns
+    nothing and the destination silently kept the plain lead image while every Latin-named anchor
+    beside it was upgraded. One langlink call fixes the asymmetry.
+    """
+    if lang == "en" or not title:
+        return title or None
+    data = _api(WIKI_API.format(lang=lang), {
+        "action": "query", "titles": title, "prop": "langlinks", "lllang": "en", "redirects": 1})
+    pages = list(((data or {}).get("query") or {}).get("pages", {}).values())
+    links = (pages[0].get("langlinks") or []) if pages else []
+    return (links[0].get("*") if links else None)
+
+
+def better_candidate(subject: str, place_name: str, prefer_landscape: bool) -> str | None:
+    """A Commons Quality Image of the same subject, if one exists.
+
+    An article's lead image is chosen to be representative, which is a different thing from being
+    good: the lead image for 阿利坎特 is a marina seen through a thicket of masts -- accurate,
+    encyclopedic, and the first thing a reader called unattractive. Commons maintains
+    peer-reviewed "Quality images" and "Featured pictures" categories, which is an editorial
+    judgement about the photograph itself rather than about the subject, and searching within them
+    returns professional panoramas of the same places.
+
+    The relevance rule is unchanged and still binding: a prettier picture of the wrong thing is a
+    worse defect than a plain picture of the right one, so a candidate whose own file name does
+    not name the subject is discarded even when it is beautiful.
+    """
+    subject_tokens = _tokens(subject)
+
+    def names_the_subject(filename: str) -> bool:
+        """Is this file about the subject, or merely filed under its province?
+
+        A different test from the one used on article titles, and using that one here was the bug:
+        it demands the title introduce no new words, which is right for "Alicante Airport" and
+        wrong for "Vista de Alicante, España, 2014-07-04, DD 49.JPG" -- a file name is descriptive
+        by nature, so every candidate was rejected and the destination kept its plain lead image.
+
+        Position carries the meaning instead. Photographers name a file for its subject first:
+        "Vista de Alicante, ..." is of Alicante, while "Iglesia de San Miguel Arcángel, Altea,
+        Alicante, ..." is a church in a town fifty kilometres away that happens to share a
+        province. Requiring the subject early in the name separates them.
+        """
+        words = re.findall(r"[^\W\d_]{3,}", filename.casefold(), flags=re.UNICODE)
+        head = words[:4]
+        return bool(subject_tokens & set(head))
+
+    for category in ("Quality images", "Featured pictures"):
+        data = _api(COMMONS_API, {
+            "action": "query", "list": "search", "srnamespace": 6, "srlimit": 8,
+            "srsearch": f'{subject} incategory:"{category}"',
+        })
+        hits = [h.get("title", "") for h in ((data or {}).get("query") or {}).get("search", [])]
+        scored: list[tuple[float, str]] = []
+        for title in hits:
+            name = title[5:] if title.startswith("File:") else title
+            if not names_the_subject(name):
+                continue
+            info = _api(COMMONS_API, {"action": "query", "titles": title,
+                                      "prop": "imageinfo", "iiprop": "size"})
+            pages = list(((info or {}).get("query") or {}).get("pages", {}).values())
+            image = (pages[0].get("imageinfo") or [{}])[0] if pages else {}
+            width, height = image.get("width") or 0, image.get("height") or 1
+            if width < 1200:
+                continue
+            ratio = width / max(height, 1)
+            # A hero is a wide crop; a portrait photograph loses its subject to object-fit.
+            if prefer_landscape and ratio < 1.2:
+                continue
+            scored.append((ratio if prefer_landscape else 1.0, name))
+        if scored:
+            scored.sort(reverse=True)
+            return scored[0][1]
+    return None
+
+
+def commons_details(filename: str, lang: str = "en", width: int = THUMB_WIDTH) -> dict | None:
     """Licence and author for a file, asked of the wiki that reported it.
 
     Asked of the wiki that reported the file rather than of Commons, because the name in
@@ -212,7 +298,7 @@ def commons_details(filename: str, lang: str = "en") -> dict | None:
     """
     data = _api(WIKI_API.format(lang=lang), {
         "action": "query", "titles": f"File:{filename}", "prop": "imageinfo",
-        "iiprop": "url|extmetadata|size", "iiurlwidth": THUMB_WIDTH,
+        "iiprop": "url|extmetadata|size", "iiurlwidth": width,
     })
     pages = list(((data or {}).get("query") or {}).get("pages", {}).values())
     if not pages:
@@ -231,9 +317,9 @@ def commons_details(filename: str, lang: str = "en") -> dict | None:
             "artist": field("Artist") or "unknown", "credit": field("Credit")}
 
 
-def embed(thumb_url: str) -> tuple[str, int] | None:
+def embed(thumb_url: str, cap: int = MAX_IMAGE_BYTES) -> tuple[str, int] | None:
     payload = _request(thumb_url, binary=True)
-    if not payload or len(payload) > MAX_IMAGE_BYTES:
+    if not payload or len(payload) > cap:
         return None
     # Parse the extension from the PATH, not the whole URL. Wikimedia appends analytics
     # parameters to thumbnail links, so splitting the raw string on its last dot returned
@@ -324,7 +410,21 @@ def fetch(plan: dict, limit: int, dry_run: bool = False) -> tuple[dict, list[str
         if match["file"] in used_files:
             notes.append(f"{slot['label']}: would repeat an image already used — no image")
             continue
-        details = commons_details(match["file"], match.get("lang", "en"))
+        is_hero = slot["key"] == "hero"
+        width = HERO_THUMB_WIDTH if is_hero else THUMB_WIDTH
+        subject = latin_title(match["page"], match.get("lang", "en")) or match["page"]
+        # The relevance rule compares against the place name too, so it needs the same script.
+        place_for_match = latin_title(slot["place"], "zh") or slot["place"] if is_hero else slot["place"]
+        upgraded = better_candidate(subject, subject if is_hero else place_for_match,
+                                    prefer_landscape=is_hero)
+        if upgraded and upgraded not in used_files:
+            details = commons_details(upgraded, match.get("lang", "en"), width)
+            if details:
+                match = {**match, "file": upgraded, "upgraded": True}
+            else:
+                details = commons_details(match["file"], match.get("lang", "en"), width)
+        else:
+            details = commons_details(match["file"], match.get("lang", "en"), width)
         if not details:
             notes.append(f"{slot['label']}: no licence metadata on Commons — no image")
             continue
@@ -334,7 +434,7 @@ def fetch(plan: dict, limit: int, dry_run: bool = False) -> tuple[dict, list[str
                                     "file": match["file"], "license": details["license"],
                                     "artist": details["artist"], "data_uri": None}
             continue
-        embedded = embed(details["thumb"])
+        embedded = embed(details["thumb"], HERO_MAX_BYTES if is_hero else MAX_IMAGE_BYTES)
         if not embedded:
             notes.append(f"{slot['label']}: image too large or unsupported format — no image")
             continue

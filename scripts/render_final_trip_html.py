@@ -110,6 +110,93 @@ DISALLOWED_URL_QUERY_KEYS = {
 }
 DISALLOWED_URL_PATH_PARTS = {"account", "cart", "checkout", "login", "payment", "signin"}
 
+# One palette per trip character, chosen from what the traveller said they came for.
+# trip.destination_type would be the obvious key and is useless: it reads "city" on all eleven
+# saved plans. trip.traveler_preferences is the honest signal -- a coast trip and a forest trip
+# are different trips even when both are technically cities, and the traveller is the one who
+# said which this is.
+#
+# Each palette is written out rather than generated. A generated hue would eventually produce
+# grey-on-grey or a warning colour that reads as decoration, and this page is read in sunlight on
+# a phone. The figures in plan_visuals.py all draw with var(--accent), so they re-tone for free.
+TRIP_PALETTES = {
+    "coast": {  # sea and sand: the default holiday register
+        "--ink": "#10283a", "--muted": "#5b7183", "--paper": "#f3f2ea", "--card": "#fffefb",
+        "--accent": "#0e7490", "--accent-deep": "#0b5a70", "--accent-soft": "#d9eef5",
+        "--line": "#d7ded9", "--warm": "#e8924a", "--warm-soft": "#fdf0e0",
+        "hero": "linear-gradient(135deg,#0d2b43 0%,#0f5f80 55%,#12879b 100%)",
+        "glow_a": "#cfe9f2", "glow_b": "#fbe3c6",
+    },
+    "highland": {  # forest, lakes, mountains
+        "--ink": "#16261d", "--muted": "#5d7065", "--paper": "#f2f2ec", "--card": "#fffefc",
+        "--accent": "#2f7d55", "--accent-deep": "#1f5c3e", "--accent-soft": "#dcefe1",
+        "--line": "#d8ded4", "--warm": "#c9762f", "--warm-soft": "#fbeedd",
+        "hero": "linear-gradient(135deg,#152b21 0%,#2c5c40 55%,#3f8358 100%)",
+        "glow_a": "#d7ead9", "glow_b": "#efe3c4",
+    },
+    "urban": {  # streets, museums, food, nightlife
+        "--ink": "#1b1a22", "--muted": "#6b6875", "--paper": "#f5f2f0", "--card": "#fffdfd",
+        "--accent": "#8a3f6b", "--accent-deep": "#6b2d52", "--accent-soft": "#f3e2ec",
+        "--line": "#e0d9dc", "--warm": "#d08033", "--warm-soft": "#fdf0e1",
+        "hero": "linear-gradient(135deg,#231d2c 0%,#5c2f52 55%,#8a3f6b 100%)",
+        "glow_a": "#efdfe9", "glow_b": "#f8e5cd",
+    },
+    "arid": {  # desert, canyon, dry heat
+        "--ink": "#2a1c14", "--muted": "#7a675b", "--paper": "#f7f1e7", "--card": "#fffdf8",
+        "--accent": "#b45a24", "--accent-deep": "#8d431a", "--accent-soft": "#fae5d2",
+        "--line": "#e3d9c9", "--warm": "#3f7f86", "--warm-soft": "#e0f0f1",
+        "hero": "linear-gradient(135deg,#3a2216 0%,#8a4520 55%,#c0682c 100%)",
+        "glow_a": "#f6ddc4", "glow_b": "#d9ecec",
+    },
+    "alpine": {  # snow, ice, winter sport
+        "--ink": "#16222e", "--muted": "#61707f", "--paper": "#f1f4f7", "--card": "#ffffff",
+        "--accent": "#3f6ea8", "--accent-deep": "#2b527f", "--accent-soft": "#e0eaf6",
+        "--line": "#d8e0e8", "--warm": "#c2703f", "--warm-soft": "#fbebe0",
+        "hero": "linear-gradient(135deg,#1a2a3b 0%,#33567f 55%,#5688bd 100%)",
+        "glow_a": "#dde9f5", "glow_b": "#f2e2d6",
+    },
+}
+
+# Matched against the traveller's own words, in their own language. Kept explicit rather than
+# clever: a word list can be read and argued with, while a classifier cannot be told why it was
+# wrong about somebody's holiday.
+PALETTE_HINTS = {
+    "coast": ("coast", "beach", "sea", "island", "ocean", "seaside", "海", "岛", "滨", "沙滩"),
+    "highland": ("forest", "lake", "mountain", "hik", "trail", "nature", "wood", "valley",
+                 "森林", "湖", "山", "徒步", "自然"),
+    "alpine": ("snow", "ski", "glacier", "winter sport", "雪", "滑雪", "冰川"),
+    "arid": ("desert", "dune", "canyon", "oasis", "沙漠", "戈壁", "峡谷"),
+    "urban": ("city", "street", "museum", "food", "market", "nightlife", "architect", "art",
+              "街区", "美食", "博物馆", "建筑", "市集", "城市"),
+}
+
+
+def palette_for(plan: dict) -> dict:
+    """Pick the page's colour register from what the traveller asked for."""
+    preferences = ((plan.get("trip") or {}).get("traveler_preferences") or {})
+    words = []
+    for field in ("ranked_must_haves", "natural_subtypes", "human_cultural_subtypes"):
+        words += [str(v) for v in (preferences.get(field) or []) if isinstance(v, str)]
+    haystack = " ".join(words).casefold()
+    if not haystack.strip():
+        return TRIP_PALETTES["coast"]
+    scores = {name: sum(haystack.count(hint.casefold()) for hint in hints)
+              for name, hints in PALETTE_HINTS.items()}
+    # Ranked must-haves are ranked, so the first one breaks a tie rather than dictionary order.
+    best = max(scores, key=lambda name: (scores[name], name == "coast"))
+    return TRIP_PALETTES[best if scores[best] else "coast"]
+
+
+def palette_css(palette: dict) -> str:
+    variables = "".join(f"{key}:{value};" for key, value in palette.items()
+                        if key.startswith("--"))
+    return (f":root{{{variables}}}"
+            f"body{{background:radial-gradient(circle at 8% -8%,{palette['glow_a']} 0 13%,"
+            f"transparent 32%),radial-gradient(circle at 100% 5%,{palette['glow_b']} 0 12%,"
+            f"transparent 29%),var(--paper)}}"
+            f".hero{{background:{palette['hero']}}}")
+
+
 FINAL_PAGE_DESIGN = r"""
 :root{--ink:#132238;--muted:#637186;--paper:#f6f1e9;--card:#fffdfa;--accent:#0f766e;--accent-deep:#075c58;--accent-soft:#dff3ee;--line:#d9d9d1;--warm:#ee8d4a;--warm-soft:#fff0e3;--shadow:0 20px 54px rgb(26 42 57/.10);--radius:22px}
 body{background:radial-gradient(circle at 8% -8%,#d5ede8 0 13%,transparent 32%),radial-gradient(circle at 100% 5%,#f9dfc3 0 12%,transparent 29%),var(--paper)}
@@ -2735,7 +2822,8 @@ def render(plan: dict) -> str:
     """Render the page and localize renderer-owned text for the requested language."""
     page = decorate_primary_map_links(render_unlocalized(plan), plan)
     page = localize_static_page(page, plan["trip"]["language"], plan.get("ui_labels"))
-    return page.replace("</style>", FINAL_PAGE_DESIGN + "</style>", 1)
+    design = FINAL_PAGE_DESIGN + palette_css(palette_for(plan))
+    return page.replace("</style>", design + "</style>", 1)
 
 
 def main() -> int:

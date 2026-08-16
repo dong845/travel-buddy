@@ -2703,6 +2703,101 @@ def check_service_market(plan: dict, errors: list[str], notes: list[str]) -> Non
 # here does nothing at all, which is the one failure mode worse than not writing it.
 # save_trip_deliverables.py imports this tuple, so adding a check here also arms the save path --
 # the only path that writes files a traveller keeps.
+def check_prose_texture(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """The page must read like a person wrote it, not like a template filled itself in.
+
+    Two different faults, both measured on delivered plans rather than imagined.
+
+    THE SAME SENTENCE TWICE. `focus` and `route_logic` came back byte-identical on 4 of 5 days of
+    one plan and 5 of 8 of another, so the page printed one sentence under two headings. Nothing
+    caught it because each field, considered alone, was filled in and sensible. It reads as
+    padding, which is what it is.
+
+    ONE SENTENCE SHAPE, USED FOR EVERYTHING. The prose in those plans is specific and reason-led
+    -- no "vibrant tapestry", no "nestled in the heart of" -- and it still reads mechanical,
+    because half the narrative fields are built as fact—dash—significance. Wikipedia's "Signs of
+    AI writing" lists em-dash overuse among its structural tells for the same reason: the device
+    is fine, the monotony is the tell. Measured at 50% of narrative fields on a shipped plan, so
+    the ceiling here is 35%: high enough that the dash stays available where it earns its place,
+    low enough that it cannot be the default way a sentence is built.
+
+    Deliberately NOT a banned-word list. A list of forbidden adjectives is trivially satisfied by
+    swapping synonyms while the writing stays exactly as hollow, and it fires on a traveller's own
+    words. Structure is what these checks can see honestly.
+    """
+    days = [_obj(d) for d in _seq(plan.get("days"))]
+    if not days:
+        return
+
+    narrative: list[tuple[str, str]] = []
+    for day in days:
+        number = day.get("number")
+        route = _obj(day.get("route"))
+        for field, value in (("focus", day.get("focus")),
+                             ("contingency", day.get("contingency")),
+                             ("route.route_logic", route.get("route_logic")),
+                             ("route.walking_burden", route.get("walking_burden")),
+                             ("route.fallback_plan", route.get("fallback_plan"))):
+            if isinstance(value, str) and len(value.strip()) > 20 and not _blank(value):
+                narrative.append((f"day {number} {field}", value.strip(), f"day{number}"))
+        for index, card in enumerate(_seq(day.get("dining")), 1):
+            reason = _obj(card).get("why_this_stop")
+            if isinstance(reason, str) and len(reason.strip()) > 20 and not _blank(reason):
+                narrative.append((f"day {number} dining[{index}].why_this_stop", reason.strip(),
+                                  f"day{number}"))
+    for index, anchor in enumerate(_seq(plan.get("destination_experience_anchors"))):
+        reason = _obj(anchor).get("why_it_matters")
+        if isinstance(reason, str) and len(reason.strip()) > 20 and not _blank(reason):
+            narrative.append((f"anchor[{index}].why_it_matters", reason.strip(), "anchors"))
+    if not narrative:
+        return
+
+    # Scoped WITHIN a day, which is the defect that was measured and the only one that is always
+    # wrong: two fields on the same card, under two different headings, printing one sentence.
+    # Across days it stays a note, because two days can honestly carry the same walking figure or
+    # the same wet-weather fallback, and an error there would fire on correct work -- it fired on
+    # a test that legitimately clones a day to exercise replanning.
+    seen: dict[tuple[str, str], str] = {}
+    cross_day: list[str] = []
+    for where, text, scope in narrative:
+        key = _fold(text)
+        if (scope, key) in seen:
+            errors.append(
+                f"{where} repeats {seen[(scope, key)]} word for word. The page prints both, under "
+                f"two different headings on the same card, so the traveller reads one sentence "
+                f"twice and learns nothing the second time. Say something different, or leave the "
+                f"weaker field out.")
+        else:
+            seen[(scope, key)] = where
+    elsewhere: dict[str, str] = {}
+    for where, text, scope in narrative:
+        key = _fold(text)
+        if key in elsewhere and elsewhere[key].split()[1] != where.split()[1]:
+            cross_day.append(f"{where} = {elsewhere[key]}")
+        elsewhere.setdefault(key, where)
+    if len(cross_day) > 2:
+        notes.append(f"note: {len(cross_day)} narrative field(s) are word-for-word identical "
+                     f"across different days. Sometimes honest, often a day nobody wrote: "
+                     f"{'; '.join(cross_day[:3])}")
+
+    dashed = [where for where, text, _ in narrative if "——" in text or " — " in text]
+    if len(dashed) > max(2, int(len(narrative) * 0.35)):
+        errors.append(
+            f"{len(dashed)} of {len(narrative)} narrative fields build their sentence around a "
+            f"dash. The dash is not the problem; using one shape for everything is — every "
+            f"rationale lands as fact-dash-significance and the whole page reads generated. "
+            f"Rewrite most of these as plain sentences: {', '.join(dashed[:4])}"
+            + (f" and {len(dashed) - 4} more" if len(dashed) > 4 else ""))
+
+    hollow = [where for where, text, _ in narrative
+              if re.search(r"(不仅[^。]{0,24}(而且|也|还)|not only[^.]{0,30}but also)", text)]
+    if hollow:
+        notes.append(
+            f"note: {len(hollow)} field(s) use a not-only-but-also construction, which is on "
+            f"every list of AI writing tells because it inflates two ordinary facts into a "
+            f"contrast: {', '.join(hollow[:3])}")
+
+
 def _blank(value: object) -> bool:
     """Empty, missing, or still a placeholder.
 
@@ -2872,6 +2967,7 @@ PLAN_CHECKS = (
     check_booking_identity,
     check_service_market,
     check_preference_coverage,
+    check_prose_texture,
 )
 
 
