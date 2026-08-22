@@ -310,6 +310,9 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "constraints_mobility": "行动能力：",
             "constraints_walk_cap": "单段连续步行上限：",
             "constraints_card": "过敏卡 —— 到店请出示这段文字：",
+            "preferences_heading": "你提出的需求",
+            "preferences_direction": "体验方向：",
+            "preferences_avoid": "希望避开的：",
             "plan_status_prefix": "行程状态 · ",
             "arrival": "抵达方式：",
             "pace": "节奏：",
@@ -529,6 +532,12 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "constraints_mobility",
     "constraints_walk_cap",
     "constraints_card",
+    # Added with the traveller-preferences panel, optional for the reason two comments above
+    # spell out: making a new key required rejects every label set written before it existed,
+    # and a rejected set drops the whole page back to English.
+    "preferences_heading",
+    "preferences_direction",
+    "preferences_avoid",
     "why_providers",
     "pill_flight",
     "pill_hotel",
@@ -816,6 +825,9 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
         "Mobility: ": labels.get("constraints_mobility", "Mobility: "),
         "Maximum continuous walking: ": labels.get("constraints_walk_cap", "Maximum continuous walking: "),
         "Allergy card — show this to staff: ": labels.get("constraints_card", "Allergy card — show this to staff: "),
+        ">What you asked for<": f">{labels.get('preferences_heading', 'What you asked for')}<",
+        "Experience direction: ": labels.get("preferences_direction", "Experience direction: "),
+        "Asked to avoid: ": labels.get("preferences_avoid", "Asked to avoid: "),
         "Why these providers: ": labels.get("why_providers", "Why these providers: "),
         "Plan status · ": labels["plan_status_prefix"],
         "Arrival: ": labels["arrival"],
@@ -1931,12 +1943,18 @@ def intake_context_errors(intake_context: object) -> list[str]:
             errors.append(f"intake_context.{field} is required when method is {method}.")
         elif any(marker in value for marker in ("TODO:", "example.invalid")):
             errors.append(f"intake_context.{field} still holds a placeholder, which answers nothing.")
-        elif field != "declined_verbatim" and re.search(r"<[^<>]{1,60}>", value):
+        elif field != "declined_verbatim" and re.search(r"<[^<>\s]{1,60}>", value):
             # templates/final-trip-plan.json ships intake_file as
             # "<workspace>/plans/trip-intake-<timestamp>.json", and a template copied without
             # editing is a non-empty string carrying no TODO -- it would pass every check above.
             # Not applied to declined_verbatim: that is a human being quoted, and refusing their
             # sentence because it contains a bracket would be the gate inventing a defect.
+            #
+            # The bracketed run must contain no whitespace, and that is the whole difference
+            # between a gate and a nuisance. Written as `<[^<>]{1,60}>` first, it refused
+            # "Budget stated as < 2000 > per person" -- an ordinary sentence, rejected as a
+            # placeholder, on the delivery path. Every placeholder this template actually ships
+            # is a single token; prose that happens to compare two numbers is not.
             errors.append(f"intake_context.{field} is still the template's <bracketed> placeholder.")
 
     # What this deliberately does NOT do: require intake_file to resolve on disk. It was written
@@ -1947,6 +1965,17 @@ def intake_context_errors(intake_context: object) -> list[str]:
     # own plan for a reason that has nothing to do with how intake happened, and the way out the
     # error suggested was to relabel the method, i.e. to write something false. A forged path is
     # no harder than a forged file anyway, so the check bought little and broke much.
+    # A record that contradicts itself is worse than a missing one, because it reads as evidence.
+    # new_plan_skeleton.py accepted --from-intake together with --intake-method chat_fallback and
+    # emitted exactly that: the traveller's declining words next to the path of the form intake
+    # they supposedly never filled. Only one of those can be true.
+    intake_file = intake_context.get("intake_file")
+    if method != "html_form" and isinstance(intake_file, str) and intake_file.strip():
+        errors.append(
+            f"intake_context says method {method} but also names an intake_file "
+            f"({intake_file.strip()}), which only the form server writes. Either the form was "
+            "filled -- method html_form -- or it was not, and the file does not belong here.")
+
     if method == "chat_fallback":
         declined_at = intake_context.get("declined_at")
         if isinstance(declined_at, str) and declined_at.strip():
@@ -2947,6 +2976,43 @@ def render_unlocalized(plan: dict) -> str:
         + "".join(constraint_rows) + "</section>"
         if constraint_rows else ""
     )
+
+    # The other half of the same intake form. check_plan_consistency requires every avoid_list
+    # entry to carry an avoid_list_handling entry saying what keeps it out, and requires anchors to
+    # name the must-haves they answer -- and then the page printed neither the avoid list nor how
+    # each item was honoured nor the scenery/culture subtypes the traveller picked. Measured with
+    # canary strings through the whole save path: all three were in the JSON and none of them
+    # reached the HTML. That is the defect this skill names elsewhere in its own words -- a rating
+    # stored and never shown is the same defect as a rating never gathered -- and it lands on the
+    # half of the intake that says why the traveller is going at all. The must-haves already reach
+    # the page through each anchor's satisfies_preference, so they are not repeated here.
+    preferences = trip.get("traveler_preferences") if isinstance(trip.get("traveler_preferences"), dict) else {}
+    preference_rows = []
+    direction = [v for field in ("natural_subtypes", "human_cultural_subtypes")
+                 for v in as_list(preferences.get(field)) if isinstance(v, str) and v.strip()]
+    if direction:
+        items = "".join(f"<li>{esc(v)}</li>" for v in direction)
+        preference_rows.append(f'<p><strong>Experience direction: </strong></p><ul>{items}</ul>')
+    handling = {str(entry.get("item") or "").strip(): str(entry.get("how_avoided") or "").strip()
+                for entry in as_list(preferences.get("avoid_list_handling"))
+                if isinstance(entry, dict)}
+    avoid_items = []
+    for item in as_list(preferences.get("avoid_list")):
+        if not isinstance(item, str) or not item.strip():
+            continue
+        how = handling.get(item.strip())
+        # An unhandled entry is printed bare rather than dropped. check_plan_consistency already
+        # refuses to save that plan, so this only ever shows in a draft render -- and a silent
+        # omission there would hide exactly what the author still has to answer.
+        avoid_items.append(f"<li>{esc(item)}{f' — {esc(how)}' if how else ''}</li>")
+    if avoid_items:
+        preference_rows.append(
+            f'<p><strong>Asked to avoid: </strong></p><ul>{"".join(avoid_items)}</ul>')
+    preferences_panel = (
+        '<section id="traveller-preferences" class="panel"><h2>What you asked for</h2>'
+        + "".join(preference_rows) + "</section>"
+        if preference_rows else ""
+    )
     regional = plan.get("regional_service_context") if isinstance(plan.get("regional_service_context"), dict) else {}
     platform_note = (
         # selection_basis is REQUIRED by validate_plan and was printed nowhere, so the page said
@@ -2958,7 +3024,7 @@ def render_unlocalized(plan: dict) -> str:
         + (f'<p class="meta">Platform selection: {esc(regional.get("booking_platform_selection_note"))}</p>'
            if regional.get("booking_platform_selection_note") else "")
     )
-    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}.anchor-photo{{margin:10px 0 0}}.anchor-photo img{{width:100%;height:auto;border-radius:10px;display:block}}.photo-credit{{color:var(--muted);font-size:.72rem;margin-top:4px}}.hero-photo{{margin:20px 0}}.hero-photo img{{width:100%;max-height:340px;object-fit:cover;border-radius:16px}}@media print{{.hero-photo img{{max-height:200px}}}}{plan_visuals.VISUAL_CSS}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{hero_photo}{unverified_banner}{constraints_panel}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div>{cap_fact}<div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div>{budget_figure}{walking_figure}</section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(overview_headline)}</p>{"".join(f"<p>{esc(note)}</p>" for note in as_list(overview.get("notes")) if note)}<a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details open><summary>Recheck before purchase</summary><p>{recheck}</p></details></section></main></body></html>'''
+    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}.anchor-photo{{margin:10px 0 0}}.anchor-photo img{{width:100%;height:auto;border-radius:10px;display:block}}.photo-credit{{color:var(--muted);font-size:.72rem;margin-top:4px}}.hero-photo{{margin:20px 0}}.hero-photo img{{width:100%;max-height:340px;object-fit:cover;border-radius:16px}}@media print{{.hero-photo img{{max-height:200px}}}}{plan_visuals.VISUAL_CSS}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{hero_photo}{unverified_banner}{constraints_panel}{preferences_panel}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div>{cap_fact}<div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div>{budget_figure}{walking_figure}</section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(overview_headline)}</p>{"".join(f"<p>{esc(note)}</p>" for note in as_list(overview.get("notes")) if note)}<a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details open><summary>Recheck before purchase</summary><p>{recheck}</p></details></section></main></body></html>'''
 
 
 def render(plan: dict) -> str:

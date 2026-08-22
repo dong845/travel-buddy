@@ -341,6 +341,12 @@ def main() -> int:
     # one the traveller has to authorise, so it needs their words rather than a summary: a
     # paraphrase reads identically whether they declined the form or an assistant never offered it.
     method = args.intake_method or ("html_form" if args.from_intake else None)
+    if args.from_intake and method != "html_form":
+        print(f"ERROR: --from-intake names the file the intake server writes, so the form WAS "
+              f"filled; --intake-method {method} says it was not. Emitting both produced a "
+              f"provenance record that contradicts itself, which reads as evidence rather than as "
+              f"the gap it is. Drop one of the two flags.", file=sys.stderr)
+        return 2
     if method == "html_form" and not args.from_intake:
         print("ERROR: --intake-method html_form needs --from-intake, which names the file the "
               "intake server wrote. Claiming the form ran without the file it produces is the one "

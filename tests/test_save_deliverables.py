@@ -123,6 +123,12 @@ def main() -> int:
             # shortcut, shipping it would be a fabricated fact rather than a visible blank.
             ({"method": "chat_fallback", "declined_verbatim": "不用表单了，直接问我吧",
               "declined_at": "1970-01-01"}, "chat_fallback still stamped with the epoch sentinel"),
+            # Self-contradictory: the traveller's declining words beside the path of the form
+            # intake they supposedly never filled. Only one of those can be true, and a record
+            # that contradicts itself reads as evidence.
+            ({"method": "chat_fallback", "declined_verbatim": "不用表单了，直接问我吧",
+              "declined_at": "2026-08-22", "intake_file": "/w/plans/intake-20260822.json"},
+             "chat_fallback that also names a form intake file"),
         ):
             plan = copy.deepcopy(base)
             plan["intake_context"] = bad
@@ -133,21 +139,26 @@ def main() -> int:
         # workspace: these are the cases that succeed, and a later case here asserts that a
         # refused save left the plans folder empty.
         with tempfile.TemporaryDirectory() as accepted_dir:
-            for good, label in (
+            for index, (good, label) in enumerate((
                 ({"method": "html_form",
                   "intake_file": "/w/plans/intake-20260822-ams.json"},
                  "html_form naming its intake file"),
                 ({"method": "user_supplied",
                   "source_note": "Traveller pasted a complete brief with dates, budget and party."},
                  "user_supplied saying what arrived instead"),
+                # Ordinary prose that happens to compare two numbers. The placeholder rule was
+                # written as `<[^<>]{1,60}>` first and refused this on the delivery path.
+                ({"method": "user_supplied",
+                  "source_note": "Budget stated as < 2000 > per person, dates fixed."},
+                 "user_supplied whose note contains a spaced comparison"),
                 ({"method": "chat_fallback", "declined_verbatim": "不用开表单了，直接在这里问我",
                   "declined_at": "2026-08-22"},
                  "chat_fallback carrying the traveller's own words"),
-            ):
+            )):
                 plan = copy.deepcopy(base)
                 plan["intake_context"] = good
                 code, out = run(plan, Path(accepted_dir), "--unverified",
-                                "--slug", f"ok-{good['method']}")
+                                "--slug", f"ok-{index}-{good['method']}")
                 check(f"{label} is accepted", code == 0, out)
 
         # The refusal that matters most: no report, no flag, no files. A structure gate cannot

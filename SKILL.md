@@ -233,6 +233,14 @@ rather than pattern-matched: deciding from a plan's own fields whether it contai
 crowd or a long transfer needs a different fact for every avoidance a traveller might write, while
 asking how each was honoured needs none.
 
+All of it renders, and that had to be fixed rather than assumed. Measured with canary strings run
+through the whole save path: `avoid_list`, every `avoid_list_handling.how_avoided`, and the natural
+and cultural subtypes were present in the plan JSON and reached the HTML **not once** — the gate
+demanded an answer and the page never showed the traveller it had been given. They now render in a
+`What you asked for` panel beside the constraints one, which is the same principle this skill
+already applies to ratings: stored and never shown is the same defect as never gathered. When you
+add a field the traveller stated, check the rendered page for it rather than the JSON.
+
 ### Write the page like a person who went there, not like a form being filled in
 
 The prose in the delivered plans is already specific and reason-led — no "vibrant tapestry", no
@@ -449,7 +457,7 @@ Before delivering a recommendation or plan, verify:
 - when the trip leaves the country of residence, every traveller’s entry eligibility and passport validity were verified against their residence status — not their nationality alone — before describing a trip as bookable, and the conclusion reached the page via `entry_context`; when the traveller stays home, entry information was neither requested nor treated as a blocker;
 - volatile facts are researched and dated, or honestly marked unverified;
 - the final page carries no renderer-owned English when the trip language is not English; `validate_trip_html.py` fails the page rather than leaving this to inspection;
-- every collected-and-required field reaches the page: route fallback and walking burden, flight fare conditions, any single-option reason, unpriced budget categories, planning assumptions, and the booking-platform rationale;
+- every collected-and-required field reaches the page: route fallback and walking burden, flight fare conditions, any single-option reason, unpriced budget categories, planning assumptions, the booking-platform rationale, and the traveller's own avoid-list with what keeps each item out plus the scenery and culture subtypes they picked — confirmed by looking at the rendered page, not at the plan JSON;
 - costs use the same scope and currency, with uncertainty explained;
 - every outbound booking link is HTTPS, source-labeled, date-checked, opens only for the user to review, and identifies whether it came from a direct provider or an appropriate comparison platform; **the provider a button names is the provider its URL opens** — a card's `provider`/`map_provider`/`official_or_authorised_provider` labels the button *and* is the destination it must resolve to, so a comparison platform belongs in `round_trip_search_*` or `comparison_searches`, never behind an airline's name. `validate_trip_html.py` fails the page on a mismatch rather than leaving it to a human clicking each button;
 - every shown flight, accommodation, ticket, car, and essential rail/ground booking category has a dated, source-linked booking-access check that distinguishes available, limited, and unknown access without collecting credentials or payment data;

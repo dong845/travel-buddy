@@ -47,6 +47,64 @@ def load(name: str):
     return module
 
 
+
+def check_traveller_preferences(render, check) -> None:
+    """What the traveller asked for has to reach the page, not just the JSON.
+
+    Measured with canary strings pushed through the whole save path: avoid_list, each
+    avoid_list_handling.how_avoided, and the natural/cultural subtypes were all present in the plan
+    and none of them appeared in the HTML. check_plan_consistency meanwhile *required* every avoid
+    entry to carry a handling entry -- so the gate demanded an answer the traveller was never shown,
+    which is the defect this skill names in its own words about ratings: stored and never shown is
+    the same as never gathered. These canaries are the backstop.
+    """
+    import copy, json  # noqa: PLC0415
+    validate_html = load("validate_trip_html")
+    base = json.loads((ROOT / "tests" / "booking-ready-fixture.json").read_text(encoding="utf-8"))
+
+    def rendered(language="en", labels=None, stated=True):
+        plan = copy.deepcopy(base)
+        plan["trip"]["language"] = language
+        if labels is not None:
+            plan["ui_labels"] = labels
+        prefs = plan["trip"]["traveler_preferences"]
+        if stated:
+            prefs["avoid_list"] = ["CANARYAVOID red-eye arrivals"]
+            prefs["avoid_list_handling"] = [{"item": "CANARYAVOID red-eye arrivals",
+                                             "how_avoided": "CANARYHOW only daytime buses."}]
+            prefs["human_cultural_subtypes"] = ["CANARYCULTURE neighbourhood walking"]
+            prefs["natural_subtypes"] = ["CANARYNATURE riverside"]
+        else:
+            for field in ("avoid_list", "avoid_list_handling",
+                          "human_cultural_subtypes", "natural_subtypes"):
+                prefs[field] = []
+        return render.render(plan)
+
+    page = rendered()
+    for token, what in (("CANARYAVOID", "the avoid-list the traveller wrote"),
+                        ("CANARYHOW", "what keeps each avoided thing out"),
+                        ("CANARYCULTURE", "the cultural subtypes they chose"),
+                        ("CANARYNATURE", "the natural subtypes they chose")):
+        check(f"{what} reaches the page", token in page,
+              "carried in the plan JSON and never rendered")
+
+    check("no panel is drawn when the traveller stated none of it",
+          "traveller-preferences" not in rendered(stated=False),
+          "an empty section is furniture, not information")
+
+    # Same terms as the constraints panel: the label keys stay optional so no saved label set is
+    # invalidated outright, but the English is caught rather than shipped to a non-English reader.
+    zh = render.labels_for("zh-CN")
+    older = {k: v for k, v in zh.items() if not k.startswith("preferences_")}
+    leaked = validate_html.untranslated_renderer_text(rendered("fr", older, stated=True))
+    check("an outdated label set fails loudly rather than printing English",
+          any("asked for" in item or "Asked to avoid" in item for item in leaked), str(leaked))
+    check("an outdated label set is no burden when the panel is not drawn",
+          not validate_html.untranslated_renderer_text(rendered("fr", older, stated=False)))
+    check("a current label set localizes the panel",
+          not validate_html.untranslated_renderer_text(rendered("fr", zh, stated=True)))
+
+
 def main() -> int:
     render = load("render_final_trip_html")
     failures: list[str] = []
@@ -54,6 +112,8 @@ def main() -> int:
     def check(name: str, condition: bool, detail: str = "") -> None:
         if not condition:
             failures.append(f"{name}\n{detail}")
+
+    check_traveller_preferences(render, check)
 
     labels = render.labels_for("zh")
     page = render.localize_enum_values(PROSE + BUDGET_FIGURE + MACHINE, labels)

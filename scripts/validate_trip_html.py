@@ -78,6 +78,7 @@ RENDERER_ENGLISH_MARKUP = (
     r"<h3>Rental-car options</h3>",
     r"<h3>Rail, coach and ferry options</h3>",
     r"<h2>Your constraints</h2>",
+    r"<h2>What you asked for</h2>",
     r"<summary>Sources used</summary>",
     r"<summary>Recheck before purchase</summary>",
     r"<summary>Booking access checks</summary>",
@@ -137,6 +138,12 @@ RENDERER_ENGLISH_TEXT = (
     r"Dietary needs:",
     r"Maximum continuous walking:",
     r"Allergy card — show this to staff:",
+    # The traveller-preferences panel, on the same terms as the constraints panel above:
+    # its label keys are optional so no saved label set is invalidated outright, but the
+    # English itself is caught, because a page that silently prints "Asked to avoid" to a
+    # Chinese reader is the blind spot this list exists to close.
+    r"Experience direction:",
+    r"Asked to avoid:",
     r"Why it fits:",
     r"Backup:",
     r"Outbound:",
