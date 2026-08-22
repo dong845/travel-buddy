@@ -489,6 +489,35 @@ def check_walking_budget(plan: dict, errors: list[str], notes: list[str]) -> Non
         number = day.get("number")
         minutes, km = totals[number]
         walked_in_activities = on_foot[number]
+
+        # An undeclared on_foot_minutes and a measured zero are the same value, and that inversion
+        # made this gate reward silence. Measured on this fixture: a traveller with a stated 20
+        # minute cap, activities declaring nothing, saved clean with the page reading "20 min" --
+        # and the SAME plan with the walking honestly written as 180 was refused. The traveller
+        # whose legs the rule exists for got the plan that never counted them.
+        #
+        # So when the traveller put a number on their walking, every activity has to answer. Note
+        # what is being demanded: a DECLARATION, not a small value. An author who looks at a
+        # concert or a sit-down dinner and writes 0 has measured it, and passes. Only silence
+        # fails, because silence is the one answer nobody can check.
+        if cap is not None:
+            silent = [str(_obj(a).get("name") or f"activity {i}")
+                      for i, a in enumerate(_seq(day.get("activities")), 1)
+                      if not isinstance(_obj(a).get("on_foot_minutes"), (int, float))
+                      or isinstance(_obj(a).get("on_foot_minutes"), bool)]
+            if silent:
+                errors.append(
+                    f"day {number}: the traveller stated max_continuous_walking_minutes={cap:g}, so "
+                    f"every activity must declare on_foot_minutes -- these do not: "
+                    f"{', '.join(silent)}. Undeclared is not zero. Write the measured minutes, or "
+                    f"0 where the activity genuinely involves no walking; that is a fact the gate "
+                    f"can check and silence is not.")
+        elif walked_in_activities == 0 and any(_seq(day.get("activities"))):
+            notes.append(
+                f"day {number}: no activity declares on_foot_minutes, so the page's walking figure "
+                f"counts only the legs between stops, not the time spent on foot at them. Not an "
+                f"error -- this traveller stated no walking limit -- but the figure is a floor.")
+
         burden = str(_route(day).get("walking_burden") or "")
         if not burden.strip():
             errors.append(f"day {number}: route.walking_burden is empty.")
@@ -2958,6 +2987,55 @@ def gates_stamp() -> dict:
     return {"checks": len(PLAN_CHECKS), "checked_by": "check_plan_consistency.PLAN_CHECKS"}
 
 
+
+# new_plan_skeleton.py stamps every date it cannot know as the epoch, and its own docstring lists
+# that as a hole with no backstop: "1970-01-01 is conspicuous on the page but no gate rejects it".
+# Measured -- a dining card checked_at, a route map_checked_at and a source accessed_at all set to
+# 1970-01-01 saved clean, and the page went on printing "verified" beside each one. A timestamp is
+# the whole evidence that somebody opened the page, so a sentinel one is not a blank the reader can
+# see through: it is the plan asserting a check that never happened.
+EPOCH_SENTINEL = "1970-01-01"
+
+
+def check_sentinel_timestamps(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """No date field may still hold the skeleton's epoch placeholder.
+
+    Walks the whole plan rather than naming the fields, because the fields that carry evidence keep
+    being added -- rating_checked_at and hours_status arrived after the skeleton did -- and a list
+    written today protects the keys whoever wrote it happened to remember. Anything whose key ends
+    in _at is a timestamp by this contract's own naming, and that convention does not go stale.
+    """
+    def walk(node: object, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                # intake_context carries its own, better-worded message about the same sentinel.
+                if path == "" and key == "intake_context":
+                    continue
+                if (key.endswith("_at") and isinstance(value, str)
+                        and value.startswith(EPOCH_SENTINEL)):
+                    found.append(f"{path}{'.' if path else ''}{key}")
+                else:
+                    walk(value, f"{path}{'.' if path else ''}{key}")
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, f"{path}[{index}]")
+
+    found: list[str] = []
+    walk(plan, "")
+    if not found:
+        return
+    # One error, not sixty-one. A fresh four-day skeleton carries a sentinel in every timestamp it
+    # cannot know, and reporting each separately buried the other seventeen findings under
+    # identical text -- which is how a check trains people to skim past it. The paths are what the
+    # author needs; the sentence only has to be read once.
+    shown = ", ".join(found[:8])
+    more = f", and {len(found) - 8} more" if len(found) > 8 else ""
+    errors.append(
+        f"{len(found)} timestamp(s) still hold the skeleton's {EPOCH_SENTINEL} placeholder: "
+        f"{shown}{more}. A checked-at date is the evidence that somebody opened the page, so "
+        f"shipping the sentinel claims a check that never happened. Write the date each was "
+        f"actually checked, or remove the claim it supports.")
+
 PLAN_CHECKS = (
     check_routes,
     check_walking_budget,
@@ -2980,6 +3058,7 @@ PLAN_CHECKS = (
     check_service_market,
     check_preference_coverage,
     check_prose_texture,
+    check_sentinel_timestamps,
 )
 
 

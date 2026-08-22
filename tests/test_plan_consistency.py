@@ -1549,7 +1549,62 @@ def main() -> int:
     day(p, 1)["route"]["segments"][0]["walking_minutes"] = 33
     day(p, 1)["route"]["walking_burden"] = (
         "Derived from segments: 47 minutes of walking across the day (0 km on foot).")
+    # A stated cap now also obliges every activity to answer with a number, so this plan declares
+    # them; the case is about the segment rule, and leaving them silent would fail it for an
+    # unrelated reason.
+    for activity in day(p, 1)["activities"]:
+        activity["on_foot_minutes"] = 0
     expect_ok("a leg inside the stated cap passes", p)
+
+    # The hole that obliged it. Measured on the shipped fixture: a traveller with a 20-minute cap
+    # and activities declaring nothing saved clean with the page reading "20 min", while the SAME
+    # plan with the walking honestly written as 180 was refused -- the gate rewarded silence and
+    # punished the honest number, for exactly the traveller it exists to protect.
+    p = copy.deepcopy(base)
+    p["trip"]["traveler_constraints"] = constraints(max_continuous_walking_minutes=20)
+    for activity in day(p, 1)["activities"]:
+        activity.pop("on_foot_minutes", None)
+    expect_fail_naming("a stated cap with activities that declare no on_foot_minutes", p,
+                       ["day 1", "on_foot_minutes", "Undeclared is not zero"])
+
+    # And a measured zero is an answer, not silence: an author who looked at a concert and wrote 0
+    # has done the thing being asked for.
+    p = copy.deepcopy(base)
+    p["trip"]["traveler_constraints"] = constraints(max_continuous_walking_minutes=20)
+    for activity in day(p, 1)["activities"]:
+        activity["on_foot_minutes"] = 0
+    expect_ok("a stated cap with every activity declaring a measured zero", p)
+
+    # new_plan_skeleton.py stamps every date it cannot know as the epoch, and nothing rejected it:
+    # a dining checked_at, a route map_checked_at and a source accessed_at all set to 1970-01-01
+    # saved clean while the page went on printing "verified" beside each. A timestamp IS the
+    # evidence, so a sentinel one asserts a check that never happened.
+    for label, mutate in (
+        ("a dining card checked on the epoch",
+         lambda x: day(x, 1)["dining"][0].__setitem__("checked_at", "1970-01-01")),
+        ("a route map checked on the epoch",
+         lambda x: day(x, 1)["route"].__setitem__("map_checked_at", "1970-01-01")),
+        ("a source accessed on the epoch",
+         lambda x: x["sources"][0].__setitem__("accessed_at", "1970-01-01")),
+    ):
+        p = copy.deepcopy(base)
+        mutate(p)
+        expect_fail_naming(label, p, ["1970-01-01", "placeholder"])
+
+    # Reported once with its paths, not once per field: a fresh four-day skeleton carries 61 of
+    # them, and sixty-one copies of the same sentence bury every other finding.
+    p = copy.deepcopy(base)
+    day(p, 1)["dining"][0]["checked_at"] = "1970-01-01"
+    day(p, 1)["route"]["map_checked_at"] = "1970-01-01"
+    p["sources"][0]["accessed_at"] = "1970-01-01"
+    _, output = run(p)
+    sentinel_lines = [line for line in output.splitlines()
+                      if line.startswith("- ") and "1970-01-01" in line]
+    if len(sentinel_lines) != 1:
+        failures.append("epoch sentinels are reported in one aggregated error: "
+                        f"got {len(sentinel_lines)} lines\n{output}")
+    elif "3 timestamp(s)" not in sentinel_lines[0]:
+        failures.append("the aggregated error must say how many it found\n" + sentinel_lines[0])
 
     # A stop the traveller stands in for 95 minutes breaks the same cap as a 95-minute connection,
     # and it is the half nobody counted: the burden figure only ever summed the legs between stops.
