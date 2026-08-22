@@ -144,6 +144,8 @@ RENDERER_ENGLISH_TEXT = (
     # Chinese reader is the blind spot this list exists to close.
     r"Experience direction:",
     r"Asked to avoid:",
+    r"Structure checks passed:",
+    r"They prove the plan agrees with itself",
     r"Why it fits:",
     r"Backup:",
     r"Outbound:",
@@ -557,6 +559,17 @@ def validate(
         for key in ("data-service-market", "data-google-services-access", "data-primary-map-provider", "data-transport-mode"):
             if not parser.trip_plan_attrs.get(key):
                 errors.append(f"#trip-plan needs {key}.")
+    # Every gate in this skill is a script, and a script runs only when someone calls it -- a
+    # hand-written page bypasses all of them and is otherwise indistinguishable from a saved one.
+    # save_trip_deliverables.py stamps the page it renders, so the absence of that stamp is the
+    # one observable difference. A note rather than an error: rendering a draft directly is a
+    # legitimate thing to do and fails nothing, but a page presented as finished should carry it.
+    if notes is not None and "data-gates-checks" not in content:
+        notes.append(
+            "this page carries no gate stamp, so it was not rendered by save_trip_deliverables.py. "
+            "That is expected for a draft render; on a page presented as the finished plan it "
+            "means the consistency and verification gates never ran on it.")
+
     leaked = untranslated_renderer_text(content)
     if leaked:
         errors.append(

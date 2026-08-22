@@ -41,6 +41,8 @@
   "preferences_heading": "What you asked for",
   "preferences_direction": "Experience direction: ",
   "preferences_avoid": "Asked to avoid: ",
+  "gates_label": "Structure checks passed: ",
+  "gates_caveat": "They prove the plan agrees with itself, never that its facts are true.",
   "plan_status_prefix": "Plan status · ",
   "arrival": "Arrival: ",
   "pace": "Pace: ",

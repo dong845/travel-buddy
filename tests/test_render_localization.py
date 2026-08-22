@@ -48,6 +48,14 @@ def load(name: str):
 
 
 
+
+def _stamp_notes(validate_html, page: str) -> list[str]:
+    """Run the page validator purely to collect its notes."""
+    notes: list[str] = []
+    validate_html.validate(page, 1, {"hotel"}, "public-transit", notes)
+    return notes
+
+
 def check_traveller_preferences(render, check) -> None:
     """What the traveller asked for has to reach the page, not just the JSON.
 
@@ -103,6 +111,41 @@ def check_traveller_preferences(render, check) -> None:
           not validate_html.untranslated_renderer_text(rendered("fr", older, stated=False)))
     check("a current label set localizes the panel",
           not validate_html.untranslated_renderer_text(rendered("fr", zh, stated=True)))
+
+    # The gate stamp. Every gate here is a script and a script runs only when called, so a
+    # hand-written page bypasses all of them; nothing in the scripts can fix that, because the
+    # enforcement point is upstream of them. What the page can do is carry the evidence.
+    # save_trip_deliverables.py stamped gates_passed into the plan JSON and it stopped there --
+    # the same gap this repo closed for the unverified banner, on the grounds that a flag stored
+    # only in JSON never reaches the person holding the itinerary at an airline counter.
+    def with_stamp(language="en", labels=None, checks=22):
+        plan = copy.deepcopy(base)
+        plan["trip"]["language"] = language
+        if labels is not None:
+            plan["ui_labels"] = labels
+        if checks is not None:
+            plan["gates_passed"] = {"checks": checks,
+                                    "checked_by": "check_plan_consistency.PLAN_CHECKS"}
+        return render.render(plan)
+
+    stamped = with_stamp()
+    check("a gated page carries the stamp where a reader can see it",
+          'data-gates-checks="22"' in stamped and "Structure checks passed: " in stamped,
+          "the plan JSON recorded the gates and the page said nothing")
+    check("the stamp says what it does NOT mean",
+          "never that its facts are true" in stamped,
+          "22 checks read as 'fact-checked' is worse than no stamp at all")
+    check("an ungated render carries no stamp",
+          "data-gates-checks" not in with_stamp(checks=None),
+          "presence is the signal; a stamp on an ungated page destroys it")
+    check("validate_trip_html notices a page with no stamp",
+          any("no gate stamp" in note for note in _stamp_notes(validate_html, with_stamp(checks=None))),
+          "one command has to be able to answer 'did the gates run on this file'")
+    check("and stays quiet on a stamped one",
+          not any("no gate stamp" in note for note in _stamp_notes(validate_html, stamped)))
+    check("the stamp localizes rather than printing English to a Chinese reader",
+          "Structure checks passed: " not in with_stamp("zh-CN"),
+          "renderer-owned English on a non-English page")
 
 
 def main() -> int:
