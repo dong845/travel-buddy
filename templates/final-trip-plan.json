@@ -33,6 +33,14 @@
     "declined_at. It is required because the failure it guards is an omission: an assistant that",
     "skipped the form is the same assistant that would leave an optional key out, so an optional",
     "version would report clean on exactly the run that motivated it.",
+    "",
+    "attraction_tickets[].sale_opens_at -- REQUIRED on any ticket an activity actually schedules,",
+    "and only those: a ticket listed as an option nobody put on a day cannot strand anyone. status is",
+    "always_available | scheduled_release | at_the_door | sold_out_or_unavailable. opens_at is an ISO",
+    "date-time and is required when status is scheduled_release. basis is one sentence saying where",
+    "the rule came from -- it is the whole anti-rubber-stamp of this field, because someone who",
+    "opened the official page can write it and someone who guessed 'always_available' cannot. A",
+    "guessed value is a fabricated fact, which is worse than the blank this field replaces.",
     "Delete this _contract key before saving the real plan."
   ],
   "plan_status": "researched",
@@ -326,6 +334,11 @@
         "checked_at": null,
         "review_url": null,
         "timed_entry_or_reservation": null,
+        "sale_opens_at": {
+          "status": "always_available",
+          "opens_at": null,
+          "basis": null
+        },
         "price_low": null,
         "price_high": null,
         "currency": null,

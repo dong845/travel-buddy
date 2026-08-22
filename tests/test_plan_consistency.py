@@ -1591,6 +1591,71 @@ def main() -> int:
         mutate(p)
         expect_fail_naming(label, p, ["1970-01-01", "placeholder"])
 
+    # A ticket you cannot be at a screen to buy is not a ticket the traveller has. Kabukiza
+    # single-act seats go on sale 12:00 the day before, and the plan itself had the traveller in
+    # the Narita immigration queue at that moment -- its own timeline refuting its own instruction,
+    # with nothing comparing the two because the sale moment was not data.
+    trip_day = day(copy.deepcopy(base), 1)["date"]
+
+    # The fixture's day 1 runs 09:00 to 15:00. Times are read, never rewritten: moving an activity
+    # here breaks check_clock_closure, and the case then fails for a reason it was not testing.
+    def with_ticket(sale, scheduled=True):
+        p = copy.deepcopy(base)
+        ticket = {"id": "T1", "day_number": 1, "attraction_name": "Kabukiza single-act seats",
+                  "checked_at": "2026-08-20"}
+        if sale is not None:
+            ticket["sale_opens_at"] = sale
+        p["booking_options"]["attraction_tickets"] = [ticket]
+        if scheduled:
+            day(p, 1)["activities"][0]["ticket_option_id"] = "T1"
+        return p
+
+    expect_fail("a scheduled ticket declaring no sale window",
+                with_ticket(None), "declares no sale_opens_at")
+    # Option C: the burden lands only on tickets a day actually uses. A booking option nobody
+    # scheduled cannot strand anyone, and taxing every museum admission is how a rule gets routed
+    # around a research budget.
+    _, out = run(with_ticket(None, scheduled=False))
+    if "sale_opens_at" in out:
+        failures.append("an unscheduled ticket must not be held to the sale-window rule\n" + out)
+
+    # basis is the anti-rubber-stamp: a required field with a free vocabulary invites
+    # "always_available" typed without opening anything, which is an invented fact rather than a
+    # visible blank -- worse than what it replaces.
+    expect_fail("always_available with no basis",
+                with_ticket({"status": "always_available", "opens_at": None, "basis": None}),
+                "no basis")
+    expect_fail("a basis that is still a placeholder",
+                with_ticket({"status": "always_available", "opens_at": None,
+                             "basis": "TODO: check the box office"}), "placeholder")
+    expect_fail("a status outside the vocabulary",
+                with_ticket({"status": "probably fine", "opens_at": None, "basis": "x"}),
+                "not one of")
+    expect_ok("always_available with a real basis (the cheap common case)",
+              with_ticket({"status": "always_available", "opens_at": None,
+                           "basis": "Official site: open seating, tickets at the door all season."}))
+    expect_fail("a scheduled_release with no opens_at",
+                with_ticket({"status": "scheduled_release", "opens_at": None,
+                             "basis": "Sold the day before."}), "no ISO opens_at")
+
+    expect_fail_naming("the recorded defect: seats released while the traveller is still in transit",
+                       with_ticket({"status": "scheduled_release",
+                                    "opens_at": f"{trip_day}T07:00:00+09:00",
+                                    "basis": "Official site: released 07:00 on the day."}),
+                       ["07:00", "still in transit"])
+    expect_fail("a sale that opens after the day the plan already uses the ticket",
+                with_ticket({"status": "scheduled_release", "opens_at": "2026-12-01T12:00:00+09:00",
+                             "basis": "Released 2026-12-01."}), "already has the traveller using it")
+
+    # The two that must stay quiet, or the rule is a wall: a sale the traveller is around for, and
+    # the ordinary case of buying before leaving home.
+    expect_ok("a sale the traveller is present for",
+              with_ticket({"status": "scheduled_release", "opens_at": f"{trip_day}T11:00:00+09:00",
+                           "basis": "Official site: released 11:00."}))
+    expect_ok("a sale that opens before departure",
+              with_ticket({"status": "scheduled_release", "opens_at": "2026-09-01T12:00:00+09:00",
+                           "basis": "Official site: released two weeks ahead."}))
+
     # replan_context tells the author to re-check the fact and "record what you found in
     # 'resolution'" -- and only the boolean was ever read. Flipping every flag to true with no
     # resolution shipped a replanned plan whose weekday-keyed opening hours, researched for a
@@ -1626,7 +1691,11 @@ def main() -> int:
         p["trip"]["end_date"] = "2026-09-29"
         p["booking_options"]["attraction_tickets"] = [
             {"id": "T1", "day_number": ticket_day, "attraction_name": "Evening opera",
-             "checked_at": "2026-08-20"}]
+             "checked_at": "2026-08-20",
+             # A scheduled ticket now owes a sale window; this case is about the day-agreement
+             # rule, so it declares the cheap honest one rather than failing for another reason.
+             "sale_opens_at": {"status": "always_available", "opens_at": None,
+                               "basis": "Official box office lists open seating all season."}}]
         day(p, activity_day)["activities"][0]["ticket_option_id"] = "T1"
         return p
 

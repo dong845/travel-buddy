@@ -3079,6 +3079,128 @@ def check_sentinel_timestamps(plan: dict, errors: list[str], notes: list[str]) -
         f"shipping the sentinel claims a check that never happened. Write the date each was "
         f"actually checked, or remove the claim it supports.")
 
+
+SALE_STATUSES = ("always_available", "scheduled_release", "at_the_door", "sold_out_or_unavailable")
+
+
+def _clock_minutes(value: object) -> int | None:
+    """Minutes past midnight from an "HH:MM" activity time, or None if it is not one."""
+    match = re.match(r"^\s*(\d{1,2}):(\d{2})", str(value or ""))
+    if not match:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    return hour * 60 + minute if 0 <= hour < 24 and 0 <= minute < 60 else None
+
+
+def check_ticket_sale_windows(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A ticket you cannot be at a screen to buy is not a ticket the traveller has.
+
+    The recorded case: Kabukiza single-act seats go on sale at 12:00 the day before, and at that
+    moment the plan itself had the traveller in the Narita immigration queue. The plan's own
+    timeline refuted its own instruction, and nothing compared the two because the sale moment was
+    not data -- `timed_entry_or_reservation` is free text.
+
+    Required only on tickets an activity actually schedules. A ticket listed as a booking option
+    nobody put on a day cannot strand anyone, and taxing every ordinary museum admission with a
+    research item is how a rule earns its way around a research budget. The field is cheap on the
+    common case: `always_available` with one sentence of basis.
+
+    `basis` is the point of the design, not paperwork. An optional field would have been this
+    skill's own recurring defect a seventh time -- the agent that never researched the sale window
+    is the one that omits the field, so the gate reports clean on the run that motivated it. But a
+    required field with a free vocabulary invites the opposite failure: `always_available` typed
+    reflexively without opening anything, which is a fabricated fact rather than a visible blank,
+    and worse than what it replaces. One sentence saying where the rule came from is writable by
+    someone who opened the official page and not by someone who guessed.
+    """
+    days = [_obj(d) for d in _seq(plan.get("days"))]
+    day_by_number = {d.get("number"): d for d in days}
+    day_by_date = {str(d.get("date") or "").strip(): d for d in days if d.get("date")}
+
+    scheduled: dict[str, set] = {}
+    for day in days:
+        for activity in [_obj(a) for a in _seq(day.get("activities"))]:
+            ref = activity.get("ticket_option_id")
+            if ref:
+                scheduled.setdefault(ref, set()).add(day.get("number"))
+
+    for ticket in [t for t in _seq(_obj(plan.get("booking_options")).get("attraction_tickets"))
+                   if isinstance(t, dict)]:
+        name = ticket.get("attraction_name") or ticket.get("id") or "unnamed ticket"
+        if not scheduled.get(ticket.get("id")):
+            continue
+
+        window = ticket.get("sale_opens_at")
+        if not isinstance(window, dict):
+            errors.append(
+                f"attraction ticket {name!r} is scheduled on a day but declares no sale_opens_at. "
+                f"Say when it can be bought: status always_available | scheduled_release | "
+                f"at_the_door | sold_out_or_unavailable, plus one sentence of basis. A ticket the "
+                f"traveller cannot be at a screen to buy is not a ticket they have.")
+            continue
+
+        status = str(window.get("status") or "").strip()
+        if status not in SALE_STATUSES:
+            errors.append(
+                f"attraction ticket {name!r} sale_opens_at.status is {status!r}, which is not one "
+                f"of {', '.join(SALE_STATUSES)}.")
+            continue
+
+        basis = window.get("basis")
+        if not isinstance(basis, str) or not basis.strip():
+            errors.append(
+                f"attraction ticket {name!r} sale_opens_at has no basis. Write the sentence that "
+                f"says where the rule came from -- it is what separates a sale window somebody "
+                f"read from one somebody assumed, and an assumed 'always_available' is an invented "
+                f"fact rather than a blank.")
+        elif _unfilled(basis):
+            errors.append(
+                f"attraction ticket {name!r} sale_opens_at.basis is still a placeholder.")
+
+        if status != "scheduled_release":
+            continue
+
+        opens_at = str(window.get("opens_at") or "").strip()
+        try:
+            # Only the date half has to parse; the clock is read separately because a plan may
+            # write "2026-09-27T12:00+09:00", which date.fromisoformat rejects on older Pythons.
+            dt.date.fromisoformat(opens_at.split("T")[0])
+            parseable = bool(opens_at)
+        except ValueError:
+            parseable = False
+        if not parseable:
+            errors.append(
+                f"attraction ticket {name!r} declares a scheduled_release but no ISO opens_at "
+                f"date-time. That moment is the whole subject of this field.")
+            continue
+
+        sale_date, _, sale_clock = opens_at.partition("T")
+        sale_minutes = _clock_minutes(sale_clock)
+
+        # 1. The sale must not fall after the traveller needs the ticket.
+        for number in sorted(n for n in scheduled[ticket.get("id")] if n is not None):
+            used_on = str(_obj(day_by_number.get(number)).get("date") or "").strip()
+            if used_on and sale_date > used_on:
+                errors.append(
+                    f"attraction ticket {name!r} goes on sale {opens_at}, after day {number} "
+                    f"({used_on}) when the plan already has the traveller using it.")
+
+        # 2. The recorded defect: the sale falls on a day inside the trip, at an hour the plan
+        #    itself has the traveller not yet arrived anywhere. Only fires when the sale lands on
+        #    a planned day -- a sale before departure is the normal case and says nothing.
+        day = day_by_date.get(sale_date)
+        if day is None or sale_minutes is None:
+            continue
+        activity_times = [t for t in (_clock_minutes(_obj(a).get("time"))
+                                      for a in _seq(day.get("activities"))) if t is not None]
+        if activity_times and sale_minutes < min(activity_times):
+            errors.append(
+                f"attraction ticket {name!r} goes on sale at {sale_clock or opens_at} on "
+                f"{sale_date}, and the plan's own day {day.get('number')} has the traveller "
+                f"nowhere until {min(activity_times) // 60:02d}:{min(activity_times) % 60:02d} -- "
+                f"they are still in transit when the seats are released. Buy it earlier, drop it, "
+                f"or say in the plan who buys it and from where.")
+
 PLAN_CHECKS = (
     check_routes,
     check_walking_budget,
@@ -3102,6 +3224,7 @@ PLAN_CHECKS = (
     check_preference_coverage,
     check_prose_texture,
     check_sentinel_timestamps,
+    check_ticket_sale_windows,
 )
 
 
