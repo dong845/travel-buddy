@@ -1591,6 +1591,37 @@ def main() -> int:
         mutate(p)
         expect_fail_naming(label, p, ["1970-01-01", "placeholder"])
 
+    # A dated ticket and the day its activity sits on have to name the same day. Membership was
+    # all that was ever checked -- day_number had to EXIST among the days -- so a ticket dated day
+    # 1 whose activity ran on day 2 passed, which is the Tokyo run's time-critical ticket pointed
+    # at the wrong evening, surviving the fix meant to close it.
+    def two_day_ticket(ticket_day: int, activity_day: int) -> dict:
+        p = copy.deepcopy(base)
+        p["days"].append(copy.deepcopy(day(p, 1)))
+        p["days"][1]["number"] = 2
+        p["days"][1]["date"] = "2026-09-29"
+        p["trip"]["end_date"] = "2026-09-29"
+        p["booking_options"]["attraction_tickets"] = [
+            {"id": "T1", "day_number": ticket_day, "attraction_name": "Evening opera",
+             "checked_at": "2026-08-20"}]
+        day(p, activity_day)["activities"][0]["ticket_option_id"] = "T1"
+        return p
+
+    expect_fail_naming("a ticket dated a different day than the activity using it",
+                       two_day_ticket(1, 2), ["Evening opera", "day 1", "day 2"])
+    # The correct pairing must stay quiet, or the rule is a wall rather than a check.
+    _, out = run(two_day_ticket(2, 2))
+    if "Evening opera" in out:
+        failures.append("a ticket dated the same day as its activity must not be flagged\n" + out)
+    # And a ticket listed as an option but scheduled nowhere cannot contradict itself.
+    p = copy.deepcopy(base)
+    p["booking_options"]["attraction_tickets"] = [
+        {"id": "T9", "day_number": 1, "attraction_name": "Unscheduled museum",
+         "checked_at": "2026-08-20"}]
+    _, out = run(p)
+    if "Unscheduled museum" in out:
+        failures.append("an unscheduled ticket must not be flagged as a day mismatch\n" + out)
+
     # Reported once with its paths, not once per field: a fresh four-day skeleton carries 61 of
     # them, and sixty-one copies of the same sentence bury every other finding.
     p = copy.deepcopy(base)

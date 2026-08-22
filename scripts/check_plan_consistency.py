@@ -781,6 +781,31 @@ def check_cross_references(plan: dict, errors: list[str], notes: list[str]) -> N
                 f"attraction ticket '{ticket.get('attraction_name')}' references day {target}, "
                 f"which is not in this plan (days: {sorted(n for n in day_numbers if n is not None)}).")
 
+    # A ticket's day_number was only ever checked for EXISTING among the days, so a ticket saying
+    # day 1 while the activity that uses it sat on day 2 passed -- which is the recorded defect
+    # from the Tokyo run, a time-critical ticket pointed at the wrong evening, and it survived the
+    # fix that was supposed to close it. Membership is not agreement. Reproduced on a two-day plan
+    # before this was written: zero findings either way.
+    scheduled_on: dict[str, set] = {}
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        for activity in [_obj(a) for a in _seq(day.get("activities"))]:
+            ref = activity.get("ticket_option_id")
+            if ref:
+                scheduled_on.setdefault(ref, set()).add(day.get("number"))
+    for ticket in [t for t in _seq(booking.get("attraction_tickets")) if isinstance(t, dict)]:
+        target = ticket.get("day_number")
+        days_used = {n for n in scheduled_on.get(ticket.get("id"), set()) if n is not None}
+        if target is None or not days_used:
+            # A ticket nobody scheduled is a booking option, not a contradiction. Only a ticket
+            # that names a day AND is used on one can disagree with itself.
+            continue
+        if days_used != {target}:
+            errors.append(
+                f"attraction ticket '{ticket.get('attraction_name')}' is dated day {target}, but "
+                f"the activity using it is on day {', '.join(str(n) for n in sorted(days_used))}. "
+                f"A dated ticket is what the traveller shows at a door on one particular evening, "
+                f"so the two have to name the same day -- fix whichever moved.")
+
     ticket_ids = {t.get("id") for t in _seq(booking.get("attraction_tickets")) if isinstance(t, dict)}
     for day in [_obj(d) for d in _seq(plan.get("days"))]:
         for activity in [_obj(a) for a in _seq(day.get("activities"))]:

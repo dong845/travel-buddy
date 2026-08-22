@@ -28,8 +28,9 @@ def run(doc: dict, intake: bool = False) -> tuple[int, str]:
         path = Path(tmp) / "shortlist.json"
         path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
         command = [sys.executable, str(SCRIPT), str(path)]
-        if intake:
-            command += ["--intake", str(INTAKE)]
+        # --no-intake is the deliberate escape hatch, not a default: the cases below are about
+        # every other rule, and omitting both flags is now its own refusal (tested separately).
+        command += ["--intake", str(INTAKE)] if intake else ["--no-intake"]
         result = subprocess.run(command, capture_output=True, text=True)
         return result.returncode, result.stdout + result.stderr
 
@@ -37,6 +38,27 @@ def run(doc: dict, intake: bool = False) -> tuple[int, str]:
 def main() -> int:
     base = json.loads(FIXTURE.read_text(encoding="utf-8"))
     failures: list[str] = []
+
+    # Omitting the intake used to print an accurate note and exit 0 -- and an exit 0 is what an
+    # assistant reads, so the one check that catches a winner never tested against a stated
+    # constraint was skippable by saying nothing. Same shape as --verification/--unverified.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "shortlist.json"
+        path.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+        bare = subprocess.run([sys.executable, str(SCRIPT), str(path)],
+                              capture_output=True, text=True)
+        if bare.returncode == 0:
+            failures.append("running with neither --intake nor --no-intake must refuse, "
+                            f"got exit 0\n{bare.stdout + bare.stderr}")
+        elif "--no-intake" not in (bare.stdout + bare.stderr):
+            failures.append("the refusal must name the escape hatch\n" + bare.stderr)
+        opted_out = subprocess.run([sys.executable, str(SCRIPT), str(path), "--no-intake"],
+                                   capture_output=True, text=True)
+        if opted_out.returncode != 0:
+            failures.append("--no-intake must run\n" + opted_out.stdout + opted_out.stderr)
+        elif "NO INTAKE" not in (opted_out.stdout + opted_out.stderr):
+            failures.append("--no-intake must say loudly that coverage did not run\n"
+                            + opted_out.stdout)
 
     def expect_ok(name: str, doc: dict, intake: bool = False) -> None:
         code, out = run(doc, intake)

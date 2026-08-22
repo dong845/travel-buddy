@@ -789,7 +789,26 @@ def main() -> int:
         "--intake", default=None,
         help="Saved trip intake JSON. Supplying it computes the hard-constraint roster from what "
              "the traveller actually declared and requires every candidate to answer each one.")
+    parser.add_argument(
+        "--no-intake", action="store_true",
+        help="Run without the constraint-coverage check, when no saved intake exists. Records the "
+             "gap loudly instead of leaving a silent exit 0.")
     args = parser.parse_args()
+    # Same shape as save_trip_deliverables.py's --verification/--unverified pair, and for the same
+    # reason. Omitting --intake used to print an accurate note and exit 0, and an exit 0 is what an
+    # assistant reads -- so the one check that catches a winner never tested against a constraint
+    # the traveller stated was skippable by saying nothing. The escape hatch stays, because a gate
+    # people route around warns nobody, but it costs visibility rather than silence.
+    if not args.intake and not args.no_intake:
+        print(
+            "ERROR: No --intake. Pass the saved intake JSON "
+            "(<workspace>/plans/intake-<stamp>-<slug>.json) so the hard-constraint roster is "
+            "computed from what the traveller actually declared, or pass --no-intake to run "
+            "without it and record the gap. Without it, the check that catches a winner never "
+            "tested against a stated constraint does not run at all, and a roster written by hand "
+            "into the shortlist reports full coverage on exactly the run that motivated it.",
+            file=sys.stderr)
+        return 1
     try:
         doc = json.loads(Path(args.shortlist).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -815,9 +834,10 @@ def main() -> int:
         check(doc, errors, notes)
     check_constraint_coverage(doc, errors, notes, intake=intake)
     if intake is None:
-        notes.append("note: no --intake supplied, so constraint coverage did not run. That is the "
-                     "check which catches a winner never tested against a constraint the "
-                     "traveller stated; pass the saved intake to arm it.")
+        notes.append("NO INTAKE: constraint coverage did not run. This shortlist has NOT been "
+                     "tested against the hard constraints the traveller stated -- say so when you "
+                     "present it, and do not describe a winner as having cleared their "
+                     "requirements. Pass the saved intake to arm the check.")
     for note in notes:
         print(f"note: {note}")
     if errors:
