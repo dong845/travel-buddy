@@ -91,6 +91,65 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as workspace_dir:
         workspace = Path(workspace_dir)
 
+        # Intake provenance. SKILL.md has always made the loopback HTML form the required path
+        # and the chat questionnaire a fallback the TRAVELLER chooses, and measured on other
+        # harnesses assistants opened no form at all and went straight to chat -- because prose
+        # cannot fail a run. These cases are what makes it fail one. Each method must arrive with
+        # its own evidence, so the shortcut costs more than the form rather than less.
+        missing = copy.deepcopy(base)
+        del missing["intake_context"]
+        code, out = run(missing, workspace, "--unverified", "--slug", "nointake")
+        check("a plan that will not say how intake happened is refused",
+              code == 1 and "INTAKE PROVENANCE MISSING" in out, out)
+        check("the refusal names the form command rather than only complaining",
+              "start_intake_workflow.py" in out, out)
+        check("a refused save writes no intake-less plan",
+              not list((workspace / "plans").glob("*nointake*")), out)
+
+        for bad, label in (
+            ({"method": "form"}, "an invented method"),
+            ({"method": "html_form"}, "html_form with no intake file"),
+            ({"method": "html_form",
+              "intake_file": "<workspace>/plans/trip-intake-<timestamp>.json"},
+             "html_form still holding the template's bracketed placeholder"),
+            ({"method": "user_supplied"}, "user_supplied with no source note"),
+            ({"method": "chat_fallback"}, "chat_fallback with no traveller words"),
+            ({"method": "chat_fallback", "declined_verbatim": "TODO: their words",
+              "declined_at": "2026-08-22"}, "chat_fallback still holding a placeholder"),
+            ({"method": "chat_fallback", "declined_verbatim": "不用表单了，直接问我吧",
+              "declined_at": "sometime"}, "chat_fallback with an unparseable date"),
+            # A valid ISO date that is nonetheless invented. The skeleton stamps every date it
+            # cannot know as the epoch, and on the record that says the traveller authorised the
+            # shortcut, shipping it would be a fabricated fact rather than a visible blank.
+            ({"method": "chat_fallback", "declined_verbatim": "不用表单了，直接问我吧",
+              "declined_at": "1970-01-01"}, "chat_fallback still stamped with the epoch sentinel"),
+        ):
+            plan = copy.deepcopy(base)
+            plan["intake_context"] = bad
+            code, out = run(plan, workspace, "--unverified", "--slug", "badintake")
+            check(f"{label} is refused", code == 1 and "INTAKE PROVENANCE MISSING" in out, out)
+
+        # And the three legitimate routes must all pass, or the gate is just a wall. In their own
+        # workspace: these are the cases that succeed, and a later case here asserts that a
+        # refused save left the plans folder empty.
+        with tempfile.TemporaryDirectory() as accepted_dir:
+            for good, label in (
+                ({"method": "html_form",
+                  "intake_file": "/w/plans/intake-20260822-ams.json"},
+                 "html_form naming its intake file"),
+                ({"method": "user_supplied",
+                  "source_note": "Traveller pasted a complete brief with dates, budget and party."},
+                 "user_supplied saying what arrived instead"),
+                ({"method": "chat_fallback", "declined_verbatim": "不用开表单了，直接在这里问我",
+                  "declined_at": "2026-08-22"},
+                 "chat_fallback carrying the traveller's own words"),
+            ):
+                plan = copy.deepcopy(base)
+                plan["intake_context"] = good
+                code, out = run(plan, Path(accepted_dir), "--unverified",
+                                "--slug", f"ok-{good['method']}")
+                check(f"{label} is accepted", code == 0, out)
+
         # The refusal that matters most: no report, no flag, no files. A structure gate cannot
         # tell you whether a fare or an opening time is true, so saving without either is the
         # one outcome that must be impossible.

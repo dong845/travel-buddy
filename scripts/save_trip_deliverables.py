@@ -19,7 +19,7 @@ from check_plan_consistency import (
     check_verification,
     gates_stamp,
 )
-from render_final_trip_html import read_json, render, validate_plan
+from render_final_trip_html import intake_context_errors, read_json, render, validate_plan
 from validate_trip_html import validate as validate_html
 
 
@@ -65,6 +65,28 @@ def main() -> int:
         print("INVALID PLAN", file=sys.stderr)
         for error in errors:
             print(f"- {error}", file=sys.stderr)
+        return 1
+
+    # How the requirements were collected, checked on the one path that hands files to a
+    # traveller. SKILL.md has always required the loopback HTML form and allowed the chat
+    # questionnaire only when the traveller declined it, and that stayed prose: measured on other
+    # harnesses, assistants opened no form and went straight to chat. Prose does not fail, so this
+    # does. There is no bypass flag because there is nothing left to bypass -- html_form,
+    # user_supplied and chat_fallback already cover every legitimate route, and the only thing the
+    # gate rejects is refusing to say which one happened.
+    intake_errors = intake_context_errors(plan.get("intake_context"))
+    if intake_errors:
+        print("INTAKE PROVENANCE MISSING", file=sys.stderr)
+        for error in intake_errors:
+            print(f"- {error}", file=sys.stderr)
+        print(
+            "The loopback HTML form is the required intake path: "
+            "`python scripts/start_intake_workflow.py --assistant auto` (run it in the background; "
+            "it blocks until the traveller submits). Chat intake is legitimate ONLY when the "
+            "traveller declined the form, and then intake_context.declined_verbatim must carry "
+            "their own words. Not having run the form yet is not one of the three methods.",
+            file=sys.stderr,
+        )
         return 1
 
     # Structure gates prove the page is well-formed; these prove the plan agrees with itself.

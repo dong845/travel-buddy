@@ -314,6 +314,19 @@ def main() -> int:
                         help="copy the traveller's own answers out of a saved intake file")
     parser.add_argument("--oversize", action="store_true",
                         help="Allow a plan past the size limits (see the refusal message for what that costs)")
+    parser.add_argument("--intake-method", choices=("html_form", "user_supplied", "chat_fallback"),
+                        default=None,
+                        help="How the traveller's requirements were collected. --from-intake sets "
+                             "html_form on its own; use this only for the other two routes")
+    parser.add_argument("--source-note", default=None,
+                        help="With --intake-method user_supplied: what the traveller supplied instead")
+    parser.add_argument("--declined-verbatim", default=None,
+                        help="With --intake-method chat_fallback: the traveller's OWN WORDS "
+                             "declining the loopback form")
+    parser.add_argument("--declined-at", default=None, metavar="YYYY-MM-DD",
+                        help="With --intake-method chat_fallback: the date they declined it. "
+                             "Left out, this stays the 1970-01-01 sentinel, which the save gate "
+                             "rejects rather than shipping an invented date")
     args = parser.parse_args()
 
     intake: dict = {}
@@ -323,6 +336,40 @@ def main() -> int:
         except IntakeError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
+
+    # Each route has to arrive with its own evidence, or it is not that route. chat_fallback is the
+    # one the traveller has to authorise, so it needs their words rather than a summary: a
+    # paraphrase reads identically whether they declined the form or an assistant never offered it.
+    method = args.intake_method or ("html_form" if args.from_intake else None)
+    if method == "html_form" and not args.from_intake:
+        print("ERROR: --intake-method html_form needs --from-intake, which names the file the "
+              "intake server wrote. Claiming the form ran without the file it produces is the one "
+              "thing this field exists to prevent.", file=sys.stderr)
+        return 2
+    if method == "user_supplied" and not (args.source_note or "").strip():
+        print("ERROR: --intake-method user_supplied needs --source-note saying what the traveller "
+              "supplied instead of the form.", file=sys.stderr)
+        return 2
+    if method == "chat_fallback" and not (args.declined_verbatim or "").strip():
+        print("ERROR: --intake-method chat_fallback needs --declined-verbatim, the traveller's own "
+              "words declining the loopback form. Chat intake is theirs to choose, not yours: it "
+              "loses the form server's rejection of document/payment/address fields, its "
+              "scope-versus-work-mode check, the profile's never_recommend and dietary prefill, "
+              "and the saved intake the shortlist gate reads. If they have not declined it, run "
+              "`python scripts/start_intake_workflow.py --assistant auto` in the background "
+              "instead.", file=sys.stderr)
+        return 2
+    intake_context = {
+        "method": method,
+        "intake_file": str(Path(args.from_intake).resolve()) if args.from_intake else None,
+        "source_note": args.source_note,
+        "declined_verbatim": args.declined_verbatim,
+        # DATE is the epoch sentinel, and here it is deliberately not silent: a made-up date on
+        # the record that says the traveller authorised chat intake is a fabricated fact, so
+        # intake_context_errors rejects it at save time instead of letting it through the way the
+        # skeleton's other date sentinels go through.
+        "declined_at": (args.declined_at or DATE) if method == "chat_fallback" else None,
+    } if method else None
 
     report: list[str] = []
 
@@ -488,6 +535,14 @@ def main() -> int:
         "verification_status": None,
         "verification_report": None,
         "generated_at": DATE,
+        # Filled for free on the path this skill requires, and only there. --from-intake proves a
+        # traveller filled the loopback HTML form, because that file is what the intake server
+        # writes -- so html_form costs the author nothing, and the routes that skipped the form are
+        # the ones that have to stop and name themselves (--intake-method, and for chat_fallback
+        # the traveller's own words declining it). Omitted entirely when the author says nothing:
+        # a guess here would be the skeleton asserting something it cannot know, and
+        # save_trip_deliverables.py refuses the plan until someone answers.
+        **({"intake_context": intake_context} if intake_context else {}),
         "ui_labels": None,
         "trip": {
             "title": f"{TODO}trip title", "language": args.language, "currency": currency,

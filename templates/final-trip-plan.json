@@ -25,12 +25,27 @@
     "truthfully print '42 minutes on foot' for a day that schedules three and a half hours of it",
     "inside museums and markets. That happened, against a stated mobility limit, and the walking",
     "gate certified the number. Authoring it turns the second half of the day's walking on.",
+    "",
+    "intake_context -- REQUIRED, unlike the three blocks above. method is one of html_form |",
+    "user_supplied | chat_fallback and each carries its own evidence: html_form names the intake",
+    "file only the intake server writes; user_supplied says what the traveller supplied instead;",
+    "chat_fallback carries declined_verbatim, the traveller's OWN WORDS declining the form, plus",
+    "declined_at. It is required because the failure it guards is an omission: an assistant that",
+    "skipped the form is the same assistant that would leave an optional key out, so an optional",
+    "version would report clean on exactly the run that motivated it.",
     "Delete this _contract key before saving the real plan."
   ],
   "plan_status": "researched",
   "verification_status": null,
   "verification_report": null,
   "generated_at": null,
+  "intake_context": {
+    "method": "html_form",
+    "intake_file": "<workspace>/plans/trip-intake-<timestamp>.json",
+    "source_note": null,
+    "declined_verbatim": null,
+    "declined_at": null
+  },
   "ui_labels": null,
   "trip": {
     "title": null,

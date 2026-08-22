@@ -1,6 +1,13 @@
 {
   "plan_status": "researched",
   "generated_at": "2026-07-30T10:00:00+08:00",
+  "intake_context": {
+    "method": "html_form",
+    "intake_file": "/tmp/travel-buddy-fixture/plans/intake-20260101-fixture.json",
+    "source_note": null,
+    "declined_verbatim": null,
+    "declined_at": null
+  },
   "trip": {
     "title": "Renderer quality-gate fixture",
     "language": "en",

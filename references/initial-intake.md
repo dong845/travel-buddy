@@ -2,6 +2,8 @@
 
 Use this reference after the first response is gathered or when the user asks for a detailed intake. The goal is a sufficiently reliable decision profile, not exhaustive personal data.
 
+**This file describes the questions, not a licence to ask them in chat.** The loopback HTML form asks them; the conversation design below is what the form encodes and what a chat fallback must cover when the traveller has declined the form. Chat is theirs to choose, not yours — see SKILL.md section 1, and note that `save_trip_deliverables.py` refuses any plan whose `intake_context` does not say which route was taken, with the traveller's own declining words when it was `chat_fallback`.
+
 ## Conversation design
 
 Collect information in descending order of decision impact:

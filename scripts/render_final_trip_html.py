@@ -66,6 +66,17 @@ ENTRY_STATUSES = (
     "required_to_apply",
 )
 ALLERGY_SEVERITIES = ("none", "preference", "intolerance", "severe")
+
+# How this plan's requirements were collected. SKILL.md makes the loopback HTML form the required
+# path and the chat questionnaire a fallback the TRAVELLER chooses; until this field existed that
+# rule was prose, and prose is exactly what a second agent skipped. Measured: assistants on other
+# harnesses opened no form at all and went straight to chat, which loses the intake server's
+# rejection of document/payment/address fields, its scope-versus-work-mode consistency check, the
+# profile's never_recommend and dietary prefill, and the saved intake that
+# check_shortlist_consistency.py --intake computes the hard-constraint roster from. Each method
+# has to carry the evidence that it was allowed, so that skipping the form costs more than using
+# it rather than less.
+INTAKE_METHODS = ("html_form", "user_supplied", "chat_fallback")
 # Opening-hours provenance, as recorded by the dining research. Anything that is not an
 # explicit "verified" is shown in the warning treatment: "researched" means somebody read
 # a website once, which is not the same as somebody confirming the venue is open on the
@@ -1866,6 +1877,92 @@ def link_for_ticket(ticket: dict | None) -> str:
     if not ticket:
         return "No separate ticket is required or it was not verified."
     return f'<a class="booking-link" data-booking-type="ticket" data-provider="{attr(as_text(ticket.get("official_or_authorised_provider"), "Provider"))}" data-verified-at="{attr(as_text(ticket.get("checked_at")))}" href="{attr(ticket.get("review_url"))}" target="_blank" rel="noopener noreferrer">Review ticket: {esc(ticket.get("attraction_name"))}</a>'
+
+
+def intake_context_errors(intake_context: object) -> list[str]:
+    """Refuse a plan that will not say how its requirements were collected.
+
+    This one is required rather than optional, and that is the whole point. SKILL.md already said
+    to default to the HTML form and fall back to chat only when the traveller declines, and other
+    harnesses read "default" as a preference and opened no form at all. An optional field changes
+    nothing there: the agent that skipped the form is exactly the agent that omits the key, so the
+    gate reports clean on the run that motivated it. Required, the shortcut has to be declared, and
+    declaring it costs more than doing the intake properly.
+
+    Each branch demands the evidence that it was allowed, not just its own name:
+
+    - `html_form` names the saved intake file, which only the intake server writes.
+    - `user_supplied` says what the traveller supplied instead, so "they told me already" is a
+      claim with content rather than a shrug.
+    - `chat_fallback` carries the traveller's own words declining the form, and when they said so.
+      Their words, not a summary: this is the one branch the traveller has to authorise, and a
+      paraphrase is indistinguishable from an assistant that decided for them.
+
+    Placeholders are rejected outright. A skeleton's `TODO:` string satisfies "is this key
+    present" and answers nothing, which is how a whole intake gate goes green on an empty form.
+
+    Called from save_trip_deliverables.py rather than validate_plan, and deliberately: the
+    requirement is about handing a plan to a traveller, not about rendering a draft. Putting it in
+    validate_plan would fail new_plan_skeleton.py's own output -- a skeleton cannot know how the
+    requirements were collected -- and retroactively invalidate every plan already in a workspace,
+    which audit_workspace.py reads with this same validator.
+    """
+    errors: list[str] = []
+    if intake_context is None:
+        return ["intake_context is required: say how this plan's requirements were collected "
+                "(method html_form | user_supplied | chat_fallback). The loopback HTML form is "
+                "the required path; chat_fallback is legitimate only when the traveller declined "
+                "it, and this field is where that shows."]
+    if not isinstance(intake_context, dict):
+        return ["intake_context must be an object."]
+
+    method = intake_context.get("method")
+    if method not in INTAKE_METHODS:
+        return [f"intake_context.method must be one of: {', '.join(INTAKE_METHODS)}."]
+
+    required = {
+        "html_form": ("intake_file",),
+        "user_supplied": ("source_note",),
+        "chat_fallback": ("declined_verbatim", "declined_at"),
+    }[method]
+    for field in required:
+        value = intake_context.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"intake_context.{field} is required when method is {method}.")
+        elif any(marker in value for marker in ("TODO:", "example.invalid")):
+            errors.append(f"intake_context.{field} still holds a placeholder, which answers nothing.")
+        elif field != "declined_verbatim" and re.search(r"<[^<>]{1,60}>", value):
+            # templates/final-trip-plan.json ships intake_file as
+            # "<workspace>/plans/trip-intake-<timestamp>.json", and a template copied without
+            # editing is a non-empty string carrying no TODO -- it would pass every check above.
+            # Not applied to declined_verbatim: that is a human being quoted, and refusing their
+            # sentence because it contains a bracket would be the gate inventing a defect.
+            errors.append(f"intake_context.{field} is still the template's <bracketed> placeholder.")
+
+    # What this deliberately does NOT do: require intake_file to resolve on disk. It was written
+    # that way first, on the reasoning that claiming the form ran should cost producing what the
+    # form writes -- and it made every legitimate re-save fail. A plan is a portable document: it
+    # is re-rendered, replanned weeks later, audited from a moved workspace, restored from backup.
+    # Tying its validity to a sibling file still existing on this machine blocks the traveller's
+    # own plan for a reason that has nothing to do with how intake happened, and the way out the
+    # error suggested was to relabel the method, i.e. to write something false. A forged path is
+    # no harder than a forged file anyway, so the check bought little and broke much.
+    if method == "chat_fallback":
+        declined_at = intake_context.get("declined_at")
+        if isinstance(declined_at, str) and declined_at.strip():
+            if not is_iso_datestamp(declined_at):
+                errors.append("intake_context.declined_at must be an ISO date or date-time.")
+            elif declined_at.startswith("1970-01-01"):
+                # new_plan_skeleton.py stamps every date it cannot know as the epoch, and its own
+                # docstring lists that as a hole: 1970 is conspicuous on a page but no gate rejects
+                # it. Here it would be a fabricated fact in the one record that says the traveller
+                # authorised the shortcut, so this is the one date field where the sentinel is an
+                # error rather than a visible blank.
+                errors.append(
+                    "intake_context.declined_at is still the skeleton's 1970-01-01 placeholder. "
+                    "Write the date the traveller actually declined the form; a provenance record "
+                    "with an invented date is worse than none.")
+    return errors
 
 
 def validate_plan(plan: dict) -> list[str]:
