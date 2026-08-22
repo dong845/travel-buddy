@@ -45,7 +45,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-USER_AGENT = ("travel-buddy/2.3 (https://github.com/dong845/travel-buddy) "
+USER_AGENT = ("travel-buddy/2.4 (https://github.com/dong845/travel-buddy) "
               "python-urllib")
 WIKI_API = "https://{lang}.wikipedia.org/w/api.php"
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
