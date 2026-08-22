@@ -1591,6 +1591,29 @@ def main() -> int:
         mutate(p)
         expect_fail_naming(label, p, ["1970-01-01", "placeholder"])
 
+    # replan_context tells the author to re-check the fact and "record what you found in
+    # 'resolution'" -- and only the boolean was ever read. Flipping every flag to true with no
+    # resolution shipped a replanned plan whose weekday-keyed opening hours, researched for a
+    # Monday that is now a Thursday, were never re-checked, while the gate said all resolved.
+    def replanned(entries: list[dict]) -> dict:
+        p = copy.deepcopy(base)
+        p["replan_context"] = {"replanned_from": "old.json", "replanned_at": "2026-08-22",
+                               "change_request": "three days later", "changed_fields": ["dates"],
+                               "must_reverify": entries}
+        return p
+
+    entry = {"path": "days[0].dining[0].venue_hours",
+             "reason": "hours were checked for a Monday this day no longer is"}
+    expect_fail_naming("a must_reverify entry resolved with no resolution text",
+                       replanned([dict(entry, resolved=True)]),
+                       ["must_reverify[0]", "no 'resolution'"])
+    expect_fail_naming("a resolution that is still a placeholder",
+                       replanned([dict(entry, resolved=True, resolution="TODO: re-check")]),
+                       ["must_reverify[0]", "placeholder"])
+    expect_ok("a must_reverify entry resolved with what was found",
+              replanned([dict(entry, resolved=True,
+                              resolution="Re-checked for Thursday: 11:00-14:30, closed Tuesdays.")]))
+
     # A dated ticket and the day its activity sits on have to name the same day. Membership was
     # all that was ever checked -- day_number had to EXIST among the days -- so a ticket dated day
     # 1 whose activity ran on day 2 passed, which is the Tokyo run's time-critical ticket pointed

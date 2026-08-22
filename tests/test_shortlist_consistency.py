@@ -390,6 +390,31 @@ def main() -> int:
     if "Traceback" in out:
         failures.append(f"malformed input produced a traceback\n{out}")
 
+    # SKILL.md step 5 says "score only candidates with sufficient evidence", and nothing read
+    # candidate.evidence at all -- so a candidate could carry fit.score 82, be named winner, and
+    # hold evidence: [], recommending a destination to a traveller with no source under it.
+    p = copy.deepcopy(base)
+    p["candidates"][0]["evidence"] = []
+    expect_fail("a scored winner with no evidence", p, "carries no evidence", intake=True)
+
+    for field in ("claim", "source_url", "accessed_on"):
+        p = copy.deepcopy(base)
+        p["candidates"][0]["evidence"][0].pop(field)
+        expect_fail(f"an evidence entry missing {field}", p, field, intake=True)
+
+    p = copy.deepcopy(base)
+    p["candidates"][0]["evidence"][0]["source_url"] = "http://fixture.example/climate"
+    expect_fail("an evidence entry sourced over plain HTTP", p, "not HTTPS", intake=True)
+
+    # Honest work in progress must stay quiet, or the rule punishes saying so.
+    p = copy.deepcopy(base)
+    p["candidates"].append({"destination": {"name": "Still researching"},
+                            "research_status": "partial", "evidence": []})
+    code, out = run(p, intake=True)
+    if "carries no evidence" in out:
+        failures.append("an unscored, unrecommended candidate must not be held to the evidence "
+                        f"rule\n{out}")
+
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:

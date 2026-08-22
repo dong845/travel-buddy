@@ -1230,6 +1230,24 @@ def check_replan_context(plan: dict, errors: list[str], notes: list[str]) -> Non
             continue
         resolved = raw.get("resolved")
         if resolved is True:
+            # The message below asks for two things and this used to check one. Flipping every
+            # flag to true with no resolution text shipped a replanned plan whose weekday-keyed
+            # facts -- opening hours researched for a Monday that is now a Thursday -- were never
+            # re-checked, and the gate said all resolved. Same reasoning as `not_pursued` owing a
+            # sentence: an escape nobody has to justify is a way to switch a rule off rather than
+            # to answer it, and here the rule being switched off is the only record that the
+            # research underneath the plan has expired.
+            resolution = raw.get("resolution")
+            if not isinstance(resolution, str) or not resolution.strip():
+                errors.append(
+                    f"replan_context.must_reverify[{position}] is marked resolved with no "
+                    f"'resolution': {raw.get('path')!r}. Write what you actually found when you "
+                    f"re-checked it -- the new hours, the new fare, or that it was unaffected. A "
+                    f"bare true is the same claim as an unresolved entry, made harder to see.")
+            elif any(marker in resolution for marker in PLACEHOLDER_MARKERS):
+                errors.append(
+                    f"replan_context.must_reverify[{position}].resolution still holds a "
+                    f"placeholder: {_short(resolution)}.")
             continue
         open_entries += 1
         # Anything other than the literal `true` is called out for what it is: "resolved": "yes"

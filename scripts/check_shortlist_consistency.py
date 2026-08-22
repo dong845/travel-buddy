@@ -768,6 +768,53 @@ def check_constraint_coverage(doc: dict, errors: list[str], notes: list[str],
                         f"generated, so it should never have reached the list at all.")
 
 
+
+def check_scored_candidates_carry_evidence(doc: dict, errors: list[str], notes: list[str]) -> None:
+    """SKILL.md step 5 says "score only candidates with sufficient evidence". Nothing read it.
+
+    Measured: nothing in this file ever touched `candidate.evidence`, so a candidate could carry
+    `fit.score: 82`, be named `recommendation.winner`, and hold `evidence: []` -- a destination
+    recommended to a traveller with no stated source under it, passing every gate. A score is a
+    claim about research that happened; an empty evidence list says it did not.
+
+    Bound to what the shortlist actually asserts, so it cannot fire on honest work in progress: a
+    candidate is only held to this once it is scored or recommended. `research_status: not_started`
+    or `partial` with no score is a candidate still being worked on, and saying so is the opposite
+    of the defect. Each entry must also carry the three things that make it checkable by someone
+    else -- what was claimed, where it came from, and when it was read -- because an evidence list
+    of bare sentences is the same "trust me" the score already was.
+    """
+    recommended = {str(_obj(doc.get("recommendation")).get(role) or "").strip()
+                   for role in ("winner", "runner_up")} - {""}
+    for index, candidate in enumerate(_seq(doc.get("candidates"))):
+        candidate = _obj(candidate)
+        name = str(_obj(candidate.get("destination")).get("name") or "").strip()
+        where = f"candidates[{index}] ({name or 'unnamed'})"
+        scored = _number(_obj(candidate.get("fit")).get("score")) is not None
+        if not scored and name not in recommended:
+            continue
+        why = "is scored" if scored else "is recommended"
+        entries = [_obj(e) for e in _seq(candidate.get("evidence"))]
+        if not entries:
+            errors.append(
+                f"{where} {why} but carries no evidence. Step 5 of the discovery pipeline scores "
+                f"only candidates with sufficient evidence, so a score with an empty evidence list "
+                f"is a number nobody can check -- research it, or drop the score and say the "
+                f"research is partial.")
+            continue
+        for position, entry in enumerate(entries, 1):
+            missing = [field for field in ("claim", "source_url", "accessed_on")
+                       if _missing(entry.get(field))]
+            if missing:
+                errors.append(
+                    f"{where} evidence[{position - 1}] is missing {', '.join(missing)}. An "
+                    f"evidence entry has to say what was claimed, where it came from and when it "
+                    f"was read, or the reader cannot tell a checked fact from a remembered one.")
+            url = str(entry.get("source_url") or "")
+            if url and not url.startswith("https://"):
+                errors.append(
+                    f"{where} evidence[{position - 1}].source_url is not HTTPS: {url}")
+
 SHORTLIST_CHECKS = (
     check_declared_enums,
     check_cost_category_vocabulary,
@@ -779,6 +826,7 @@ SHORTLIST_CHECKS = (
     check_status_contradicts_its_own_failures,
     check_no_infeasible_winner,
     check_conflict_agrees_with_the_pool,
+    check_scored_candidates_carry_evidence,
 )
 
 
