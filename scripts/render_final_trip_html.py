@@ -197,10 +197,20 @@ PALETTE_HINTS = {
 
 def palette_for(plan: dict) -> dict:
     """Pick the page's colour register from what the traveller asked for."""
-    preferences = ((plan.get("trip") or {}).get("traveler_preferences") or {})
+    # `or {}` and `or []` treat a wrongly-typed value as present rather than absent, so a
+    # traveler_preferences that arrived as a string, or a subtypes list that arrived as a number,
+    # crashed the renderer with a traceback on the delivery path instead of failing cleanly.
+    # Predates this fix (reproduced on 2.3.0); found by fuzzing the checks added around it. The
+    # page colour is a decoration -- it must never be the thing that stops a plan being saved.
+    trip = plan.get("trip")
+    preferences = trip.get("traveler_preferences") if isinstance(trip, dict) else None
+    if not isinstance(preferences, dict):
+        preferences = {}
     words = []
     for field in ("ranked_must_haves", "natural_subtypes", "human_cultural_subtypes"):
-        words += [str(v) for v in (preferences.get(field) or []) if isinstance(v, str)]
+        value = preferences.get(field)
+        if isinstance(value, (list, tuple)):
+            words += [v for v in value if isinstance(v, str)]
     haystack = " ".join(words).casefold()
     if not haystack.strip():
         return TRIP_PALETTES["coast"]

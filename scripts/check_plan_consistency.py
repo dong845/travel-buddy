@@ -3083,13 +3083,19 @@ def check_sentinel_timestamps(plan: dict, errors: list[str], notes: list[str]) -
 SALE_STATUSES = ("always_available", "scheduled_release", "at_the_door", "sold_out_or_unavailable")
 
 
-def _clock_minutes(value: object) -> int | None:
-    """Minutes past midnight from an "HH:MM" activity time, or None if it is not one."""
-    match = re.match(r"^\s*(\d{1,2}):(\d{2})", str(value or ""))
-    if not match:
-        return None
-    hour, minute = int(match.group(1)), int(match.group(2))
-    return hour * 60 + minute if 0 <= hour < 24 and 0 <= minute < 60 else None
+def _sale_clock_minutes(value: object) -> int | None:
+    """Minutes past midnight from the time half of an ISO date-time, e.g. "12:00:00+09:00".
+
+    Delegates to _parse_hhmm rather than matching HH:MM again. The first version of this file's
+    sale-window rule carried its own regex and it was ASCII-only, so a Chinese plan writing
+    09：00 with a fullwidth colon parsed everywhere else in this module and nowhere in that rule --
+    the check went quiet on exactly the plans this skill added a second language for. One parser,
+    and it is the one that already knows both colons.
+    """
+    text = str(value or "")
+    head = re.split(r"[+\-Z]", text, maxsplit=1)[0]
+    parts = re.split(r"[:：]", head)
+    return _parse_hhmm(f"{parts[0]}:{parts[1]}") if len(parts) >= 2 else None
 
 
 def check_ticket_sale_windows(plan: dict, errors: list[str], notes: list[str]) -> None:
@@ -3175,7 +3181,7 @@ def check_ticket_sale_windows(plan: dict, errors: list[str], notes: list[str]) -
             continue
 
         sale_date, _, sale_clock = opens_at.partition("T")
-        sale_minutes = _clock_minutes(sale_clock)
+        sale_minutes = _sale_clock_minutes(sale_clock)
 
         # 1. The sale must not fall after the traveller needs the ticket.
         for number in sorted(n for n in scheduled[ticket.get("id")] if n is not None):
@@ -3191,7 +3197,7 @@ def check_ticket_sale_windows(plan: dict, errors: list[str], notes: list[str]) -
         day = day_by_date.get(sale_date)
         if day is None or sale_minutes is None:
             continue
-        activity_times = [t for t in (_clock_minutes(_obj(a).get("time"))
+        activity_times = [t for t in (_parse_hhmm(str(_obj(a).get("time") or ""))
                                       for a in _seq(day.get("activities"))) if t is not None]
         if activity_times and sale_minutes < min(activity_times):
             errors.append(
