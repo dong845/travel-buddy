@@ -22,8 +22,38 @@ ASSISTANTS = {"auto", "codex", "claude", "none"}
 
 # Set by a running Codex/Claude CLI. Their presence proves an assistant is ALREADY driving
 # this workspace and is waiting on the form -- it is the one situation where starting another
-# one is wrong, not the trigger for it.
+# one is wrong, not the trigger for it. This tuple is a shortcut, never the safety net: see
+# interactive_terminal() for why enumerating assistants cannot be the test.
 ASSISTANT_ALREADY_DRIVING = ("CLAUDECODE", "CLAUDE_CODE", "CODEX_THREAD_ID")
+
+
+def interactive_terminal() -> bool:
+    """True only when a human started this process at an interactive terminal.
+
+    Auto-continuation exists for exactly one case: the traveller ran the intake themselves from a
+    shell, submitted the form, and would otherwise be left holding a saved JSON file and no next
+    step. Every other caller -- an assistant's tool call, a CI job, a cron entry, a redirected
+    run -- already has something driving it, and a second planner there is the defect this whole
+    module is about.
+
+    That case has to be recognised POSITIVELY. The previous version tested for it by listing the
+    assistants it knew (CLAUDECODE, CLAUDE_CODE, CODEX_THREAD_ID) and treating anything else as a
+    bare terminal, which quietly made every other harness -- Gemini CLI, Cursor, Copilot CLI,
+    opencode, an SDK agent -- fall through to the spawn branch and start a detached Codex behind
+    an assistant that was already planning the same trip. A denylist of assistant names can only
+    ever be as current as the day it was written; "did a human open this terminal" does not go
+    stale. Both stdin and stdout are checked because a harness that pipes only one of them is
+    still not a person at a keyboard.
+
+    Residual gap, stated rather than hidden: a harness that allocates a full pty looks like a
+    terminal here. The env markers above catch the two we know, and --assistant none or
+    TRAVEL_BUDDY_ASSISTANT=none is the explicit escape for the rest.
+    """
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError, OSError):
+        # A closed or replaced stream is not a terminal, and guessing "yes" here spawns.
+        return False
 
 
 def resolve_assistant(requested: str) -> str:
@@ -36,11 +66,10 @@ def resolve_assistant(requested: str) -> str:
     severe dairy allergy, saved with verification_status "verified". The two assistants never saw
     each other's work, so nothing flagged the contradiction.
 
-    So the env markers now mean "stand down". Auto-continuation exists only for the bare-terminal
-    case, where the traveller submits the form with no assistant listening and would otherwise be
-    left holding a saved JSON file and no next step; that case has no marker set, and the
-    shutil.which fallback below still serves it. An explicit --assistant or TRAVEL_BUDDY_ASSISTANT
-    still wins, because a caller who names an assistant has decided on purpose.
+    So the default under "auto" is now to stand down, and spawning is what has to be earned: an
+    explicit request, or positive evidence of an interactive terminal. An explicit --assistant or
+    TRAVEL_BUDDY_ASSISTANT still wins, because a caller who names an assistant has decided on
+    purpose.
     """
     if requested != "auto":
         return requested
@@ -48,6 +77,8 @@ def resolve_assistant(requested: str) -> str:
     if configured in ASSISTANTS - {"auto"}:
         return configured
     if any(os.environ.get(name) for name in ASSISTANT_ALREADY_DRIVING):
+        return "none"
+    if not interactive_terminal():
         return "none"
     if shutil.which("codex"):
         return "codex"

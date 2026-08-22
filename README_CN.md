@@ -268,7 +268,7 @@ python scripts/start_intake_workflow.py --assistant auto
 它会打印一个 `http://127.0.0.1:<随机端口>/?token=…` 链接。打开、填写、保存 —— 同一个标签页会自动跳到本次行程表单。提交之后会发生什么取决于你在哪里运行的命令，这个区别是**有意为之**：
 
 - **在裸终端里**：自动拉起一个新的 CLI 任务开始做短名单。
-- **在 Claude Code 或 Codex 内部**：`--assistant auto` 会**主动让位**，打印 `TRAVEL BUDDY TRIP INPUT: <路径>`，交给你正在对话的那个助手继续。它以前会在这种情况下另起一个无人看管的 agent —— 那个表示「已经有助手在处理这个工作区」的环境变量，反被当成了「再起一个」的信号 —— 结果是同一个文件夹里出现两份互相矛盾的方案。确实想要后台运行时，用 `--assistant codex` 或 `--assistant claude` 强制。
+- **在任何助手内部**（Claude Code、Codex，以及本 skill 从没听说过的 harness）：`--assistant auto` 会**主动让位**，打印 `TRAVEL BUDDY TRIP INPUT: <路径>`，交给你正在对话的那个助手继续。只有在能**正面确认**是裸交互终端时（stdin 与 stdout 都是 tty）它才会启动子进程；靠列举助手名字来判断，正是让所有没被列进去的 harness 掉进启动分支的那个 bug。它以前会在这种情况下另起一个无人看管的 agent —— 那个表示「已经有助手在处理这个工作区」的环境变量，反被当成了「再起一个」的信号 —— 结果是同一个文件夹里出现两份互相矛盾的方案。确实想要后台运行时，用 `--assistant codex` 或 `--assistant claude` 强制。
 
 两种情况下都**不需要下载、搬运、上传或粘贴 JSON，也不用打「继续」。**
 
@@ -316,7 +316,7 @@ rm "~/Travel Buddy/profiles/<你点名的那个>.json"
 
 **提交时报「不支持的本次旅行需求格式」。** 表单的工作模式必须和目的地状态一致（`fixed` → `construction`，`anchored` → `constrained_discovery`，其余 → `discovery`）。服务端是**故意**拒绝矛盾组合的，免得存下来的文件一边说目的地已定、一边说还需要帮你找目的地。
 
-**自动接续没反应。** 在 `--assistant auto` 下这通常是**正确行为**而不是故障：当本 skill 跑在 Claude Code 或 Codex **内部**时，runner 会主动让位，把保存好的意向文件路径打印出来，交给你正在对话的那个助手继续。它以前会在这种情况下另起一个无人看管的 agent，结果是同一个工作区里出现两份互相矛盾的方案。从裸终端运行时它仍会启动；日志在 `plans/destination-discovery-*.log`，PID 和停止命令在 `plans/destination-discovery-*.pid.json`。如果 CLI 不在 `PATH` 里，runner 会明说。想强制后台运行用 `--assistant codex` 或 `--assistant claude`。
+**自动接续没反应。** 在 `--assistant auto` 下这通常是**正确行为**而不是故障：只要本 skill 跑在**任何助手内部**，runner 都会主动让位，把保存好的意向文件路径打印出来，交给你正在对话的那个助手继续。它以前会在这种情况下另起一个无人看管的 agent，结果是同一个工作区里出现两份互相矛盾的方案。从裸终端运行时它仍会启动；日志在 `plans/destination-discovery-*.log`，PID 和停止命令在 `plans/destination-discovery-*.pid.json`。如果 CLI 不在 `PATH` 里，runner 会明说。想强制后台运行用 `--assistant codex` 或 `--assistant claude`。
 
 **`--edit-profile` 好像没生效。** 它只在已经存在档案时起作用；`profiles/` 为空时，流程会直接去创建新档案。
 
