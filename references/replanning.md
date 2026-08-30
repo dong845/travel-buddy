@@ -72,6 +72,7 @@ dropped, because a plan whose dates moved was never verified on those dates. A s
 its old verification is the single most dangerous artifact this tool could produce — it would look
 checked while every weekday-keyed claim in it had gone stale.
 
+<a id="the-gate-that-stops-it-shipping"></a>
 ## The gate that stops it shipping
 
 Everything the script cannot safely recompute lands in `replan_context.must_reverify`, one entry per

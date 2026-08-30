@@ -1474,53 +1474,170 @@ def map_link_allowed(provider: object, url: object, regional_context: dict) -> b
     return not ((market == "mainland_china" or google_access == "unavailable") and is_google_map(provider, url))
 
 
+# --------------------------------------------------------------------------------------------
+# Where the rule is written
+# --------------------------------------------------------------------------------------------
+# More places this file can refuse a plan than any other gate, and two mentions of `references/`,
+# both in comments that no failing run prints. This is the gate an author meets FIRST -- validate_plan runs before a
+# single line of HTML is produced -- so it is also the gate with the most leverage over whether a
+# run recovers or stalls.
+#
+# 144 of those sites are cited below and 63 deliberately are not, which is the interesting half.
+# (That split read 143/64 when this block was first written. The census is now taken by AST in
+# tests/test_packaging.py rather than by eye, and it disagreed by one -- so the numbers here are
+# the measured ones and SITES_WITHOUT_A_REFERENCE below is what the test actually holds. A count
+# maintained by hand in a comment is exactly the kind of claim that drifts without anybody
+# noticing, which is the failure this whole block is about.)
+# The uncited ones are shape rules that already carry their own answer: "budget.calculation_basis
+# must be per_person.", "hotel.check_out must be after hotel.check_in.", "trip.end_date cannot be
+# before trip.start_date." A reader who cannot act on those is not going to be helped by a
+# reference; the field is named, the allowed value is named, and no section of any reference file
+# states them -- they are the shape of templates/final-trip-plan.json. Appending a pointer to the
+# nearest plausible heading would spend a 41 KB read to teach a wrong location, so those sites
+# stay as they are. Citing everything would have been the easier change and the worse one.
+#
+# What IS cited is every rule where naming the field is not enough to fix it: which map URL is
+# acceptable and why, which provider a market allows, what a booking card owes a traveller before
+# it counts as a comparison, what a dining card has to have been checked for. Those are the rules
+# whose reasoning lives in a reference and whose messages are otherwise a dead end for a run that
+# never opened it.
+#
+# Derived from the enforcing code, not from SKILL.md -- SKILL.md describes this file's map rules
+# as "invisible to every structural gate" a dozen lines from its own description of the gate that
+# enforces them. Anchors are `<a id="...">` markers added to the reference files in this same
+# change; tests/test_packaging.py fails if any anchor emitted here does not resolve.
+RULE_REFERENCES: dict[str, str] = {
+    # Every map URL rule: directions rather than a place page, HTTPS, a declared scope, and a
+    # segment list a whole-day button cannot stand in for.
+    "map.link_contract": "booking-html-output.md#map-endpoints",
+    # The day's visible travel burden -- one researched primary mode with alternatives in the
+    # fallback, and a researched fare for a transit day.
+    "route.day_burden": "booking-html-output.md#day-route-burden",
+    # Which provider a market allows. Not the same rule as "record the market", which is why the
+    # two have different homes: this one is the decision, the other is the record of it.
+    "market.provider_routing": "regional-service-routing.md#routing-policy",
+    "market.context_contract": "regional-service-routing.md#final-plan-contract",
+    # Local booking constraints and the available/limited/unknown vocabulary they are recorded in.
+    "booking.access_checks": "booking-html-output.md#ticket-constraints",
+    # What each booking card owes: both legs named, dated search buttons, fare basis and status,
+    # transfer notes. The section enumerates these per category, which is why one anchor serves
+    # flights, rail, hotels, tickets and cars.
+    "booking.option_contract": "booking-html-output.md#booking-links",
+    # Two comparable candidates or a researched reason there is only one, distinct ids, distinct
+    # review URLs. A separate section from the card contract because it is a rule about the SET.
+    "booking.comparison": "booking-html-output.md#platform-selection-and-comparison",
+    # The dining card's researched content -- venue, price, queue note, source, checked hours.
+    "dining.card_contract": "booking-html-output.md#destination-coverage-and-food",
+    # ui_labels: the renderer's own interface text on a page in a third language. Cited to the
+    # closed-enum section because that is where the leak this prevents is described, and because
+    # three delivered Chinese pages printed bare English enum values while both gates said VALID.
+    "html.localization": "booking-html-output.md#closed-enums",
+    # How the intake happened, and why a chat_fallback record may not also name a file only the
+    # form server writes.
+    "intake.provenance": "initial-intake.md#conversation-design",
+}
+
+
+def cite(rule_id: str, message: str) -> str:
+    """Append the reference that states the rule this finding broke.
+
+    APPENDS, never prepends. The suites for this file match needles as substrings of the whole
+    output and many of those needles are a message's opening words; a prefix would move every one
+    of them and buy a reader nothing a suffix does not.
+
+    Raises on an unknown rule_id. Returning the message uncited would let this file keep passing
+    its own tests while shipping the very dead end the registry exists to close -- and that is the
+    exact failure mode, a gate green on wrong output, that most of the comments in this file are
+    about.
+    """
+    if rule_id not in RULE_REFERENCES:
+        raise KeyError(
+            f"cite() called with unknown rule_id {rule_id!r}. Add it to RULE_REFERENCES with the "
+            f"reference section that states the rule, or drop the cite() call. A shape rule that "
+            f"names its own field and allowed values is better off uncited -- see the block above.")
+    return f"{message} [see references/{RULE_REFERENCES[rule_id]}]"
+
+
+# The other half of the registry: where an UNCITED finding is allowed to live, and how many.
+#
+# The block above argues that 63 shape rules are better off uncited, and that argument is sound --
+# but until now it lived only in a comment, and a comment refuses nothing. check_plan_consistency
+# and check_shortlist_consistency do not have this hole: their citations go on a decorator, so a
+# check that names no reference must appear in CHECKS_WITHOUT_A_REFERENCE and tests/
+# test_packaging.py refuses the third state where somebody simply forgot. Here the citation goes
+# on the call, so a new `errors.append("...")` added to validate_plan() next release ships uncited
+# and every test stays green -- the drift the whole change was made to end, one site at a time.
+#
+# Keyed by ENCLOSING FUNCTION rather than line number, because line numbers move on every edit and
+# a registry that must be renumbered to stay true is a registry that will be renumbered wrongly.
+# The COUNT is held too, and that is the part that does the work: validate_plan() legitimately
+# carries uncited shape rules AND cited map/booking rules, so exempting the function wholesale
+# would let a new uncited map rule hide inside the exemption. Holding the count means a new
+# uncited site there fails this test and forces the same decision the decorator forces -- cite it,
+# or raise the number and say why in this dict.
+#
+# Raising a number here is cheap and is meant to be. The point is not to make uncited sites hard
+# to add; it is to make adding one a thing somebody DID rather than a thing nobody noticed.
+SITES_WITHOUT_A_REFERENCE: dict[str, int] = {
+    # The plan-shape contract: required keys, closed value sets, and orderings. Every one of these
+    # names its own field and its own allowed values ("plan_status must be idea, researched, held,
+    # or booked."), and no section of any reference states them -- they are the shape of
+    # templates/final-trip-plan.json, which is the thing to open. Citing the nearest plausible
+    # heading would spend a 41 KB read to teach a wrong location.
+    "validate_plan": 61,
+    # "must be an ISO date (YYYY-MM-DD)." twice, for a start and an end. The message is the whole
+    # rule; there is nothing to look up.
+    "parse_iso_date": 2,
+}
+
+
 def validate_alternative_map_links(value: object, label: str, regional_context: dict, errors: list[str]) -> None:
     if value is None:
         return
     if not isinstance(value, list):
-        errors.append(f"{label}.alternative_map_links must be a list when present.")
+        errors.append(cite("map.link_contract", f"{label}.alternative_map_links must be a list when present."))
         return
     for number, item in enumerate(value, 1):
         if not isinstance(item, dict) or not all(item.get(key) for key in ("provider", "url", "checked_at", "map_link_kind")):
-            errors.append(f"{label}.alternative_map_links[{number}] needs provider, URL, check time, and map_link_kind.")
+            errors.append(cite("map.link_contract", f"{label}.alternative_map_links[{number}] needs provider, URL, check time, and map_link_kind."))
             continue
         if item["map_link_kind"] != "directions":
-            errors.append(f"{label}.alternative_map_links[{number}].map_link_kind must be directions.")
+            errors.append(cite("map.link_contract", f"{label}.alternative_map_links[{number}].map_link_kind must be directions."))
         if not is_https(item["url"]):
-            errors.append(f"{label}.alternative_map_links[{number}].url must be HTTPS.")
+            errors.append(cite("map.link_contract", f"{label}.alternative_map_links[{number}].url must be HTTPS."))
         elif not is_directions_url(item["provider"], item["url"]):
-            errors.append(f"{label}.alternative_map_links[{number}] must be an actual directions URL, not a place page.")
+            errors.append(cite("map.link_contract", f"{label}.alternative_map_links[{number}] must be an actual directions URL, not a place page."))
         if not map_link_allowed(item["provider"], item["url"], regional_context):
-            errors.append(f"{label}.alternative_map_links[{number}] uses Google Maps despite the regional-access rule.")
+            errors.append(cite("market.provider_routing", f"{label}.alternative_map_links[{number}] uses Google Maps despite the regional-access rule."))
 
 
 def validate_booking_access_checks(value: object, errors: list[str]) -> set[str]:
     if not isinstance(value, list) or not value:
-        errors.append("regional_service_context.booking_access_checks must be a non-empty list.")
+        errors.append(cite("booking.access_checks", "regional_service_context.booking_access_checks must be a non-empty list."))
         return set()
     sensitive_values = find_sensitive_values(value, "regional_service_context.booking_access_checks")
     if sensitive_values:
-        errors.append("booking_access_checks appears to contain prohibited sensitive values at: " + ", ".join(sensitive_values) + ".")
+        errors.append(cite("booking.access_checks", "booking_access_checks appears to contain prohibited sensitive values at: " + ", ".join(sensitive_values) + "."))
     categories: set[str] = set()
     for number, item in enumerate(value, 1):
         if not isinstance(item, dict) or not all(
             item.get(key) for key in ("category", "access_status", "provider_or_channel", "requirements_note", "source_url", "checked_at")
         ):
-            errors.append(f"booking_access_checks[{number}] needs category, access_status, provider_or_channel, requirements_note, source_url, and checked_at.")
+            errors.append(cite("booking.access_checks", f"booking_access_checks[{number}] needs category, access_status, provider_or_channel, requirements_note, source_url, and checked_at."))
             continue
         category = item["category"]
         if category not in BOOKING_ACCESS_CATEGORIES:
-            errors.append(f"booking_access_checks[{number}].category is invalid.")
+            errors.append(cite("booking.access_checks", f"booking_access_checks[{number}].category is invalid."))
         else:
             if category in categories:
-                errors.append(f"booking_access_checks has duplicate category: {category}.")
+                errors.append(cite("booking.access_checks", f"booking_access_checks has duplicate category: {category}."))
             categories.add(category)
         if item["access_status"] not in BOOKING_ACCESS_STATUSES:
-            errors.append(f"booking_access_checks[{number}].access_status must be available, limited, or unknown.")
+            errors.append(cite("booking.access_checks", f"booking_access_checks[{number}].access_status must be available, limited, or unknown."))
         if not is_https(item["source_url"]):
-            errors.append(f"booking_access_checks[{number}].source_url must be a safe HTTPS browse URL.")
+            errors.append(cite("booking.access_checks", f"booking_access_checks[{number}].source_url must be a safe HTTPS browse URL."))
         if not is_iso_datestamp(item["checked_at"]):
-            errors.append(f"booking_access_checks[{number}].checked_at must be an ISO date or date-time.")
+            errors.append(cite("booking.access_checks", f"booking_access_checks[{number}].checked_at must be an ISO date or date-time."))
     return categories
 
 
@@ -2220,9 +2337,9 @@ def intake_context_errors(intake_context: object) -> list[str]:
     for field in required:
         value = intake_context.get(field)
         if not isinstance(value, str) or not value.strip():
-            errors.append(f"intake_context.{field} is required when method is {method}.")
+            errors.append(cite("intake.provenance", f"intake_context.{field} is required when method is {method}."))
         elif any(marker in value for marker in ("TODO:", "example.invalid")):
-            errors.append(f"intake_context.{field} still holds a placeholder, which answers nothing.")
+            errors.append(cite("intake.provenance", f"intake_context.{field} still holds a placeholder, which answers nothing."))
         elif field != "declined_verbatim" and re.search(r"<[^<>\s]{1,60}>", value):
             # templates/final-trip-plan.json ships intake_file as
             # "<workspace>/plans/trip-intake-<timestamp>.json", and a template copied without
@@ -2235,7 +2352,7 @@ def intake_context_errors(intake_context: object) -> list[str]:
             # "Budget stated as < 2000 > per person" -- an ordinary sentence, rejected as a
             # placeholder, on the delivery path. Every placeholder this template actually ships
             # is a single token; prose that happens to compare two numbers is not.
-            errors.append(f"intake_context.{field} is still the template's <bracketed> placeholder.")
+            errors.append(cite("intake.provenance", f"intake_context.{field} is still the template's <bracketed> placeholder."))
 
     # What this deliberately does NOT do: require intake_file to resolve on disk. It was written
     # that way first, on the reasoning that claiming the form ran should cost producing what the
@@ -2251,26 +2368,26 @@ def intake_context_errors(intake_context: object) -> list[str]:
     # they supposedly never filled. Only one of those can be true.
     intake_file = intake_context.get("intake_file")
     if method != "html_form" and isinstance(intake_file, str) and intake_file.strip():
-        errors.append(
+        errors.append(cite("intake.provenance", 
             f"intake_context says method {method} but also names an intake_file "
             f"({intake_file.strip()}), which only the form server writes. Either the form was "
-            "filled -- method html_form -- or it was not, and the file does not belong here.")
+            "filled -- method html_form -- or it was not, and the file does not belong here."))
 
     if method == "chat_fallback":
         declined_at = intake_context.get("declined_at")
         if isinstance(declined_at, str) and declined_at.strip():
             if not is_iso_datestamp(declined_at):
-                errors.append("intake_context.declined_at must be an ISO date or date-time.")
+                errors.append(cite("intake.provenance", "intake_context.declined_at must be an ISO date or date-time."))
             elif declined_at.startswith("1970-01-01"):
                 # new_plan_skeleton.py stamps every date it cannot know as the epoch, and its own
                 # docstring lists that as a hole: 1970 is conspicuous on a page but no gate rejects
                 # it. Here it would be a fabricated fact in the one record that says the traveller
                 # authorised the shortcut, so this is the one date field where the sentinel is an
                 # error rather than a visible blank.
-                errors.append(
+                errors.append(cite("intake.provenance", 
                     "intake_context.declined_at is still the skeleton's 1970-01-01 placeholder. "
                     "Write the date the traveller actually declined the form; a provenance record "
-                    "with an invented date is worse than none.")
+                    "with an invented date is worse than none."))
     return errors
 
 
@@ -2303,7 +2420,7 @@ def validate_plan(plan: dict) -> list[str]:
     if trip.get("language") and not has_builtin_interface_language(trip["language"]):
         custom_labels = plan.get("ui_labels")
         if not isinstance(custom_labels, dict):
-            errors.append("A non-English/Chinese plan needs a complete ui_labels object for renderer-owned interface text.")
+            errors.append(cite("html.localization", "A non-English/Chinese plan needs a complete ui_labels object for renderer-owned interface text."))
         else:
             missing = REQUIRED_UI_LABEL_KEYS - set(custom_labels)
             invalid = [
@@ -2312,7 +2429,7 @@ def validate_plan(plan: dict) -> list[str]:
                 if not isinstance(custom_labels.get(key), str) or (not custom_labels[key].strip() and key != "day_suffix")
             ]
             if missing or invalid:
-                errors.append("ui_labels must provide every renderer label for a non-English/Chinese plan: " + ", ".join(sorted(missing | set(invalid))) + ".")
+                errors.append(cite("html.localization", "ui_labels must provide every renderer label for a non-English/Chinese plan: " + ", ".join(sorted(missing | set(invalid))) + "."))
     # Optional, and only checked when it is there: every plan authored before intake started
     # carrying constraints has no such key and must validate exactly as it did. What is checked
     # is the shape the downstream gates read -- a severity outside the enum or a walking cap
@@ -2395,19 +2512,19 @@ def validate_plan(plan: dict) -> list[str]:
     regional_context = plan.get("regional_service_context") if isinstance(plan.get("regional_service_context"), dict) else {}
     for field in ("destination_service_market", "selection_basis", "primary_map_provider"):
         if not regional_context.get(field):
-            errors.append(f"regional_service_context.{field} is required.")
+            errors.append(cite("market.context_contract", f"regional_service_context.{field} is required."))
     if regional_context.get("google_services_access") not in {"available", "unavailable", "unknown"}:
-        errors.append("regional_service_context.google_services_access must be available, unavailable, or unknown.")
+        errors.append(cite("market.context_contract", "regional_service_context.google_services_access must be available, unavailable, or unknown."))
     for field in ("alternative_map_providers", "local_transport_sources"):
         if not isinstance(regional_context.get(field), list):
-            errors.append(f"regional_service_context.{field} must be a list.")
+            errors.append(cite("market.context_contract", f"regional_service_context.{field} must be a list."))
     market = str(regional_context.get("destination_service_market") or "").casefold()
     primary_provider = str(regional_context.get("primary_map_provider") or "")
     mainland_primary_exception = regional_context.get("primary_map_exception_reason")
     if market == "mainland_china" and not any(token in primary_provider.casefold() for token in ("amap", "高德")) and not mainland_primary_exception:
-        errors.append("mainland_china plans require Amap/高德地图 as the primary map provider unless a user-confirmed primary_map_exception_reason is recorded.")
+        errors.append(cite("market.provider_routing", "mainland_china plans require Amap/高德地图 as the primary map provider unless a user-confirmed primary_map_exception_reason is recorded."))
     if market == "mainland_china" and is_google_map(primary_provider, ""):
-        errors.append("Google Maps cannot be the mainland-China primary provider.")
+        errors.append(cite("market.provider_routing", "Google Maps cannot be the mainland-China primary provider."))
     booking_access_categories = validate_booking_access_checks(regional_context.get("booking_access_checks"), errors)
     days = plan.get("days") if isinstance(plan.get("days"), list) else []
     if not days:
@@ -2453,23 +2570,33 @@ def validate_plan(plan: dict) -> list[str]:
             if trip_start and trip_end and not trip_start <= day_date <= trip_end:
                 errors.append(f"day {expected} date must fall within the trip date range.")
         route = day.get("route") if isinstance(day.get("route"), dict) else {}
-        for field in ("start", "end", "mode", "route_logic", "fallback_plan", "route_map_scope", "map_link_kind", "verified_map_url", "map_checked_at", "map_provider"):
+        # One loop, two rules, so two citations. Splitting the tuple rather than citing the whole
+        # loop to one place is the difference between a pointer and a shrug: the first five fields
+        # are the day's visible travel burden and the last five are the map-button contract, and a
+        # reader missing `map_link_kind` who is sent to the route-burden paragraph learns nothing
+        # about why `directions` is the only accepted value. This loop was the single largest
+        # uncited block on the real workspace before the split, and the map fields are the bulk
+        # of what it emits.
+        ROUTE_BURDEN_FIELDS = ("start", "end", "mode", "route_logic", "fallback_plan")
+        for field in ROUTE_BURDEN_FIELDS + ("route_map_scope", "map_link_kind", "verified_map_url", "map_checked_at", "map_provider"):
             if not route.get(field):
-                errors.append(f"day {expected} route.{field} is required.")
+                errors.append(cite(
+                    "route.day_burden" if field in ROUTE_BURDEN_FIELDS else "map.link_contract",
+                    f"day {expected} route.{field} is required."))
         if route.get("route_map_scope") and route.get("route_map_scope") not in ROUTE_MAP_SCOPES:
-            errors.append(f"day {expected} route.route_map_scope must be multi_stop or primary_leg.")
+            errors.append(cite("map.link_contract", f"day {expected} route.route_map_scope must be multi_stop or primary_leg."))
         if route.get("map_link_kind") and route.get("map_link_kind") != "directions":
-            errors.append(f"day {expected} route.map_link_kind must be directions.")
+            errors.append(cite("map.link_contract", f"day {expected} route.map_link_kind must be directions."))
         if route.get("mode") and is_ambiguous_route_mode(route.get("mode")):
-            errors.append(f"day {expected} route.mode must name one researched primary mode; put alternatives in fallback_plan.")
+            errors.append(cite("route.day_burden", f"day {expected} route.mode must name one researched primary mode; put alternatives in fallback_plan."))
         if route.get("verified_map_url") and not is_https(route["verified_map_url"]):
-            errors.append(f"day {expected} route.verified_map_url must be HTTPS.")
+            errors.append(cite("map.link_contract", f"day {expected} route.verified_map_url must be HTTPS."))
         elif route.get("verified_map_url") and route.get("map_provider") and not is_directions_url(route["map_provider"], route["verified_map_url"]):
-            errors.append(f"day {expected} route.verified_map_url must be an actual directions URL, not a place/POI page.")
+            errors.append(cite("map.link_contract", f"day {expected} route.verified_map_url must be an actual directions URL, not a place/POI page."))
         if route.get("map_provider") and route.get("verified_map_url") and not map_link_allowed(route["map_provider"], route["verified_map_url"], regional_context):
-            errors.append(f"day {expected} route uses Google Maps despite the regional-access rule.")
+            errors.append(cite("market.provider_routing", f"day {expected} route uses Google Maps despite the regional-access rule."))
         if market == "mainland_china" and not mainland_primary_exception and route.get("map_provider") and route.get("verified_map_url") and not is_amap(route["map_provider"], route["verified_map_url"]):
-            errors.append(f"day {expected} mainland-China primary route must use Amap/高德地图.")
+            errors.append(cite("market.provider_routing", f"day {expected} mainland-China primary route must use Amap/高德地图."))
         validate_alternative_map_links(route.get("alternative_map_links"), f"day {expected} route", regional_context, errors)
         segments = route.get("segments")
         stops = route.get("stops_in_order")
@@ -2478,10 +2605,10 @@ def validate_plan(plan: dict) -> list[str]:
         elif route.get("start") != stops[0] or route.get("end") != stops[-1]:
             errors.append(f"day {expected} route start/end must match the first/last stop in stops_in_order.")
         if not isinstance(segments, list) or not segments:
-            errors.append(f"day {expected} route.segments needs at least one mapped segment.")
+            errors.append(cite("map.link_contract", f"day {expected} route.segments needs at least one mapped segment."))
         else:
             if isinstance(stops, list) and len(stops) >= 2 and len(segments) != len(stops) - 1:
-                errors.append(f"day {expected} route needs one exact segment for every consecutive pair in stops_in_order.")
+                errors.append(cite("map.link_contract", f"day {expected} route needs one exact segment for every consecutive pair in stops_in_order."))
             for segment_number, segment in enumerate(segments, 1):
                 required_segment_fields = (
                     "from", "to", "mode", "duration_minutes", "walking_minutes", "transfer_count",
@@ -2489,29 +2616,29 @@ def validate_plan(plan: dict) -> list[str]:
                     "fallback_note", "map_link_kind", "verified_map_url", "map_checked_at", "map_provider",
                 )
                 if not isinstance(segment, dict) or not all(segment.get(key) is not None and segment.get(key) != "" for key in required_segment_fields):
-                    errors.append(f"day {expected} route segment {segment_number} needs endpoints, one primary mode, service/instructions, walk/transfers, fare basis, fallback, and a mapped directions URL.")
+                    errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number} needs endpoints, one primary mode, service/instructions, walk/transfers, fare basis, fallback, and a mapped directions URL."))
                     continue
                 if segment.get("map_link_kind") != "directions":
-                    errors.append(f"day {expected} route segment {segment_number}.map_link_kind must be directions.")
+                    errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number}.map_link_kind must be directions."))
                 if is_ambiguous_route_mode(segment.get("mode")):
-                    errors.append(f"day {expected} route segment {segment_number}.mode must be one primary mode; alternatives belong in fallback_note.")
+                    errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number}.mode must be one primary mode; alternatives belong in fallback_note."))
                 if not is_nonnegative_number(segment.get("duration_minutes")) or not is_nonnegative_number(segment.get("walking_minutes")):
-                    errors.append(f"day {expected} route segment {segment_number} duration_minutes and walking_minutes must be non-negative numbers.")
+                    errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number} duration_minutes and walking_minutes must be non-negative numbers."))
                 if not isinstance(segment.get("transfer_count"), int) or isinstance(segment.get("transfer_count"), bool) or segment["transfer_count"] < 0:
-                    errors.append(f"day {expected} route segment {segment_number}.transfer_count must be a non-negative integer.")
+                    errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number}.transfer_count must be a non-negative integer."))
                 if isinstance(stops, list) and segment_number < len(stops) and (segment.get("from") != stops[segment_number - 1] or segment.get("to") != stops[segment_number]):
-                    errors.append(f"day {expected} route segment {segment_number} must match consecutive stops: {stops[segment_number - 1]} → {stops[segment_number]}.")
+                    errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number} must match consecutive stops: {stops[segment_number - 1]} → {stops[segment_number]}."))
                 if not is_https(segment["verified_map_url"]):
-                    errors.append(f"day {expected} route segment {segment_number} map URL must be HTTPS.")
+                    errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number} map URL must be HTTPS."))
                 elif not is_directions_url(segment["map_provider"], segment["verified_map_url"]):
-                    errors.append(f"day {expected} route segment {segment_number} map URL must be a directions URL, not a place/POI page.")
+                    errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number} map URL must be a directions URL, not a place/POI page."))
                 if not map_link_allowed(segment["map_provider"], segment["verified_map_url"], regional_context):
-                    errors.append(f"day {expected} route segment {segment_number} uses Google Maps despite the regional-access rule.")
+                    errors.append(cite("market.provider_routing", f"day {expected} route segment {segment_number} uses Google Maps despite the regional-access rule."))
                 if market == "mainland_china" and not mainland_primary_exception and not is_amap(segment["map_provider"], segment["verified_map_url"]):
-                    errors.append(f"day {expected} mainland-China route segment {segment_number} must use Amap/高德地图.")
+                    errors.append(cite("market.provider_routing", f"day {expected} mainland-China route segment {segment_number} must use Amap/高德地图."))
                 validate_alternative_map_links(segment.get("alternative_map_links"), f"day {expected} route segment {segment_number}", regional_context, errors)
         if mode == "public-transit" and route.get("cost_low") is None and route.get("cost_high") is None:
-            errors.append(f"day {expected} public-transit route needs a researched fare or range.")
+            errors.append(cite("route.day_burden", f"day {expected} public-transit route needs a researched fare or range."))
         elif mode == "public-transit" and not is_nonnegative_money_range(route.get("cost_low"), route.get("cost_high")):
             errors.append(f"day {expected} public-transit route cost range must be non-negative numbers with low less than or equal to high.")
         if mode == "self-drive" and (
@@ -2522,26 +2649,26 @@ def validate_plan(plan: dict) -> list[str]:
             errors.append(f"day {expected} self-drive route duration_minutes and distance_km must be non-negative numbers.")
         dining = day.get("dining")
         if not isinstance(dining, list):
-            errors.append(f"day {expected}.dining must be a list.")
+            errors.append(cite("dining.card_contract", f"day {expected}.dining must be a list."))
         else:
             meal_types = {item.get("meal") for item in dining if isinstance(item, dict)}
             required_meals = {"lunch", "dinner"} if day.get("day_type") == "full" else {"dinner"} if day.get("day_type") == "arrival" else {"breakfast"} if day.get("day_type") == "departure" else set()
             missing_meals = required_meals - meal_types
             if missing_meals:
-                errors.append(f"day {expected} dining needs: {', '.join(sorted(missing_meals))}.")
+                errors.append(cite("dining.card_contract", f"day {expected} dining needs: {', '.join(sorted(missing_meals))}."))
             for dining_number, item in enumerate(dining, 1):
                 required_dining_fields = ("meal", "time_window", "venue_name", "cuisine_or_style", "neighborhood", "why_this_stop", "price_per_person_low", "price_per_person_high", "currency", "reservation_or_queue_note", "venue_url", "map_provider", "checked_at")
                 if not isinstance(item, dict) or not all(item.get(key) is not None and item.get(key) != "" for key in required_dining_fields):
-                    errors.append(f"day {expected} dining {dining_number} needs meal, concrete venue, price, queue note, source URL, map provider, and check time.")
+                    errors.append(cite("dining.card_contract", f"day {expected} dining {dining_number} needs meal, concrete venue, price, queue note, source URL, map provider, and check time."))
                     continue
                 if item.get("meal") not in set(MEAL_TYPES):
-                    errors.append(f"day {expected} dining {dining_number}.meal must be breakfast, lunch, dinner, or snack.")
+                    errors.append(cite("dining.card_contract", f"day {expected} dining {dining_number}.meal must be breakfast, lunch, dinner, or snack."))
                 if not is_nonnegative_money_range(item.get("price_per_person_low"), item.get("price_per_person_high")):
-                    errors.append(f"day {expected} dining {dining_number} price range must be non-negative numbers with low less than or equal to high.")
+                    errors.append(cite("dining.card_contract", f"day {expected} dining {dining_number} price range must be non-negative numbers with low less than or equal to high."))
                 if not is_https(item.get("venue_url")):
-                    errors.append(f"day {expected} dining {dining_number}.venue_url must be HTTPS.")
+                    errors.append(cite("dining.card_contract", f"day {expected} dining {dining_number}.venue_url must be HTTPS."))
                 if item.get("reservation_url") and not is_https(item.get("reservation_url")):
-                    errors.append(f"day {expected} dining {dining_number}.reservation_url must be a safe HTTPS browse URL when present.")
+                    errors.append(cite("dining.card_contract", f"day {expected} dining {dining_number}.reservation_url must be a safe HTTPS browse URL when present."))
     if trip_start and trip_end and len(day_dates) == len(days):
         expected_dates = [trip_start + timedelta(days=offset) for offset in range((trip_end - trip_start).days + 1)]
         actual_dates = [day_dates[number] for number in sorted(day_dates)]
@@ -2614,7 +2741,7 @@ def validate_plan(plan: dict) -> list[str]:
             confidence = str(source["confidence"]).strip()
             if confidence and canonical_enum_value(
                     confidence, SOURCE_CONFIDENCE_LEVELS, SOURCE_CONFIDENCE_ALIASES) is None:
-                errors.append(
+                errors.append(cite("booking.option_contract", 
                     f"source confidence {confidence!r} is not one of: "
                     + ", ".join(SOURCE_CONFIDENCE_LEVELS)
                     + " (or one of this renderer's own spellings of them: "
@@ -2622,29 +2749,29 @@ def validate_plan(plan: dict) -> list[str]:
                     + "). This value is printed next to the source on the page, so it has to be a "
                     "closed enum the renderer can translate -- an arbitrary string cannot be, and "
                     "on a non-English page it ships as English nobody can read. Put any "
-                    "qualification ('fare requires recheck') into claim_or_decision_supported.")
+                    "qualification ('fare requires recheck') into claim_or_decision_supported."))
     options = plan.get("booking_options") if isinstance(plan.get("booking_options"), dict) else {}
     required = {"flights": "flight", "ground_transport": "ground", "accommodations": "hotel",
                 "attraction_tickets": "ticket", "rental_cars": "car"}
     for field, kind in required.items():
         items = options.get(field, [])
         if not isinstance(items, list):
-            errors.append(f"booking_options.{field} must be a list.")
+            errors.append(cite("booking.option_contract", f"booking_options.{field} must be a list."))
             continue
         for item in items:
             if not isinstance(item, dict) or not all(item.get(key) for key in ("provider" if kind != "ticket" else "official_or_authorised_provider", "checked_at", "review_url")) or not is_https(item.get("review_url")):
-                errors.append(f"Every {kind} option needs provider, checked_at, and an HTTPS review_url.")
+                errors.append(cite("booking.option_contract", f"Every {kind} option needs provider, checked_at, and an HTTPS review_url."))
                 continue
             if kind in {"flight", "hotel", "ground"} and not item.get("id"):
-                errors.append(f"Every {kind} option needs a stable, non-empty id for day assignments and comparison.")
+                errors.append(cite("booking.option_contract", f"Every {kind} option needs a stable, non-empty id for day assignments and comparison."))
             if item.get("comparison_platform") and not item.get("comparison_checked_at"):
-                errors.append(f"Every compared {kind} option needs comparison_checked_at.")
+                errors.append(cite("booking.option_contract", f"Every compared {kind} option needs comparison_checked_at."))
             if not is_iso_datestamp(item.get("checked_at")):
-                errors.append(f"Every {kind} option.checked_at must be an ISO date or date-time.")
+                errors.append(cite("booking.option_contract", f"Every {kind} option.checked_at must be an ISO date or date-time."))
             if item.get("comparison_checked_at") and not is_iso_datestamp(item.get("comparison_checked_at")):
-                errors.append(f"Every compared {kind} option.comparison_checked_at must be an ISO date or date-time.")
+                errors.append(cite("booking.option_contract", f"Every compared {kind} option.comparison_checked_at must be an ISO date or date-time."))
             if item.get("direct_review_url") and not is_https(item.get("direct_review_url")):
-                errors.append(f"Every direct {kind} cross-check URL must be HTTPS.")
+                errors.append(cite("booking.option_contract", f"Every direct {kind} cross-check URL must be HTTPS."))
             if kind == "ground":
                 # Held to the flight standard on purpose. A category with looser evidence rules
                 # becomes the place authors put the thing they did not research, and this is the
@@ -2658,45 +2785,45 @@ def validate_plan(plan: dict) -> list[str]:
                     "round_trip_search_checked_at", "round_trip_prefilled_fields",
                 )
                 if not all(item.get(key) for key in required_ground_fields):
-                    errors.append(
+                    errors.append(cite("booking.option_contract", 
                         "Every rail/coach/ferry option needs both stations, both dates, concrete "
                         "outbound and return itineraries, fare conditions, a current-price status, "
-                        "a station-to-city transfer note, and a verified dated round-trip search URL.")
+                        "a station-to-city transfer note, and a verified dated round-trip search URL."))
                 elif not is_https(item["round_trip_search_url"]):
-                    errors.append("Every ground-transport round-trip search URL must be HTTPS.")
+                    errors.append(cite("booking.option_contract", "Every ground-transport round-trip search URL must be HTTPS."))
                 search_fields = item.get("round_trip_prefilled_fields")
                 if not has_search_fields(search_fields, REQUIRED_FLIGHT_SEARCH_FIELDS):
-                    errors.append(
+                    errors.append(cite("booking.option_contract", 
                         "Every ground-transport round-trip search must prefill origin, destination, "
-                        "outbound date, return date, and travellers.")
+                        "outbound date, return date, and travellers."))
                 if not is_iso_datestamp(item.get("round_trip_search_checked_at")):
-                    errors.append("ground.round_trip_search_checked_at must be an ISO date or date-time.")
+                    errors.append(cite("booking.option_contract", "ground.round_trip_search_checked_at must be an ISO date or date-time."))
                 for leg_name in ("outbound_itinerary", "return_itinerary"):
                     leg = item.get(leg_name)
                     if not isinstance(leg, dict) or not all(leg.get(key) is not None and leg.get(key) != "" for key in ("service_identifier", "departure_local", "arrival_local", "duration_minutes", "stops", "connection_or_terminal_note")):
-                        errors.append(f"ground.{leg_name} needs the service identifier, local times, duration, changes, and an interchange note.")
+                        errors.append(cite("booking.option_contract", f"ground.{leg_name} needs the service identifier, local times, duration, changes, and an interchange note."))
                     elif not (isinstance(leg.get("duration_minutes"), (int, float)) and not isinstance(leg.get("duration_minutes"), bool) and leg["duration_minutes"] > 0):
                         # A journey of zero minutes is not a researched journey, and zero was what
                         # the contract template seeded the field with -- so the one value that
                         # means "I did not fill this in" was the one value every gate accepted.
-                        errors.append(f"ground.{leg_name}.duration_minutes must be a positive number of minutes.")
+                        errors.append(cite("booking.option_contract", f"ground.{leg_name}.duration_minutes must be a positive number of minutes."))
                 if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
-                    errors.append("ground.availability_status must be available, limited, or unknown.")
+                    errors.append(cite("booking.option_contract", "ground.availability_status must be available, limited, or unknown."))
                 if item.get("price_basis") != "per_person_round_trip":
-                    errors.append("ground.price_basis must be per_person_round_trip.")
+                    errors.append(cite("booking.option_contract", "ground.price_basis must be per_person_round_trip."))
                 if not is_one_of(item.get("price_status"), PRICE_STATUSES):
-                    errors.append("ground.price_status must be researched_current, estimate, or user_confirmed.")
+                    errors.append(cite("booking.option_contract", "ground.price_status must be researched_current, estimate, or user_confirmed."))
                 if item.get("fare_low") is None or item.get("fare_high") is None or not item.get("fare_currency"):
-                    errors.append("Every ground-transport option needs a checked per-person fare range and currency.")
+                    errors.append(cite("booking.option_contract", "Every ground-transport option needs a checked per-person fare range and currency."))
                 elif not is_nonnegative_money_range(item.get("fare_low"), item.get("fare_high")):
-                    errors.append("Every ground-transport fare range must be non-negative with low <= high.")
+                    errors.append(cite("booking.option_contract", "Every ground-transport fare range must be non-negative with low <= high."))
                 elif item["fare_low"] == 0 and item["fare_high"] == 0:
                     # Same reasoning as the zero-minute leg: 0/0 was the template's seed value, so
                     # "unfilled" and "free" were indistinguishable to every gate. A ticket that is
                     # genuinely free needs no round-trip search URL, which this branch requires.
-                    errors.append("A ground-transport fare of 0-0 is an unfilled field, not a researched fare.")
+                    errors.append(cite("booking.option_contract", "A ground-transport fare of 0-0 is an unfilled field, not a researched fare."))
                 if not is_iso_datestamp(item.get("price_checked_at")):
-                    errors.append("ground.price_checked_at must be an ISO date or date-time.")
+                    errors.append(cite("booking.option_contract", "ground.price_checked_at must be an ISO date or date-time."))
                 # The two dates were truthiness-checked only, so "next Friday" and a return three
                 # days BEFORE departure both validated and printed straight onto the search button.
                 # price_checked_at and round_trip_search_checked_at on the same object are already
@@ -2704,7 +2831,7 @@ def validate_plan(plan: dict) -> list[str]:
                 outbound = parse_iso_date(item.get("outbound_date"), "ground.outbound_date", errors)
                 inbound = parse_iso_date(item.get("return_date"), "ground.return_date", errors)
                 if outbound and inbound and inbound < outbound:
-                    errors.append("ground.return_date cannot be before ground.outbound_date.")
+                    errors.append(cite("booking.option_contract", "ground.return_date cannot be before ground.outbound_date."))
                 # Deliberately NOT copied from the flight branch: a flight's outbound_date must equal
                 # trip.start_date, because the flight IS the arrival. A rail leg is often mid-trip --
                 # the hop between two cities -- so pinning it to the trip window would reject the
@@ -2714,9 +2841,9 @@ def validate_plan(plan: dict) -> list[str]:
                 trip_end = parse_iso_date(trip.get("end_date"), "trip.end_date", [])
                 for label, value in (("outbound_date", outbound), ("return_date", inbound)):
                     if value and trip_start and trip_end and not trip_start <= value <= trip_end:
-                        errors.append(
+                        errors.append(cite("booking.option_contract", 
                             f"ground.{label} {value.isoformat()} falls outside the trip window "
-                            f"{trip_start.isoformat()}..{trip_end.isoformat()}.")
+                            f"{trip_start.isoformat()}..{trip_end.isoformat()}."))
             if kind == "flight":
                 required_flight_fields = (
                     "origin_airport", "destination_airport", "outbound_date", "return_date",
@@ -2725,38 +2852,38 @@ def validate_plan(plan: dict) -> list[str]:
                     "round_trip_search_url", "round_trip_search_provider", "round_trip_search_checked_at", "round_trip_prefilled_fields",
                 )
                 if not all(item.get(key) for key in required_flight_fields):
-                    errors.append("Every flight option needs route, dates, concrete outbound/return itineraries, fare conditions, current-price status, airport transfer note, and a verified dated round-trip search URL.")
+                    errors.append(cite("booking.option_contract", "Every flight option needs route, dates, concrete outbound/return itineraries, fare conditions, current-price status, airport transfer note, and a verified dated round-trip search URL."))
                 elif not is_https(item["round_trip_search_url"]):
-                    errors.append("Every flight round-trip search URL must be HTTPS.")
+                    errors.append(cite("booking.option_contract", "Every flight round-trip search URL must be HTTPS."))
                 search_fields = item.get("round_trip_prefilled_fields")
                 if not has_search_fields(search_fields, REQUIRED_FLIGHT_SEARCH_FIELDS):
-                    errors.append("Every flight round-trip search must prefill origin, destination, outbound date, return date, and travellers.")
+                    errors.append(cite("booking.option_contract", "Every flight round-trip search must prefill origin, destination, outbound date, return date, and travellers."))
                 if not is_iso_datestamp(item.get("round_trip_search_checked_at")):
-                    errors.append("flight.round_trip_search_checked_at must be an ISO date or date-time.")
+                    errors.append(cite("booking.option_contract", "flight.round_trip_search_checked_at must be an ISO date or date-time."))
                 for leg_name in ("outbound_itinerary", "return_itinerary"):
                     leg = item.get(leg_name)
                     if not isinstance(leg, dict) or not all(leg.get(key) is not None and leg.get(key) != "" for key in ("service_identifier", "departure_local", "arrival_local", "duration_minutes", "stops", "connection_or_terminal_note")):
-                        errors.append(f"flight.{leg_name} needs carrier/flight or service identifier, local times, duration, stops, and connection/terminal note.")
+                        errors.append(cite("booking.option_contract", f"flight.{leg_name} needs carrier/flight or service identifier, local times, duration, stops, and connection/terminal note."))
                 if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
-                    errors.append("flight.availability_status must be available, limited, or unknown.")
+                    errors.append(cite("booking.option_contract", "flight.availability_status must be available, limited, or unknown."))
                 if item.get("price_basis") != "per_person_round_trip":
-                    errors.append("flight.price_basis must be per_person_round_trip.")
+                    errors.append(cite("booking.option_contract", "flight.price_basis must be per_person_round_trip."))
                 if not is_one_of(item.get("price_status"), PRICE_STATUSES):
-                    errors.append("flight.price_status must be researched_current, estimate, or user_confirmed.")
+                    errors.append(cite("booking.option_contract", "flight.price_status must be researched_current, estimate, or user_confirmed."))
                 if item.get("fare_low") is None or item.get("fare_high") is None or not item.get("fare_currency"):
-                    errors.append("Every flight option needs a checked per-person fare range and currency.")
+                    errors.append(cite("booking.option_contract", "Every flight option needs a checked per-person fare range and currency."))
                 elif not is_nonnegative_money_range(item.get("fare_low"), item.get("fare_high")):
-                    errors.append("Every flight fare range must be non-negative numbers with low less than or equal to high.")
+                    errors.append(cite("booking.option_contract", "Every flight fare range must be non-negative numbers with low less than or equal to high."))
                 if not is_iso_datestamp(item.get("price_checked_at")):
-                    errors.append("flight.price_checked_at must be an ISO date or date-time.")
+                    errors.append(cite("booking.option_contract", "flight.price_checked_at must be an ISO date or date-time."))
                 outbound = parse_iso_date(item.get("outbound_date"), "flight.outbound_date", errors)
                 inbound = parse_iso_date(item.get("return_date"), "flight.return_date", errors)
                 if outbound and inbound and inbound < outbound:
-                    errors.append("flight.return_date cannot be before flight.outbound_date.")
+                    errors.append(cite("booking.option_contract", "flight.return_date cannot be before flight.outbound_date."))
                 if outbound and trip_start and outbound != trip_start:
-                    errors.append("flight.outbound_date must match trip.start_date; include travel days in the trip window.")
+                    errors.append(cite("booking.option_contract", "flight.outbound_date must match trip.start_date; include travel days in the trip window."))
                 if inbound and trip_end and inbound != trip_end:
-                    errors.append("flight.return_date must match trip.end_date; include travel days in the trip window.")
+                    errors.append(cite("booking.option_contract", "flight.return_date must match trip.end_date; include travel days in the trip window."))
             if kind == "hotel":
                 required_hotel_fields = (
                     "stay_location", "neighborhood", "address_or_location_reference", "check_in", "check_out",
@@ -2765,62 +2892,62 @@ def validate_plan(plan: dict) -> list[str]:
                     "arrival_access_note", "key_area_access_note", "selection_rationale",
                 )
                 if not all(item.get(key) is not None and item.get(key) != "" for key in required_hotel_fields):
-                    errors.append("Every hotel option needs an exact stay area, access rationale, room and current price details, availability status, and check-in/out dates.")
+                    errors.append(cite("booking.option_contract", "Every hotel option needs an exact stay area, access rationale, room and current price details, availability status, and check-in/out dates."))
                 if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
-                    errors.append("hotel.availability_status must be available, limited, or unknown.")
+                    errors.append(cite("booking.option_contract", "hotel.availability_status must be available, limited, or unknown."))
                 if not item.get("stay_group_id"):
-                    errors.append("Every hotel option needs a stay_group_id so comparable options cannot be split by different neighborhood labels.")
+                    errors.append(cite("booking.option_contract", "Every hotel option needs a stay_group_id so comparable options cannot be split by different neighborhood labels."))
                 if item.get("price_basis") != "per_room_per_night":
-                    errors.append("hotel.price_basis must be per_room_per_night.")
+                    errors.append(cite("booking.option_contract", "hotel.price_basis must be per_room_per_night."))
                 if not is_one_of(item.get("price_status"), PRICE_STATUSES):
-                    errors.append("hotel.price_status must be researched_current, estimate, or user_confirmed.")
+                    errors.append(cite("booking.option_contract", "hotel.price_status must be researched_current, estimate, or user_confirmed."))
                 if not is_iso_datestamp(item.get("price_checked_at")):
-                    errors.append("hotel.price_checked_at must be an ISO date or date-time.")
+                    errors.append(cite("booking.option_contract", "hotel.price_checked_at must be an ISO date or date-time."))
                 for cost_label, low_key, high_key in (
                     ("nightly", "nightly_cost_low", "nightly_cost_high"),
                     ("trip", "trip_cost_low", "trip_cost_high"),
                 ):
                     if not is_nonnegative_money_range(item.get(low_key), item.get(high_key)):
-                        errors.append(f"hotel {cost_label} price range must be non-negative numbers with low less than or equal to high.")
+                        errors.append(cite("booking.option_contract", f"hotel {cost_label} price range must be non-negative numbers with low less than or equal to high."))
                 searches = item.get("comparison_searches")
                 if not isinstance(searches, list) or not searches:
-                    errors.append("Every hotel option needs at least one dated comparison-platform search.")
+                    errors.append(cite("booking.option_contract", "Every hotel option needs at least one dated comparison-platform search."))
                 else:
                     for search in searches:
                         if not isinstance(search, dict) or not all(search.get(key) for key in ("platform", "search_url", "checked_at")) or not is_https(search.get("search_url")):
-                            errors.append("Every hotel comparison search needs platform, checked_at, and an HTTPS search URL.")
+                            errors.append(cite("booking.option_contract", "Every hotel comparison search needs platform, checked_at, and an HTTPS search URL."))
                             continue
                         if not is_iso_datestamp(search["checked_at"]):
-                            errors.append("Every hotel comparison search.checked_at must be an ISO date or date-time.")
+                            errors.append(cite("booking.option_contract", "Every hotel comparison search.checked_at must be an ISO date or date-time."))
                         fields = search.get("prefilled_fields")
                         if not has_search_fields(fields, REQUIRED_STAY_SEARCH_FIELDS):
-                            errors.append("Every hotel comparison search must prefill destination, check-in/out, guests, and rooms.")
+                            errors.append(cite("booking.option_contract", "Every hotel comparison search must prefill destination, check-in/out, guests, and rooms."))
                 check_in = parse_iso_date(item.get("check_in"), "hotel.check_in", errors)
                 check_out = parse_iso_date(item.get("check_out"), "hotel.check_out", errors)
                 if check_in and check_out and check_out <= check_in:
-                    errors.append("hotel.check_out must be after hotel.check_in.")
+                    errors.append(cite("booking.option_contract", "hotel.check_out must be after hotel.check_in."))
                 for field_name in ("guest_count", "room_count"):
                     if not isinstance(item.get(field_name), int) or isinstance(item.get(field_name), bool) or item[field_name] < 1:
-                        errors.append(f"hotel.{field_name} must be a positive integer.")
+                        errors.append(cite("booking.option_contract", f"hotel.{field_name} must be a positive integer."))
             if kind == "ticket":
                 required_ticket_fields = (
                     "id", "day_number", "attraction_name", "timed_entry_or_reservation", "price_low", "price_high",
                     "currency", "ticket_status", "price_basis", "price_status", "price_checked_at", "availability_status",
                 )
                 if not all(item.get(key) is not None and item.get(key) != "" for key in required_ticket_fields):
-                    errors.append("Every attraction-ticket option needs an id, day, attraction/reservation details, per-person price, status, and check time.")
+                    errors.append(cite("booking.option_contract", "Every attraction-ticket option needs an id, day, attraction/reservation details, per-person price, status, and check time."))
                 if item.get("ticket_status") and item.get("ticket_status") not in BOOKING_STATES:
-                    errors.append("ticket.ticket_status must be idea, researched, held, or booked.")
+                    errors.append(cite("booking.option_contract", "ticket.ticket_status must be idea, researched, held, or booked."))
                 if item.get("price_basis") != "per_person_ticket":
-                    errors.append("ticket.price_basis must be per_person_ticket.")
+                    errors.append(cite("booking.option_contract", "ticket.price_basis must be per_person_ticket."))
                 if not is_one_of(item.get("price_status"), PRICE_STATUSES):
-                    errors.append("ticket.price_status must be researched_current, estimate, or user_confirmed.")
+                    errors.append(cite("booking.option_contract", "ticket.price_status must be researched_current, estimate, or user_confirmed."))
                 if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
-                    errors.append("ticket.availability_status must be available, limited, or unknown.")
+                    errors.append(cite("booking.option_contract", "ticket.availability_status must be available, limited, or unknown."))
                 if not is_nonnegative_money_range(item.get("price_low"), item.get("price_high")):
-                    errors.append("ticket price range must be non-negative numbers with low less than or equal to high.")
+                    errors.append(cite("booking.option_contract", "ticket price range must be non-negative numbers with low less than or equal to high."))
                 if not is_iso_datestamp(item.get("price_checked_at")):
-                    errors.append("ticket.price_checked_at must be an ISO date or date-time.")
+                    errors.append(cite("booking.option_contract", "ticket.price_checked_at must be an ISO date or date-time."))
             if kind == "car":
                 required_car_fields = (
                     "id", "pickup_location", "dropoff_location", "pickup_time", "dropoff_time", "vehicle_class",
@@ -2829,20 +2956,20 @@ def validate_plan(plan: dict) -> list[str]:
                     "cross_border_or_restriction_note", "rental_search_prefilled_fields",
                 )
                 if not all(item.get(key) is not None and item.get(key) != "" for key in required_car_fields):
-                    errors.append("Every rental-car option needs exact pickup/dropoff, vehicle/terms, dated per-day price, availability, and search-prefill details.")
+                    errors.append(cite("booking.option_contract", "Every rental-car option needs exact pickup/dropoff, vehicle/terms, dated per-day price, availability, and search-prefill details."))
                 if item.get("price_basis") != "per_vehicle_per_day":
-                    errors.append("rental_car.price_basis must be per_vehicle_per_day.")
+                    errors.append(cite("booking.option_contract", "rental_car.price_basis must be per_vehicle_per_day."))
                 if not is_one_of(item.get("price_status"), PRICE_STATUSES):
-                    errors.append("rental_car.price_status must be researched_current, estimate, or user_confirmed.")
+                    errors.append(cite("booking.option_contract", "rental_car.price_status must be researched_current, estimate, or user_confirmed."))
                 if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
-                    errors.append("rental_car.availability_status must be available, limited, or unknown.")
+                    errors.append(cite("booking.option_contract", "rental_car.availability_status must be available, limited, or unknown."))
                 if not is_nonnegative_money_range(item.get("price_low"), item.get("price_high")):
-                    errors.append("rental-car price range must be non-negative numbers with low less than or equal to high.")
+                    errors.append(cite("booking.option_contract", "rental-car price range must be non-negative numbers with low less than or equal to high."))
                 if not is_iso_datestamp(item.get("price_checked_at")):
-                    errors.append("rental_car.price_checked_at must be an ISO date or date-time.")
+                    errors.append(cite("booking.option_contract", "rental_car.price_checked_at must be an ISO date or date-time."))
                 rental_fields = item.get("rental_search_prefilled_fields")
                 if not has_search_fields(rental_fields, REQUIRED_RENTAL_SEARCH_FIELDS):
-                    errors.append("Every rental-car search must prefill pickup/dropoff locations and times.")
+                    errors.append(cite("booking.option_contract", "Every rental-car search must prefill pickup/dropoff locations and times."))
     required_access_categories = {"accommodation"}
     if options.get("flights"):
         required_access_categories.add("flight")
@@ -2859,7 +2986,7 @@ def validate_plan(plan: dict) -> list[str]:
         required_access_categories.add("rail_or_ground")
     missing_access_categories = required_access_categories - booking_access_categories
     if missing_access_categories:
-        errors.append("Missing booking-access checks for: " + ", ".join(sorted(missing_access_categories)) + ".")
+        errors.append(cite("booking.access_checks", "Missing booking-access checks for: " + ", ".join(sorted(missing_access_categories)) + "."))
     accommodation_items = [item for item in options.get("accommodations", []) if isinstance(item, dict)]
     flight_items = [item for item in options.get("flights", []) if isinstance(item, dict)]
     ground_items = [item for item in options.get("ground_transport", []) if isinstance(item, dict)]
@@ -2871,22 +2998,22 @@ def validate_plan(plan: dict) -> list[str]:
     for items, noun, label in ((flight_items, "flight", "Flight"),
                                (ground_items, "rail/coach/ferry", "Rail/coach/ferry")):
         if len(items) == 1 and not items[0].get("single_option_reason"):
-            errors.append(f"Provide at least two comparable {noun} candidates, or record a researched single_option_reason for the only feasible option.")
+            errors.append(cite("booking.comparison", f"Provide at least two comparable {noun} candidates, or record a researched single_option_reason for the only feasible option."))
         identifiers = [item.get("id") for item in items]
         # A non-string id is not merely odd: ids are matched by equality against day assignments
         # elsewhere in the plan, so a list or a number is a value that can never match and never
         # says why. Truthiness alone accepted `["ground-1"]`.
         if any(not isinstance(identifier, str) or not identifier.strip() for identifier in identifiers) \
                 or len({dedupe_key(v) for v in identifiers}) != len(identifiers):
-            errors.append(f"{label} options must use distinct, non-empty string ids so the comparison is not ambiguous.")
+            errors.append(cite("booking.comparison", f"{label} options must use distinct, non-empty string ids so the comparison is not ambiguous."))
         review_urls = [item.get("review_url") for item in items]
         if len({dedupe_key(v) for v in review_urls}) != len(review_urls):
-            errors.append(f"{label} candidates must not reuse the same review_url; provide genuinely distinct comparison paths.")
+            errors.append(cite("booking.comparison", f"{label} candidates must not reuse the same review_url; provide genuinely distinct comparison paths."))
     accommodation_ids = {item.get("id") for item in accommodation_items if item.get("id")}
     if not accommodation_ids:
-        errors.append("At least one accommodation option with an id is required.")
+        errors.append(cite("booking.comparison", "At least one accommodation option with an id is required."))
     if len(accommodation_ids) != len(accommodation_items):
-        errors.append("Accommodation options must use distinct, non-empty ids so daily stay assignments remain unambiguous.")
+        errors.append(cite("booking.comparison", "Accommodation options must use distinct, non-empty ids so daily stay assignments remain unambiguous."))
     accommodation_counts: dict[str, int] = {}
     accommodation_windows: dict[str, tuple[date | None, date | None]] = {}
     for item in accommodation_items:
@@ -2900,12 +3027,12 @@ def validate_plan(plan: dict) -> list[str]:
                 parse_iso_date(item.get("check_out"), "hotel.check_out", []),
             )
     if any(count > 3 for count in accommodation_counts.values()):
-        errors.append("Provide no more than three accommodation options per stay location.")
+        errors.append(cite("booking.comparison", "Provide no more than three accommodation options per stay location."))
     for group, count in accommodation_counts.items():
         if count < 2:
             only_option = next((item for item in accommodation_items if item.get("stay_group_id") == group), {})
             if not only_option.get("single_option_reason"):
-                errors.append(f"Provide two comparable hotel options for stay group {group}, or record a researched single_option_reason (for example, a remote stay or user-selected property).")
+                errors.append(cite("booking.comparison", f"Provide two comparable hotel options for stay group {group}, or record a researched single_option_reason (for example, a remote stay or user-selected property)."))
     ticket_ids = {
         item.get("id")
         for item in options.get("attraction_tickets", [])
@@ -2913,28 +3040,28 @@ def validate_plan(plan: dict) -> list[str]:
     }
     for ticket in options.get("attraction_tickets", []):
         if isinstance(ticket, dict) and ticket.get("day_number") not in day_dates:
-            errors.append("Every attraction-ticket option.day_number must name a real trip day.")
+            errors.append(cite("booking.option_contract", "Every attraction-ticket option.day_number must name a real trip day."))
     for day in days:
         if not isinstance(day, dict):
             continue
         accommodation_id = day.get("accommodation_option_id")
         departure_without_overnight = day.get("day_type") == "departure" and not accommodation_id
         if not departure_without_overnight and accommodation_id not in accommodation_ids:
-            errors.append(f"day {day.get('number', '?')} needs a valid accommodation_option_id.")
+            errors.append(cite("booking.option_contract", f"day {day.get('number', '?')} needs a valid accommodation_option_id."))
         elif accommodation_id in accommodation_ids:
             day_date = day_dates.get(day.get("number"))
             check_in, check_out = accommodation_windows[accommodation_id]
             if day_date and check_in and check_out:
                 if day.get("day_type") == "departure":
                     if not check_in < day_date <= check_out:
-                        errors.append(f"day {day.get('number', '?')} departure accommodation must be the hotel checked out on that date.")
+                        errors.append(cite("booking.option_contract", f"day {day.get('number', '?')} departure accommodation must be the hotel checked out on that date."))
                 elif not check_in <= day_date < check_out:
-                    errors.append(f"day {day.get('number', '?')} is not covered by its assigned overnight accommodation dates.")
+                    errors.append(cite("booking.option_contract", f"day {day.get('number', '?')} is not covered by its assigned overnight accommodation dates."))
         for activity in day.get("activities", []):
             if isinstance(activity, dict) and activity.get("ticket_option_id") and activity["ticket_option_id"] not in ticket_ids:
-                errors.append(f"day {day.get('number', '?')} references an unknown ticket_option_id.")
+                errors.append(cite("booking.option_contract", f"day {day.get('number', '?')} references an unknown ticket_option_id."))
     if trip.get("arrival_transport_mode") == "flight" and not options.get("flights"):
-        errors.append("A flight-arrival plan needs at least one flight option.")
+        errors.append(cite("booking.option_contract", "A flight-arrival plan needs at least one flight option."))
     # The same rule for the ground modes, and it is the one that makes the category worth having.
     # Adding ground_transport made a train card POSSIBLE; without this it was never REQUIRED, so a
     # rail-arrival plan with three compared hotels and no way to reach, price-check or
@@ -2947,11 +3074,11 @@ def validate_plan(plan: dict) -> list[str]:
     # "road" is included only for public transit, where it means a coach; on a self-drive trip the
     # road arrival is the rental car, which the next rule already requires.
     if trip.get("arrival_transport_mode") == "rail" and not options.get("ground_transport"):
-        errors.append(
+        errors.append(cite("booking.option_contract", 
             "A rail-arrival plan needs at least one rail/coach/ferry option in "
             "booking_options.ground_transport -- the train is the largest and most time-sensitive "
             "purchase on the page, and without a card the traveller cannot reach, price or "
-            "availability-check it.")
+            "availability-check it."))
     # "road" is only an intercity coach when the trip actually leaves town. On a same-city plan --
     # the repo's own fixture is Chengdu to Chengdu -- road means the taxi or the bus that met the
     # traveller, and demanding a bookable coach card for it would be a gate firing on correct
@@ -2959,28 +3086,28 @@ def validate_plan(plan: dict) -> list[str]:
     leaves_town = str(trip.get("origin") or "").strip() != str(trip.get("destination") or "").strip()
     if (trip.get("arrival_transport_mode") == "road" and mode != "self-drive" and leaves_town
             and not options.get("ground_transport")):
-        errors.append(
+        errors.append(cite("booking.option_contract", 
             "A road arrival between two places on public transit means an intercity coach, so it "
-            "needs at least one rail/coach/ferry option in booking_options.ground_transport.")
+            "needs at least one rail/coach/ferry option in booking_options.ground_transport."))
     if mode == "self-drive" and not options.get("rental_cars"):
-        errors.append("A self-drive plan needs at least one rental-car option.")
+        errors.append(cite("booking.option_contract", "A self-drive plan needs at least one rental-car option."))
     if mode == "public-transit" and options.get("rental_cars"):
-        errors.append("A public-transit plan must not include rental-car options.")
+        errors.append(cite("booking.option_contract", "A public-transit plan must not include rental-car options."))
     overview = plan.get("transport_overview") if isinstance(plan.get("transport_overview"), dict) else {}
     if not overview.get("overall_route_map_url") or not overview.get("overall_map_checked_at") or not overview.get("overall_map_provider") or not overview.get("overall_map_scope") or not overview.get("map_link_kind"):
-        errors.append("transport_overview needs a directions URL, map scope/link kind, map check time, and map provider.")
+        errors.append(cite("map.link_contract", "transport_overview needs a directions URL, map scope/link kind, map check time, and map provider."))
     elif overview.get("overall_map_scope") not in ROUTE_MAP_SCOPES:
-        errors.append("transport_overview.overall_map_scope must be multi_stop or primary_leg.")
+        errors.append(cite("map.link_contract", "transport_overview.overall_map_scope must be multi_stop or primary_leg."))
     elif overview.get("map_link_kind") != "directions":
-        errors.append("transport_overview.map_link_kind must be directions.")
+        errors.append(cite("map.link_contract", "transport_overview.map_link_kind must be directions."))
     elif not is_https(overview["overall_route_map_url"]):
-        errors.append("transport_overview.overall_route_map_url must be HTTPS.")
+        errors.append(cite("map.link_contract", "transport_overview.overall_route_map_url must be HTTPS."))
     elif not is_directions_url(overview["overall_map_provider"], overview["overall_route_map_url"]):
-        errors.append("transport_overview.overall_route_map_url must be an actual directions URL, not a place/POI page.")
+        errors.append(cite("map.link_contract", "transport_overview.overall_route_map_url must be an actual directions URL, not a place/POI page."))
     elif not map_link_allowed(overview["overall_map_provider"], overview["overall_route_map_url"], regional_context):
-        errors.append("transport_overview uses Google Maps despite the regional-access rule.")
+        errors.append(cite("market.provider_routing", "transport_overview uses Google Maps despite the regional-access rule."))
     elif market == "mainland_china" and not mainland_primary_exception and not is_amap(overview["overall_map_provider"], overview["overall_route_map_url"]):
-        errors.append("mainland-China transport overview must use Amap/高德地图.")
+        errors.append(cite("market.provider_routing", "mainland-China transport overview must use Amap/高德地图."))
     validate_alternative_map_links(overview.get("overall_alternative_map_links"), "transport_overview", regional_context, errors)
     if mode == "public-transit" and overview.get("cost_low") is None and overview.get("cost_high") is None:
         errors.append("A public-transit overview needs a researched fare or range.")

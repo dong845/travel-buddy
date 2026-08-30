@@ -27,7 +27,13 @@ restaurant: not from ignorance, but from attention already spent elsewhere.
 Always all five, always in one fan-out, and always with the two network-free auditors described
 under *Prompt shape* below. A domain that looks irrelevant still returns `findings: []`, which is
 a claim someone made — silence from a domain nobody ran is not. The gate rejects a report missing
-any of the seven blocks.
+any block **the plan's own tier requires**: seven on the full pass, and four on the light tier
+(`sights_and_hours`, `transport`, and both auditors). `required_domains_for` in
+`check_plan_consistency.py` computes which of the two applies by reading the plan, so it is not a
+choice you make — and running all seven anyway is never rejected, because the gate only refuses
+blocks that are *missing* or that name a domain outside the protocol. That asymmetry is why the
+instruction above is still "always all five": over-verifying costs tokens, under-verifying ships
+a fare nobody checked.
 
 | Domain | Verify |
 | --- | --- |
@@ -95,6 +101,7 @@ each other and themselves.
 5. **Fixing one finding can break another.** Re-run the consistency script after edits — moving
    a dinner changes the route, which changes the walking totals, which the walking check reads.
 
+<a id="report-schema"></a>
 ## Report schema
 
 Start from [templates/verification-report.json](../templates/verification-report.json), which
@@ -203,12 +210,16 @@ be cheaper, narrow what each domain fetches, do not drop blocks.
 So the scope depends on what is being delivered, and this is the one place the distinction
 matters:
 
-- **Construction** — all five domains plus both auditors, always. Seven blocks is the only shape
-  the report schema accepts, because a Construction plan is something the traveller books from.
+- **Construction** — all five domains plus both auditors. Seven blocks is what the schema accepts
+  from a plan on the full pass, which is what a Construction plan almost always computes; a plan
+  the code puts on the light tier owes four, and submitting seven is still accepted. Aim at seven,
+  because a Construction plan is something the traveller books from.
 - **Discovery** — `entry` and `seasonality` are the two that can eliminate a candidate outright,
   so verify those inline while scoring candidates. Do **not** write a report for them. Discovery
   produces an intermediate shortlist, not a saved plan, so no report is required and a partial
-  one would fail `check_plan_consistency.py --verification`, which requires all seven by design.
+  one would fail `check_plan_consistency.py --verification` **at either tier** — `entry` and
+  `seasonality` alone are missing `sights_and_hours`, `transport` and both auditors, and the light
+  tier requires all four of those. The tier is not a way to make a Discovery report legal.
 
 ## Skipping it
 

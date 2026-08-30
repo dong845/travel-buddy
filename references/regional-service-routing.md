@@ -14,6 +14,7 @@ For each trip, record these fields in `regional_service_context` before renderin
 
 Ask only if the answer can change the plan. For an open-destination discovery request, retain the preference as a constraint and choose the detailed provider only after a destination is selected. Never ask for an account name, password, payment method, or device identifier.
 
+<a id="routing-policy"></a>
 ## Routing policy
 
 1. Prefer a map or transport service with reliable destination coverage and normal local access for the user's route and transport mode.
@@ -72,6 +73,7 @@ Do not treat this list as a permanent provider table; platform features, regulat
 - If a country has a locally dominant map/transit provider, verify that provider's current web or app route link before using it. Do not hard-code a provider merely from a country label.
 - Cross-border or multi-country itineraries may use different providers by day or segment. State the change in the final page, preserve an overall provider where possible, and never label two incompatible links as the same live route.
 
+<a id="final-plan-contract"></a>
 ## Final-plan contract
 
 Each day route, each route segment, and the transport overview must include `map_provider`, `map_link_kind: "directions"`, `verified_map_url`, and `map_checked_at`. A route also records its primary mode, route logic, and fallback. Each segment records a single mode, service/line where relevant, walking minutes, transfers, journey and arrival instructions, fare basis, and fallback. `alternative_map_links`, when present, is a list of `{ "provider", "url", "checked_at", "map_link_kind": "directions", "note" }` records. The primary link and every alternative must be a safe HTTPS browse link and must open actual directions rather than a place page. **Every endpoint in every one of them is a coordinate pair** — including the alternatives, which were for a while the one place a caption could still hide.

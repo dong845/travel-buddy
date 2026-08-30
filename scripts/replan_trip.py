@@ -923,6 +923,25 @@ def main(argv: list[str] | None = None) -> int:
         "this plan no longer has. Re-run the five-domain pass in references/verification.md and "
         "save with a fresh report."))
 
+    # The same argument, one field over, and it was missed on the first pass because this one is
+    # not about facts in the world -- it is about checks that ran. `gates_passed` records that the
+    # deterministic gates passed, and save_trip_deliverables.py renders it onto the page as a
+    # visible "Structure checks passed: N" line. Those gates ran on the OLD dates, against the old
+    # day-to-weekday mapping, the old accommodation windows and the old ticket day links, which is
+    # precisely what a delta invalidates. Carried forward it produced the worst shape this file can
+    # emit: a shifted plan that `check_plan_consistency.py` REFUSES -- unresolved must_reverify
+    # entries, exit 1 -- rendering a page that tells the traveller in plain text that two dozen
+    # structure checks passed on it. The verification banner would not have covered for it either,
+    # because the two are separate claims and only one of them was being cleared.
+    old_gates = plan.get("gates_passed")
+    if old_gates is not None:
+        plan["gates_passed"] = None
+        findings.add("gates_passed", (
+            "the structure-gate stamp was cleared by this replan. It recorded gates that ran on "
+            "the OLD calendar, and this plan's dates, weekdays, accommodation windows and ticket "
+            "day links are not the ones they checked. save_trip_deliverables.py stamps it again "
+            "when the gates actually pass on the new dates."))
+
     # The photographs travel WITH the plan, and the key naming them is rewritten to where they
     # landed. Two different questions, and this script had been answering neither:
     #
@@ -1169,7 +1188,14 @@ def _print_change_log(args, plan, delta, old_start, old_end, new_start, new_end,
     print(f"\nNEXT", file=out)
     print(f"  1. Fix or re-research each must_reverify entry, then set its \"resolved\": true and "
           f"write what you found in \"resolution\".", file=out)
-    print(f"  2. python scripts/check_plan_consistency.py {destination}   "
+    # `--no-verification-yet` and not a bare invocation, which is what this line printed until the
+    # flag became mandatory. A bare call now exits 1 out of argparse having run ZERO of the checks,
+    # and it exits 1 for the same reason an open must_reverify entry does -- so a caller reading
+    # the exit code could not tell "the gate refused your plan" from "the gate never ran", and step
+    # 2 silently stopped being the step it says it is. The waiver is right here rather than a
+    # report path: this plan's verification was just cleared two hundred lines above, so there is
+    # no report to name, and step 3 is where one gets made.
+    print(f"  2. python scripts/check_plan_consistency.py {destination} --no-verification-yet   "
           f"# refuses while any entry is open", file=out)
     print(f"  3. Re-run the five-domain verification (references/verification.md) and save with "
           f"scripts/save_trip_deliverables.py.", file=out)

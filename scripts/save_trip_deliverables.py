@@ -37,6 +37,7 @@ from fetch_plan_imagery import (
     sidecar_path_for,
     write_json_atomic,
 )
+from plan_flags import PlanFlagsError, derive_html_flags
 from render_final_trip_html import intake_context_errors, read_json, render, validate_plan
 from validate_trip_html import validate as validate_html
 
@@ -181,25 +182,39 @@ def main() -> int:
     # object about to be serialized keeps none of them. The two used to be the same dict, which is
     # exactly why a delivered plan was 96% base64.
     rendered_html = render({**plan, "imagery": imagery} if imagery else plan)
-    required_booking_types = {"hotel"}
-    if plan["trip"].get("arrival_transport_mode") == "flight":
-        required_booking_types.add("flight")
-    if plan.get("booking_options", {}).get("attraction_tickets"):
-        required_booking_types.add("ticket")
-    # The same list, kept in step by hand in three files. Harmless today because validate_plan
-    # already forces the button on every ground option -- but that is a reason this line is cheap,
-    # not a reason to leave the third copy behind when the first two moved.
-    if plan.get("booking_options", {}).get("ground_transport"):
-        required_booking_types.add("ground")
+    # These four settings used to be computed here and typed by hand into validate_trip_html.py,
+    # which is two implementations of one rule -- and the hand-typed copy defaulted to off, so
+    # every check derived correctly on this path was silently skippable on the other one. Both
+    # callers now import the single deriver; the reasoning that used to live in this block moved
+    # with the code into scripts/plan_flags.py, including the comment that named the problem.
+    #
+    # It cannot live in this file: validate_trip_html.py would have to import it, and the import
+    # at the top of this module already pulls validate() out of validate_trip_html -- a cycle
+    # whose ImportError would
+    # surface on whoever ran the validator directly, naming a half-initialised module rather than
+    # anything about travel plans.
+    #
+    # Refusals are impossible here rather than merely unlikely: validate_plan() ran above and
+    # returns errors for every shape derive_html_flags rejects. The handler stays because "cannot
+    # happen" is a claim about today's call order, and a silent traceback mid-save is the one
+    # outcome this script must never produce -- it has already written nothing at this point, and
+    # the operator needs to be told that rather than shown a stack.
+    try:
+        flags = derive_html_flags(plan, plan_label=str(args.plan))
+    except PlanFlagsError as exc:
+        print(f"ERROR: Could not derive the HTML gate settings: {exc}", file=sys.stderr)
+        return 2
     html_errors = validate_html(
         rendered_html,
-        len(plan["days"]),
-        required_booking_types,
-        plan["transport_preference"]["mode"],
-        # The banner is the only place an unverified plan announces itself to the person actually
-        # booking. Asserted here rather than trusted, because this is the exact point where the
-        # JSON gap and the page's silence would diverge.
-        require_unverified_banner=plan.get("verification_status") != "verified",
+        flags.expected_days,
+        flags.required_booking_types,
+        flags.transport_mode,
+        require_unverified_banner=flags.require_unverified_banner,
+        # This page was rendered by this script three lines up, so it carries the stamp by
+        # construction. Asserting it anyway is what makes the assertion true of the renderer
+        # rather than of one run: if a future change moves gates_passed after render, the save
+        # path fails here instead of shipping unstamped pages that the --plan validator would
+        # then reject downstream.
     )
     if html_errors:
         print("RENDERING ERROR", file=sys.stderr)

@@ -4,6 +4,7 @@ Use this reference after the first response is gathered or when the user asks fo
 
 **This file describes the questions, not a licence to ask them in chat.** The loopback HTML form asks them; the conversation design below is what the form encodes and what a chat fallback must cover when the traveller has declined the form. Chat is theirs to choose, not yours — see SKILL.md section 1, and note that `save_trip_deliverables.py` refuses any plan whose `intake_context` does not say which route was taken, with the traveller's own declining words when it was `chat_fallback`.
 
+<a id="conversation-design"></a>
 ## Conversation design
 
 Collect information in descending order of decision impact:
@@ -38,6 +39,7 @@ Capture:
 
 Do not infer an airport solely from a city. For example, a traveler in a metropolitan area may prioritize a low-cost secondary airport, rail, a direct flight, or minimal ground transfer differently.
 
+<a id="budget-model"></a>
 ## Budget model
 
 Capture the **per-person** number, currency, and scope before using it to rank destinations. Compute a party total only as a separately labeled multiplication by traveler count.
@@ -65,6 +67,7 @@ Use one explicit state:
 
 Ask whether a named place is a must, a wish, or inspiration. A country-sized choice is not enough to start a city-level itinerary: retain room to compare its regions and arrival airports.
 
+<a id="experience-taxonomy"></a>
 ## Experience and scenery taxonomy
 
 Start with the high-level direction, then ask the user to pick up to four items, rank the top two, and say whether each is a trip centerpiece or a bonus. Let the user add an unlisted item.
@@ -108,6 +111,7 @@ Ask sensitively and only when relevant. In particular, first establish whether c
 - dietary, religious, family, safety, language, connectivity, and privacy needs;
 - realistic tolerance for transfers, red-eye flights, self-driving, crowds, and isolation.
 
+<a id="machine-readable-values"></a>
 ### Two answers must leave the interview as machine-readable values
 
 Most of what the intake collects can stay in the traveller's own words. Two cannot, because the

@@ -21,14 +21,24 @@ cannot live here; they are the parallel-verification stage described in
 references/verification.md, whose report this script validates when one is supplied.
 
 Usage:
-    python scripts/check_plan_consistency.py <plan.json> [--verification <report.json>]
+    python scripts/check_plan_consistency.py <plan.json> --verification <report.json>
+    python scripts/check_plan_consistency.py <plan.json> --no-verification-yet
     python scripts/check_plan_consistency.py <plan.json> --emit-walking
+
+`--verification` is required, or waived out loud with `--no-verification-yet`. It used to be
+optional, which meant the documented invocation was the disarmed one: check_verification -- the
+only thing that reads the report at all -- is not in PLAN_CHECKS and runs nowhere else, so
+omitting the flag silently skipped every check that the report covers its required domains and
+both audits, that each claims_checked pointer resolves, and that the report is not stale or bound
+to a different plan. Measured on a real workspace plan (plans/2027-02-12-阿利坎特...json): bare
+reported 13 findings, the same plan handed a report belonging to another trip reported 21.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import functools
 import json
 import math
 import urllib.parse
@@ -375,6 +385,229 @@ def _route_text(day: dict) -> str:
     return "\n".join(chunks)
 
 
+# --------------------------------------------------------------------------------------------
+# Where the rule is written
+# --------------------------------------------------------------------------------------------
+# This file had well over a hundred places it can refuse a plan and four mentions of
+# `references/`, three of them in comments no failing run ever prints. So the run that trips a gate is told WHAT is wrong and
+# never WHERE the rule it broke is written down.
+#
+# That is not a documentation nicety, and the measurement is the argument. The owner runs this
+# skill on Chinese-provider models under non-Claude-Code CLIs. references/booking-html-output.md
+# is the largest file in the reference layer -- about a third of it -- and SKILL.md's only trigger
+# for it is one sentence buried inside its longest paragraph. A run that never opened that file
+# gets a 300-character English refusal and has nowhere to go: it cannot guess that a reference it
+# never read is the thing that would explain the rule. Naming the file in the failure turns the dead end
+# into a self-correcting loop, and it loads the reference at the cheapest possible moment -- after
+# the run has demonstrated it needs it, rather than speculatively at the top of every run.
+#
+# Three rules this registry is built to keep, each one a mistake that was available here:
+#
+# 1. APPEND, never prepend. Several hundred assertions in tests/ match a needle as a substring of
+#    the whole output (`needle not in out`), and many of those needles are the opening words of a
+#    message. A prefix would move every one of them and break the suite for no benefit; a suffix
+#    is invisible to a substring match. Verified before writing a line of this: `grep -rnE
+#    '\.endswith\(' tests/*.py` finds one hit and it is on a filename, not on gate output, and
+#    there is no assertion in tests/ that anchors a regex to the end of a message.
+#
+# 2. Derive the citation from THE ENFORCING CODE, never from SKILL.md's description of itself.
+#    SKILL.md currently asserts that the map-endpoint rules are "invisible to every structural
+#    gate" twelve lines above its own description of check_map_endpoints, which is the gate that
+#    enforces them. A registry built by reading SKILL.md would have inherited that error and sent
+#    every author with a broken map URL to the wrong place. Every entry below was instead read off
+#    the check that emits it and confirmed against the reference section that states the rule --
+#    e.g. the dining rating fields are cited to the destination-coverage-and-food section of
+#    booking-html-output.md, because that section is where `rating_value`/`rating_scale`/
+#    `rating_count`/`rating_source` are actually enumerated (`grep -n rating_value
+#    references/*.md` finds them there and nowhere else).
+#
+#    Written out in prose rather than as a filename-plus-fragment string on purpose, and twice
+#    over. The packaging test scans this file for anything shaped like a citation and resolves
+#    every one it finds, without caring whether the string sat in executable code or in a comment
+#    -- correctly, because a reader follows a pointer either way. The first draft of this
+#    paragraph wrapped the anchor across a line break, leaving `#destination-coverage-and-` in the
+#    source, and the test failed on it at once. The second draft wrote a made-up example fragment
+#    to explain the first, and the test failed on THAT, because a placeholder shaped like a
+#    citation is indistinguishable from one. Both lessons are kept here rather than worked around:
+#    a citation is a claim about where something is, and prose makes that claim as loudly as an
+#    f-string does. If an example is ever genuinely needed here, make it a real anchor.
+#
+# 3. Cite the RULE, not the file. A pointer at a 41 KB file's title is barely better than no
+#    pointer -- the reader still has to find the paragraph. Each anchor below names the section
+#    that states the specific rule the citing check enforces. And a check that has no reference
+#    home gets NO citation rather than a plausible-looking one: a fabricated pointer is worse than
+#    silence, because it costs a read and teaches the wrong location.
+#
+# Anchors are `<a id="...">` markers written into the reference files in this same change, not
+# heading slugs, so that rewording a heading cannot silently 404 a citation. A test in
+# tests/test_packaging.py resolves every anchor any gate here can emit; a citation that 404s is
+# worse than none, so it is a test failure rather than a convention.
+CHECK_REFERENCES: dict[str, str] = {
+    # Day route arithmetic, the walking burden, and the clock. All of it is the "keep the day's
+    # actual travel burden visible" contract -- start/end, mode, distance, transfers, walking,
+    # duration, fare -- which is stated once, in the route-burden section.
+    "check_routes": "booking-html-output.md#day-route-burden",
+    "check_implied_speed": "booking-html-output.md#day-route-burden",
+    "check_clock_closure": "booking-html-output.md#day-route-burden",
+    "check_day_internals": "booking-html-output.md#day-route-burden",
+    # The walking cap is a number the interview has to produce, and this check is the reason it
+    # has to be a number: left as prose the field stays null and every walking check passes
+    # silently. That is the failure initial-intake.md's machine-readable-values section exists to
+    # describe, so an author who trips this gate is sent to the question that was skipped.
+    "check_walking_budget": "initial-intake.md#machine-readable-values",
+    "check_untyped_constraints": "initial-intake.md#machine-readable-values",
+    "check_preference_coverage": "initial-intake.md#experience-taxonomy",
+    # Map URLs: endpoints are geocoder queries, transit takes no waypoints, a day map's scope has
+    # to match the stops it claims to cover.
+    "check_map_endpoints": "booking-html-output.md#map-endpoints",
+    # Dining: the route anchor and the checked weekday hours, then the quality signal. Both live
+    # in the same section, which is also where the rating field names come from.
+    "check_dining": "booking-html-output.md#destination-coverage-and-food",
+    "check_meal_reachability": "booking-html-output.md#destination-coverage-and-food",
+    "check_venue_quality": "booking-html-output.md#destination-coverage-and-food",
+    # A button that names one provider and opens another, a comparison link scoped to a city
+    # rather than to the property, two options sharing one URL.
+    "check_booking_identity": "booking-html-output.md#button-provider-identity",
+    "check_accommodation_coverage": "booking-html-output.md#booking-links",
+    "check_ticket_sale_windows": "booking-html-output.md#ticket-constraints",
+    # Whether the links work from where the traveller will be standing.
+    "check_service_market": "regional-service-routing.md#final-plan-contract",
+    # What the page prints verbatim, and the shapes the renderer refuses to print.
+    "check_prose_rendering": "booking-html-output.md#render-what-the-plan-collects",
+    "check_prose_agrees_with_data": "booking-html-output.md#render-what-the-plan-collects",
+    "check_prose_texture": "booking-html-output.md#render-what-the-plan-collects",
+    "check_list_typed_fields": "booking-html-output.md#list-typed-fields",
+    "check_cross_references": "booking-html-output.md#render-what-the-plan-collects",
+    "check_budget": "initial-intake.md#budget-model",
+    "check_replan_context": "replanning.md#the-gate-that-stops-it-shipping",
+    "check_verification": "verification.md#report-schema",
+    # check_dates and check_sentinel_timestamps are deliberately absent; see
+    # CHECKS_WITHOUT_A_REFERENCE below, which is where that decision is recorded so a test can
+    # hold it.
+}
+
+# The other half of the registry, and the reason it is a named constant rather than an absence.
+#
+# A check that is simply MISSING from CHECK_REFERENCES and a check somebody decided needs no
+# citation are indistinguishable from outside, and the first one is a bug. That is the same shape
+# as every incident in this file's history: the gap looks exactly like the deliberate choice, so
+# nobody finds it until a real run does. Listing the exemptions by name with their reason turns
+# "not in the dict" into a third state that tests/test_packaging.py can refuse -- a new check must
+# now name its reference or say out loud that it has none, and cannot quietly do neither.
+#
+# The bar for landing here is that NO reference section states the rule. Both of these decide on
+# arithmetic alone: an end date that precedes its start date, and a skeleton epoch nobody
+# replaced. Their messages already name the field and the contradiction, so a reference would add
+# a lookup and no information.
+CHECKS_WITHOUT_A_REFERENCE: dict[str, str] = {
+    "check_dates": "date arithmetic; no reference states it and the message names the two dates",
+    "check_sentinel_timestamps": "refuses the skeleton's own 1970 placeholder; nothing to read",
+}
+
+
+def _citation_for(check_name: str) -> str | None:
+    """The reference an author should open when `check_name` refuses their plan, or None.
+
+    None is a real answer, not a gap to be filled later: see rule 3 in the block above.
+    """
+    target = CHECK_REFERENCES.get(check_name)
+    return f" [see references/{target}]" if target else None
+
+
+# The marker a message already carries, so a nested check cannot be cited twice and so
+# check_verification's findings survive being merged into the same list.
+_CITED = " [see references/"
+
+
+def cites(check):
+    """Stamp every finding a check appends with the reference that states the rule it enforces.
+
+    Why a decorator rather than an edit at each of the 135 `errors.append(...)` sites. Both were
+    tried on paper. The per-site edit is 135 chances to paste the wrong anchor and it covers only
+    the sites that exist today -- a check gains a branch next release and that branch ships
+    uncited, which is exactly the drift this whole change is against. Stamping at the boundary
+    covers every site in the function including the ones nested inside it (`endpoints_of` and
+    `walk` are closures that append to the same list, and between them they produce most of what
+    this check reports on the real workspace) and it covers branches nobody has written yet.
+
+    Why not wrap the tuple entries in PLAN_CHECKS instead, which would have been a one-line
+    change: tests/test_plan_consistency.py asserts `CHECKER_MODULE.check_untyped_constraints in
+    CHECKER_MODULE.PLAN_CHECKS` -- an identity test, and a deliberate one, because a check absent
+    from that tuple is a check nothing runs. Wrapping at the tuple would put an object in
+    PLAN_CHECKS that is not the module attribute and fail that test. Decorating at the `def` keeps
+    the two the same object, because the name is rebound to the wrapper before PLAN_CHECKS is
+    built. `functools.wraps` is not decoration either: `__name__` is what audit_workspace.py and
+    the skeleton's worklist print, and what this decorator itself reads to find the citation.
+
+    Findings already carrying a citation are left alone, so a site that wants a narrower anchor
+    than its check's default can call cite() itself and win.
+
+    The wrapper takes `*args` rather than the `(plan, errors, notes)` the checks in PLAN_CHECKS
+    all share, because check_verification does not share it: its first argument is the verification
+    REPORT, and its callers pass the plan by keyword (`check_verification(report, errors, notes,
+    plan=plan, plan_path=...)`). A wrapper that named its first parameter `plan` would collide with
+    that keyword and raise "got multiple values for argument 'plan'" -- turning the one check that
+    reads the verification report into a crash, which is worse than the missing citation this
+    decorator exists to add. Every call site in this repo passes errors second and positionally,
+    which is what args[1] relies on; an errors list handed over by keyword would be a new calling
+    convention and is asserted against below rather than guessed at.
+    """
+    suffix = _citation_for(check.__name__)
+
+    @functools.wraps(check)
+    def cited(*args, **kwargs):
+        if suffix is None:
+            return check(*args, **kwargs)
+        if len(args) < 2 or not isinstance(args[1], list):
+            raise TypeError(
+                f"{check.__name__} was called without its errors list as the second positional "
+                f"argument, so its findings cannot be cited. Every caller in this repo passes "
+                f"(subject, errors, notes) positionally; if that changed, update cites().")
+        errors = args[1]
+        before = len(errors)
+        result = check(*args, **kwargs)
+        for index in range(before, len(errors)):
+            if _CITED not in errors[index]:
+                errors[index] += suffix
+        return result
+
+    return cited
+
+
+def cite(rule_id: str, message: str) -> str:
+    """Append a narrower citation than the emitting check's default.
+
+    Raises on an unknown rule_id rather than returning the message unchanged. A silent fallthrough
+    here would be the same class of bug this file exists to catch: the gate would keep passing its
+    own tests while quietly shipping the uncited message, and nobody would find out until an
+    author hit a dead end in a run nobody was watching. A KeyError fails on the first test that
+    reaches the site, which is before any traveller sees it.
+    """
+    if rule_id not in RULE_REFERENCES:
+        raise KeyError(
+            f"cite() called with unknown rule_id {rule_id!r}. Add it to RULE_REFERENCES with the "
+            f"reference section that states the rule, or drop the cite() call -- see rule 3 in "
+            f"the registry comment above: no citation beats a wrong one.")
+    return f"{message} [see references/{RULE_REFERENCES[rule_id]}]"
+
+
+# Narrower homes than the emitting check's default. Kept small on purpose: an entry here is a
+# claim that this one rule is written somewhere other than where the rest of its check's rules
+# are, and every entry has to be worth a reader's second lookup.
+RULE_REFERENCES: dict[str, str] = {
+    # check_map_endpoints' default sends the reader to the endpoint-writing rules, which is right
+    # for a free-text origin or a mismatched scope. The transit-waypoint refusal is a different
+    # fact about a different system -- Google computes waypoints for driving, walking and cycling
+    # and refuses them for transit -- and it is stated in the public-transport section.
+    "map.transit_waypoints": "booking-html-output.md#public-transport",
+    # A Google link shipped into a market where Google does not answer is a routing-policy
+    # question before it is a final-plan-contract one: the fix is to pick the market's provider,
+    # not to add an attribute to the page.
+    "market.unreachable_provider": "regional-service-routing.md#routing-policy",
+}
+
+
+@cites
 def check_routes(plan: dict, errors: list[str], notes: list[str]) -> None:
     for day in _seq(plan.get("days")):
         day = _obj(day)
@@ -426,6 +659,7 @@ def activity_on_foot_minutes(day: dict) -> int:
     return total
 
 
+@cites
 def check_implied_speed(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A leg's distance and its duration have to be survivable by the mode that connects them.
 
@@ -462,6 +696,7 @@ def check_implied_speed(plan: dict, errors: list[str], notes: list[str]) -> None
                     f"duration or the distance belongs to a different leg.")
 
 
+@cites
 def check_walking_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
     """The traveller's accessibility constraint is decided here, not in adjectives.
 
@@ -624,6 +859,7 @@ def check_walking_budget(plan: dict, errors: list[str], notes: list[str]) -> Non
 check_walking = check_walking_budget
 
 
+@cites
 def check_clock_closure(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A day's own numbers must fit in the day's own clock.
 
@@ -752,6 +988,7 @@ def check_clock_closure(plan: dict, errors: list[str], notes: list[str]) -> None
                 f"arithmetic for the traveller to discover in a station.")
 
 
+@cites
 def check_day_internals(plan: dict, errors: list[str], notes: list[str]) -> None:
     """Within-day coherence: a timeline that runs backwards, or a transfer count that does not
     match the route it summarises, is wrong on the page in a way no structure gate can see."""
@@ -809,6 +1046,7 @@ def check_day_internals(plan: dict, errors: list[str], notes: list[str]) -> None
                     f"fewer interchanges than the legs inside it.")
 
 
+@cites
 def check_cross_references(plan: dict, errors: list[str], notes: list[str]) -> None:
     """An id or day number pointing at nothing renders as a blank or a dropped card."""
     day_numbers = {_obj(d).get("number") for d in _seq(plan.get("days"))}
@@ -881,6 +1119,7 @@ def _english_weekday_claim(day: dict, date: dt.date, blob: str) -> str | None:
     return None
 
 
+@cites
 def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
     trip = _obj(plan.get("trip"))
     try:
@@ -939,6 +1178,7 @@ def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
             errors.append(problem)
 
 
+@cites
 def check_accommodation_coverage(plan: dict, errors: list[str], notes: list[str]) -> None:
     stays = {a.get("id"): a for a in _seq(_obj(plan.get("booking_options")).get("accommodations")) if isinstance(a, dict)}
     for day in [_obj(d) for d in _seq(plan.get("days"))]:
@@ -967,6 +1207,7 @@ def check_accommodation_coverage(plan: dict, errors: list[str], notes: list[str]
                 f"({check_out}), otherwise a night is being paid for twice.")
 
 
+@cites
 def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
     """Three failures that shipped once: a dinner 2.5 km off the day's route with no leg to
     reach it, meals scheduled at venues that had already closed, and -- once this check existed --
@@ -1082,6 +1323,7 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
                     f"the weekday prefix -- a closed door at 19:00 is a missed dinner, not a note.")
 
 
+@cites
 def check_meal_reachability(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A meal must be reachable, not merely well-placed on the map.
 
@@ -1172,6 +1414,7 @@ def check_meal_reachability(plan: dict, errors: list[str], notes: list[str]) -> 
                 f"say whether that leg is still ahead of them.")
 
 
+@cites
 def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
     budget = _obj(plan.get("budget"))
     rows = [r for r in _seq(budget.get("breakdown")) if isinstance(r, dict)]
@@ -1227,6 +1470,7 @@ def check_budget(plan: dict, errors: list[str], notes: list[str]) -> None:
             notes.append(f"budget high case {stated_high:g} exceeds cap {cap:g} (acknowledged).")
 
 
+@cites
 def check_replan_context(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A replanned trip carries a list of facts the change invalidated; none may still be open.
 
@@ -1676,6 +1920,7 @@ def _hours_coverage_errors(domains: list[dict], plan: object) -> list[str]:
     return errors
 
 
+@cites
 def check_verification(report: dict, errors: list[str], notes: list[str],
                        plan: dict | None = None, plan_path: str | None = None) -> None:
     """The report is written by the same run it vouches for, so treat it as an interested
@@ -1859,6 +2104,7 @@ def _property_key(name: str) -> str:
     return _fold(_BRACKETED.sub("", name or ""))
 
 
+@cites
 def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A comparison link that opens a city is not a link to the thing being compared.
 
@@ -2099,6 +2345,7 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                      "checked -- one such card shipped sold out:\n    - " + "\n    - ".join(unknown))
 
 
+@cites
 def check_venue_quality(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A recommendation with no quality signal is an assertion of taste, not a finding.
 
@@ -2307,6 +2554,7 @@ def _map_endpoints(url: str) -> list[tuple[str, str]]:
 MARKDOWN_IN_PROSE = re.compile(r"\*\*[^*\n]{1,80}\*\*|(?<![\w*])\*[^*\n]{1,60}\*(?![\w*])")
 
 
+@cites
 def check_prose_rendering(plan: dict, errors: list[str], notes: list[str]) -> None:
     """Prose fields are printed verbatim: what you type is what the traveller reads.
 
@@ -2342,6 +2590,7 @@ def check_prose_rendering(plan: dict, errors: list[str], notes: list[str]) -> No
             walk(plan[key], key)
 
 
+@cites
 def check_prose_agrees_with_data(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A minute figure written into prose must match the field it describes.
 
@@ -2398,6 +2647,7 @@ def check_prose_agrees_with_data(plan: dict, errors: list[str], notes: list[str]
                     f"had been corrected to 35. Quote the field or drop the figure.")
 
 
+@cites
 def check_list_typed_fields(plan: dict, errors: list[str], notes: list[str]) -> None:
     """Fields the contract declares as lists must not be given a bare string.
 
@@ -2433,6 +2683,7 @@ def check_list_typed_fields(plan: dict, errors: list[str], notes: list[str]) -> 
             errors.append(f"{path} must be a list, got {type(value).__name__}.")
 
 
+@cites
 def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A map URL parameter is a geocoder query, not a caption.
 
@@ -2634,12 +2885,13 @@ def check_map_endpoints(plan: dict, errors: list[str], notes: list[str]) -> None
             # way. A multi-stop transit day therefore cannot have a true full-day button at all;
             # the honest scope is primary_leg with the segment buttons as the navigation source,
             # which is what the skill already says when a provider can navigate only one leg.
-            errors.append(
+            errors.append(cite(
+                "map.transit_waypoints",
                 f"day {number}: the full-day button asks Google for a transit route with "
                 f"waypoints, and Google does not compute those -- it returns 'cannot "
                 f"calculate public transport directions' and no route. Drop the waypoints "
                 f"and set route_map_scope to 'primary_leg', so the label says route overview "
-                f"and the per-segment buttons carry the navigation.")
+                f"and the per-segment buttons carry the navigation."))
         if scope == "multi_stop" and len(stops) > 2:
             waypoint_count = 0
             for value in (query.get("waypoints") or []) + (query.get("via") or []):
@@ -2750,6 +3002,7 @@ def _provider_owns(provider: str, url: str) -> bool | None:
     return provider_target_verdict(provider, url)
 
 
+@cites
 def check_service_market(plan: dict, errors: list[str], notes: list[str]) -> None:
     """The links must work from where the traveller will be standing.
 
@@ -2843,11 +3096,12 @@ def check_service_market(plan: dict, errors: list[str], notes: list[str]) -> Non
 
     # 'unknown' is not a neutral value once you are asking the traveller to press the button.
     if access in ("", "unknown") and google_links:
-        errors.append(
+        errors.append(cite(
+            "market.unreachable_provider",
             f"the plan ships {len(google_links)} Google link(s) while google_services_access is "
             f"{access or 'unset'!r} -- nobody established that the traveller can open them at "
             f"{market_raw or 'the destination'}. Check once and record 'available' or "
-            f"'unavailable'; an unchecked link reads as researched to the traveller.")
+            f"'unavailable'; an unchecked link reads as researched to the traveller."))
 
     if not market_raw.strip():
         errors.append(
@@ -2860,6 +3114,7 @@ def check_service_market(plan: dict, errors: list[str], notes: list[str]) -> Non
 # here does nothing at all, which is the one failure mode worse than not writing it.
 # save_trip_deliverables.py imports this tuple, so adding a check here also arms the save path --
 # the only path that writes files a traveller keeps.
+@cites
 def check_prose_texture(plan: dict, errors: list[str], notes: list[str]) -> None:
     """The page must read like a person wrote it, not like a template filled itself in.
 
@@ -3035,6 +3290,7 @@ def _blank(value: object) -> bool:
     return False
 
 
+@cites
 def check_preference_coverage(plan: dict, errors: list[str], notes: list[str]) -> None:
     """Did the trip deliver what the traveller came for?
 
@@ -3174,6 +3430,7 @@ def gates_stamp() -> dict:
 EPOCH_SENTINEL = "1970-01-01"
 
 
+@cites
 def check_sentinel_timestamps(plan: dict, errors: list[str], notes: list[str]) -> None:
     """No date field may still hold the skeleton's epoch placeholder.
 
@@ -3389,6 +3646,7 @@ def read_untyped_constraints(constraints: object) -> tuple[str, list[str], list[
     return state, fields, unreadable
 
 
+@cites
 def check_untyped_constraints(plan: dict, errors: list[str], notes: list[str]) -> None:
     """Refuse a plan still carrying the skeleton's "nobody typed this" marker.
 
@@ -3546,6 +3804,7 @@ def _sale_clock_minutes(value: object) -> int | None:
     return _parse_hhmm(f"{parts[0]}:{parts[1]}") if len(parts) >= 2 else None
 
 
+@cites
 def check_ticket_sale_windows(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A ticket you cannot be at a screen to buy is not a ticket the traveller has.
 
@@ -3690,10 +3949,68 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("plan", help="Plan JSON path")
     parser.add_argument("--verification", default=None,
-                        help="Verification report JSON from the parallel-verify stage")
+                        help="Verification report JSON from the parallel-verify stage. Required "
+                             "unless --no-verification-yet is passed.")
+    parser.add_argument("--no-verification-yet", action="store_true",
+                        help="Run the plan checks without a verification report, when the "
+                             "parallel-verify stage has not run yet. Prints a banner and records "
+                             "the gap instead of leaving a silent exit 0.")
     parser.add_argument("--emit-walking", action="store_true",
                         help="Print computed per-day walking totals and exit 0")
     args = parser.parse_args()
+
+    # Same shape as check_shortlist_consistency.py's --intake/--no-intake pair and
+    # save_trip_deliverables.py's --verification/--unverified pair, and for the same reason.
+    # `--verification` used to default to None, so omitting it exited 0 having run only
+    # PLAN_CHECKS -- and check_verification is not in PLAN_CHECKS and has no other call site in
+    # this script, so the whole family it owns (required domains present, both audits present,
+    # every claims_checked pointer resolving, the report not stale and not bound to another plan)
+    # ran nowhere at all. SKILL.md named the bare form in both places it names this script, so the
+    # documented invocation WAS the disarmed one, and an exit 0 is what an assistant reads.
+    # Measured on plans/2027-02-12-阿利坎特...json: bare 13 findings, the same plan handed a
+    # report belonging to another trip 21 -- the 8 that only exist when the flag is supplied.
+    # Catching a mis-bound report here rather than at save time is worth a re-verification pass,
+    # which references/research-budget.md prices at ~300k (light) to ~700k (full).
+    # The escape hatch stays, because a gate people route around warns nobody, but it costs
+    # visibility rather than silence.
+    #
+    # --emit-walking is exempt on purpose: it dumps per-day walking totals and exits before any
+    # check runs, so there is no verification for it to skip. Requiring a report to print a data
+    # dump would be friction that teaches people to reach for the waiver by reflex, which is how
+    # an escape hatch stops meaning anything.
+    if not args.emit_walking:
+        # An empty string is its own case, and a common one: `--verification "$REPORT"` with the
+        # variable unset passes argparse and lands here falsy, i.e. indistinguishable from having
+        # asked for nothing. Saying "no --verification" to someone who wrote --verification sends
+        # them looking in the wrong place, so name what actually arrived.
+        if args.verification is not None and not str(args.verification).strip():
+            print(
+                "ERROR: --verification was given an empty path. That is what an unset shell "
+                "variable expands to, so the report you meant to pass is not the one that "
+                "arrived. Pass the report JSON, or pass --no-verification-yet deliberately.",
+                file=sys.stderr)
+            return 1
+        # Both flags at once is a contradiction, not a preference order. The shortlist's version
+        # silently lets --intake win; here it is refused, because the only way to write both is a
+        # caller that appends the waiver unconditionally, and that caller would go on "passing"
+        # forever with whatever report it also happened to hand over.
+        if args.verification and args.no_verification_yet:
+            print(
+                "ERROR: --verification and --no-verification-yet are mutually exclusive. One says "
+                "the report exists and the other says it does not. Pass whichever is true.",
+                file=sys.stderr)
+            return 1
+        if not args.verification and not args.no_verification_yet:
+            print(
+                "ERROR: No --verification. Pass the verification report JSON produced by the "
+                "parallel-verify stage in references/verification.md, or pass "
+                "--no-verification-yet to run the plan checks without it and record the gap. "
+                "Without it the checks that read the report do not run at all: a report missing "
+                "a required domain, an audit, or a resolvable pointer -- or one written for a "
+                "different plan entirely -- reports clean on exactly the run that motivated "
+                "them.",
+                file=sys.stderr)
+            return 1
 
     try:
         plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
@@ -3726,7 +4043,38 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: could not read verification report: {exc}", file=sys.stderr)
             return 2
+        # The plan gets this guard two screens up and the report did not, which mattered because
+        # check_verification opens with `_obj(report)`: a report that is a bare list -- a hand-
+        # assembled file holding just the domains array, which is the shape people write -- became
+        # {} without a word, and every one of its real blocks was then reported as a MISSING
+        # domain. Eight findings that all name the wrong problem, on a report whose contents were
+        # fine. Name the shape instead; the domains are not missing, the object around them is.
+        if not isinstance(report, dict):
+            print(f"ERROR: verification report JSON must be an object, got "
+                  f"{type(report).__name__}. A bare list of domain blocks is not a report -- wrap "
+                  f"it as {{\"checked_at\": ..., \"plan\": ..., \"domains\": [...], "
+                  f"\"audits\": [...]}}; see templates/verification-report.json.", file=sys.stderr)
+            return 2
         check_verification(report, errors, notes, plan=plan, plan_path=args.plan)
+    elif args.no_verification_yet:
+        # Printed here, before the notes and before any finding, and printed to stderr as well as
+        # carried in notes. Those are two different readers: the note loop below writes to stdout
+        # and is where an operator scanning the summary looks, while a caller that keeps only
+        # stderr -- which is where this script puts everything that means "not OK" -- would
+        # otherwise see a bare "PLAN CONSISTENCY OK". The whole defect being fixed here is that a
+        # clean exit 0 reads as "verified", so the waiver has to be unmissable on both streams.
+        print("=" * 78, file=sys.stderr)
+        print("NOT VERIFIED: --no-verification-yet was passed. No verification report was read.",
+              file=sys.stderr)
+        print("=" * 78, file=sys.stderr)
+        notes.append(
+            "NO VERIFICATION REPORT: the report checks did not run. This plan has NOT been "
+            "tested for required-domain coverage, both audits, resolvable claims_checked "
+            "pointers, or a report bound to this plan and not another -- and nothing here has "
+            "checked a fare, an opening time or an entry rule against the world. A clean exit "
+            "below means the plan agrees with itself, not that it is true. Say so when you "
+            "present it, and do not call it verified. Pass --verification <report.json> to arm "
+            "the check.")
 
     for note in notes:
         print(f"note: {note}")

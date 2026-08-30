@@ -2,6 +2,7 @@
 
 Use this reference when candidates exist. Perform hard filters before preference scoring and research all final candidates to a comparable level.
 
+<a id="evidence-policy"></a>
 ## Evidence policy
 
 Treat the following as volatile: fares, routes, lodging prices, weather forecasts and seasonal anomalies, entry rules, health/safety advisories, opening dates/hours, local transport, exchange rates, and event schedules. Verify with live sources, prefer first-party/official sources for entry and safety, and record access date plus travel date range.
@@ -56,6 +57,7 @@ Read the recent negative reviews of anything you would put a whole week or a far
 an average hides what people were unhappy about, and "a twenty-minute walk from the nearest stop"
 disqualifies a traveller with a walking limit while "slow service" does not.
 
+<a id="evaluation-sequence"></a>
 ## Evaluation sequence
 
 1. Apply any consented profile’s explicit `never_recommend` place exclusions before candidate generation; do not treat past visits as exclusions unless the user said not to revisit.
@@ -84,6 +86,7 @@ Allocate weights only across active preferences. A practical starting distributi
 
 Normalize each soft dimension to 0–100 only after applying the hard gate. State the highest-impact unknowns; low-evidence candidates should be labeled uncertain instead of assigned false precision. An empty feasible set is an outcome, not a scoring error.
 
+<a id="candidate-output-contract"></a>
 ## Candidate output contract
 
 For each finalist, provide:

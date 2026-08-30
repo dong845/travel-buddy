@@ -2,6 +2,7 @@
 
 Read this reference when a destination is selected and the user wants a final itinerary, maps, hotels, tickets, transport, or purchase links.
 
+<a id="mandatory-final-delivery"></a>
 ## Mandatory final delivery
 
 Treat the final HTML as the completion artifact, not an optional attachment. Once the destination and all preconditions below are decision-ready, create the complete plan JSON, then run:
@@ -12,6 +13,7 @@ python scripts/save_trip_deliverables.py <plan.json> --workspace "<user Travel B
 
 The script validates both the source plan and rendered HTML before saving the paired files. A completed Construction task must report both printed paths (`Plan JSON:` and `Final HTML:`). If a destination, exact travel dates, party, budget basis, entry feasibility, or transport mode is not ready, call the result **intermediate discovery** and ask only for the highest-impact missing decision; do not invent a final HTML or call the trip complete.
 
+<a id="truth-labels"></a>
 ## Preconditions and truth labels
 
 Create a booking-ready page only when dates, nights, departure point, traveler count, destination, budget scope, entry feasibility, and ground-transport preference are confirmed. If one is unknown, ask the smallest number of high-impact questions first.
@@ -20,6 +22,7 @@ Use `researched` as the default plan state. Use `held` or `booked` only when the
 
 Before showing any booking option, record a non-sensitive booking-access check in `regional_service_context.booking_access_checks`. It must state the category, selected direct/platform channel, `available`/`limited`/`unknown` status, known user-side requirement, source URL, and access time. A visible public result does not prove that the traveller can complete a booking; never attempt a login, checkout, payment, account creation, local-phone verification, or identity verification to find out.
 
+<a id="source-hierarchy"></a>
 ## Source hierarchy
 
 Use the highest appropriate source for the claim:
@@ -36,6 +39,7 @@ Use the highest appropriate source for the claim:
 
 Record source URL, access date, source type, and what decision it supports. Verify an outbound link resolves to the stated provider over HTTPS; omit links that redirect to an unrelated domain, hide material pricing, or cannot be checked.
 
+<a id="platform-selection-and-comparison"></a>
 ### Platform selection and comparison
 
 Do not prescribe one booking app or marketplace. Select one or two appropriate public platforms based on the route, destination coverage, user language/currency, local availability, price transparency, cancellation display, and legal/operational suitability. When possible, include the direct airline, hotel, or property as a cross-check rather than treating a marketplace as automatically authoritative.
@@ -47,6 +51,7 @@ Compare identical inputs before drawing a conclusion:
 
 Record the comparison platform, fulfilment/booking provider, access time, and material difference in the plan/source register. A platform result is a current shopping lead, not a reservation or a guarantee. Prefer a provider search or result URL over a cart, login, checkout, or payment URL. If a platform is unavailable, use another suitable source or disclose the gap; do not fabricate a comparison.
 
+<a id="booking-links"></a>
 ## Booking links: browse, compare, never transact
 
 For every option included in the page, show provider, option name, price/range and currency, whether the price is `researched_current`, an `estimate`, or `user_confirmed`, material conditions, access date, source type, and an outbound **Review option** link. Links must use `target="_blank" rel="noopener noreferrer"`; never include affiliate, referral, tracking, session, cart, checkout, or payment URLs.
@@ -59,6 +64,7 @@ For every option included in the page, show provider, option name, price/range a
 
 Do not invent a deep-link pattern. Use a provider URL returned by live research, or label a generic provider search link as a starting point rather than a verified quote. When a provider's site blocks automated access so you cannot confirm a deeper path resolves, link its documented entry point and say on the card that it is a channel entry rather than a dated quote — a hand-built path you could not load is a 404 waiting to happen in front of the traveller.
 
+<a id="button-provider-identity"></a>
 ### The provider a button names is the provider its URL opens
 
 The renderer builds a button's visible label **and** its `data-*-provider` attribute from the same plan field, so these pairs must describe one destination:
@@ -172,6 +178,7 @@ the first hypothesis is your own user agent.
 
 This is written down because nine buttons once shipped violating it — "Review option in KLM" opening Google Flights, "View restaurant in Google Maps" opening a food blog — with every gate green. HTTPS-ness, uniqueness, tracker-freeness, and attribute presence say nothing about *where* a link goes. `validate_trip_html.py` now fails the page on a mismatch, and emits a `note:` for any provider name it cannot match a host against (a name in a non-Latin script with no alias). Those notes are the residue the gate could not decide; read them rather than assuming a clean exit covered them.
 
+<a id="ticket-constraints"></a>
 ### Local booking and ticket constraints
 
 Do not assume that a marketplace works the same way across countries. For each category, research and state only non-sensitive facts that affect feasibility: channel language/currency, normal availability to the traveller, local-phone or resident-ID requirement, payment/deposit limitation, foreign-driver eligibility, ticket release/queue/wait-list condition, and whether an official operator page is the only dependable source. Use `limited` when a concrete restriction is known, `unknown` when it was not verified, and `available` only for the researched browse path—not as a promise that payment will succeed.
@@ -182,6 +189,7 @@ For rail, ferry, intercity bus, and transit passes, use an official operator for
 
 Before selecting a provider, read [regional-service-routing.md](regional-service-routing.md). Record the destination service market, normal traveller access, provider selection basis, primary provider, and checked alternatives in `regional_service_context`. Do not assume Google Maps, Booking.com, or any other global service is appropriate in every country. For mainland-China routes, a verified Amap/高德 primary route link is the default; Google Maps is not an acceptable sole or default route link. Use the local transit/rail/road authority to support fares, schedules, and restrictions.
 
+<a id="map-endpoints"></a>
 ### Write the endpoint, not the caption
 
 Every endpoint in a route URL is a **coordinate pair**, and free text is refused by
@@ -236,6 +244,7 @@ Two provider limits are worth knowing before you build a button rather than afte
   button asked Google to walk 25 km from the seafront to the airport — and Google answers that, with
   a five-hour route the traveller was never going to take.
 
+<a id="day-route-burden"></a>
 Build a route in chronological, geographically coherent order. Keep the day’s actual travel burden visible: start/end, one researched primary transport mode, route logic, distance or stop count, transfers, walking, duration, fare/range and fare source, service caveat, and a fallback for closures or bad weather. Never use a choice-list such as “metro/bus/taxi (choose one)” as the route: choose the primary recommendation and state alternatives only in the fallback.
 
 The final HTML must contain both:
@@ -249,14 +258,17 @@ For mainland China, use the documented Amap directions URI returned by research:
 
 Do not require an API key or load a third-party map iframe by default. A static visual and a user-opened map link are privacy-preserving and work offline. Include an interactive embed only when the map provider permits it, the route is verified, and it does not require exposing a secret key or user session.
 
+<a id="public-transport"></a>
 ### Public transport
 
 Use a live transit/map source for routes. Name the operator where known, each important transfer, walking burden, service-hour/last-service caveat, and fare source. Separate a confirmed fare from a range or unknown fare. Do not present road driving time as a transit estimate.
 
+<a id="self-drive"></a>
 ### Self-drive
 
 Show the daily route and an overall route summary with segments, total driving distance/time, toll/fuel/parking assumptions, rest stops, and any known restrictions. Add rental links only in this branch. If driving conditions are weather- or season-sensitive, state the verification required just before departure.
 
+<a id="destination-coverage-and-food"></a>
 ## Destination coverage and food
 
 Do not reduce a city trip to one headline attraction per day. For a city stay of three or more days, research at least three destination-specific experience anchors across two or more days—such as an important historic district, a local urban landscape, a cultural institution, a market/food area, or a nature counterpoint—then choose only those that match the user’s preferences and crowd/pace limits. The final page must make these anchors visible with their areas, planned days, sources, and reasons; never add famous sights just to meet a count.
@@ -273,10 +285,12 @@ Never automatically run OpenCLI commands that log in, bind an existing browser t
 
 Public social signals can help identify recurring crowd, scam, closure, or accessibility reports. Require multiple recent, independent posts and preserve the uncertainty; never use them alone for entry rules, safety, prices, ticket legitimacy, transport timetables, or booking decisions.
 
+<a id="html-contract"></a>
 ## HTML contract
 
 Generate one self-contained file: semantic HTML, inline CSS, minimal inline JavaScript only for local expand/collapse behavior, no trackers, no third-party scripts, no secret keys, and no embedded credentials. Use the user’s requested language and currency. The safe renderer has complete built-in UI copy for Chinese and English. For another interface language, provide a complete `ui_labels` object in the plan covering every renderer-owned label; copy [templates/renderer-ui-labels.example.json](../templates/renderer-ui-labels.example.json) and translate every value. The renderer rejects partial mappings so that buttons and headings cannot silently fall back to English. Make it responsive, printable, and accessible: one `h1`, ordered headings, keyboard-visible links, sufficient contrast, descriptive labels, and `aria-label` where link text is ambiguous.
 
+<a id="closed-enums"></a>
 ### Closed enums, because an enum that leaks cannot be translated
 
 `validate_trip_html.py` fails any page whose `<html lang>` is not English while renderer-owned English survives in it. That check covers machine values printed as visible text, so these fields are enums rather than free strings:
@@ -318,6 +332,7 @@ together. `check_plan_consistency.py` now refuses both.
 For the same reason the map button names the leg it opens. It used to read "transport overview"
 and open the airport transfer; a button may be a route overview, but it has to say which route.
 
+<a id="list-typed-fields"></a>
 ### A field the contract calls a list is a list, even when it holds one thing
 
 `transport_overview.notes`, `assumptions`, `recheck_before_purchase`, the budget category lists and
@@ -334,6 +349,7 @@ write it exactly the same way.
 
 While you are there: these fields are **plain text, not Markdown**. `**bold**` prints its asterisks.
 
+<a id="render-what-the-plan-collects"></a>
 ### Render what the plan collects
 
 A field that is required, researched, and never displayed is work the traveller paid for and cannot see. The page must show:

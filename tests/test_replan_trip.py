@@ -125,10 +125,19 @@ def names(shifted: dict | None, needle: str) -> list[dict]:
 
 
 def check_plan(plan: dict) -> tuple[int, str]:
+    # --no-verification-yet, and not because the flag is decoration: check_plan_consistency.py now
+    # refuses a bare invocation, since `--verification` defaulting to None meant the report checks
+    # were reachable only from an undocumented invocation and ran nowhere on the documented one.
+    # Every case in this file is about what replan_trip.py did to the plan JSON, never about a
+    # verification report -- a shifted plan has none by definition, because replan_trip.py clears
+    # verification_status precisely so a plan whose dates moved cannot claim it was verified on
+    # them. So the waiver is the honest argv here. Without it every case below would exit 1 on the
+    # missing flag and the assertions on WHY the plan failed would pass or fail for the wrong
+    # reason.
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "plan.json"
         path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
-        proc = subprocess.run([sys.executable, str(CHECKER), str(path)],
+        proc = subprocess.run([sys.executable, str(CHECKER), str(path), "--no-verification-yet"],
                               capture_output=True, text=True)
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -252,6 +261,42 @@ def main() -> int:
         fail("verification cleared",
              "verification_status is still 'verified' after the dates moved. Clear it, or set it "
              "to 'unverified' so the page renders the not-fact-checked banner.")
+
+    # 3b. The same argument one field over, and it was missed when 3 was written because this one
+    # is not about facts in the world -- it is about checks that ran. `gates_passed` records that
+    # the deterministic gates passed, and save_trip_deliverables.py renders it as a visible
+    # "Structure checks passed: N" line. Those gates ran on the OLD dates, against the old
+    # day-to-weekday mapping, the old accommodation windows and the old ticket day links. Carried
+    # forward it produced the worst shape this script can emit: a shifted plan that
+    # check_plan_consistency.py REFUSES, rendering a page that tells the traveller two dozen
+    # structure checks passed on it. Clearing verification_status did not cover for it -- they are
+    # separate claims and the page prints both.
+    stamped = multi_day(base, 2)
+    stamped["gates_passed"] = {"checks": 24, "checked_by": "check_plan_consistency.PLAN_CHECKS"}
+    code, out, shifted = run_replan(stamped, "--shift-days", "1")
+    if code != 0 or shifted is None:
+        fail("gate stamp cleared", f"expected a written plan and exit 0, got exit {code}\n{out}")
+    elif shifted.get("gates_passed"):
+        fail("gate stamp cleared",
+             f"gates_passed survived the shift as {shifted.get('gates_passed')!r}. The gates it "
+             f"records ran on the old calendar, and the page prints it as 'Structure checks "
+             f"passed' to the traveller.")
+
+    # 3c. The NEXT block this script prints is a runnable script, not prose, and step 2 stopped
+    # being runnable when check_plan_consistency.py made --verification mandatory: a bare call now
+    # exits 1 out of argparse having run ZERO checks. Both the old refusal and the new one exit 1,
+    # so a caller reading only the exit code could not tell "the gate refused your plan" from "the
+    # gate never ran". Pinned by running what it prints.
+    code, out, shifted = run_replan(multi_day(base, 2), "--shift-days", "1")
+    printed = [line for line in out.splitlines() if "check_plan_consistency.py" in line]
+    if not printed:
+        fail("NEXT names the consistency gate", f"no step naming it in:\n{out}")
+    else:
+        step = printed[0]
+        if "--no-verification-yet" not in step and "--verification" not in step:
+            fail("NEXT step 2 is runnable",
+                 f"the printed command is the bare form, which now exits 1 out of argparse "
+                 f"without running a single check: {step.strip()}")
 
     # 4. Prose is never rewritten. This sentence is false the moment the dates move, and the
     # tempting fix -- swap "Monday" for the new weekday -- would turn a sentence a reader can

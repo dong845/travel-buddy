@@ -76,12 +76,17 @@ def cli_contract_cases(base: dict) -> list[str]:
 
     Kept deliberately small: these are about argv, file IO and exit codes, not about any individual
     rule, so one clean case and one failing case cover the contract that in-process running cannot.
+
+    Every invocation here that is not itself testing the verification gate now carries
+    `--no-verification-yet`, because the flag pair below made the bare form a refusal. That is not
+    boilerplate to copy without thinking: the waiver is what these cases mean, since each one is
+    about argv and file IO rather than about a report.
     """
     failures: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         good = Path(tmp) / "plan.json"
         good.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
-        proc = subprocess.run([sys.executable, str(CHECKER), str(good)],
+        proc = subprocess.run([sys.executable, str(CHECKER), str(good), "--no-verification-yet"],
                               capture_output=True, text=True)
         if proc.returncode != 0 or "PLAN CONSISTENCY OK" not in proc.stdout:
             failures.append(f"cli: a clean plan must exit 0 with OK on stdout, got {proc.returncode}")
@@ -90,15 +95,19 @@ def cli_contract_cases(base: dict) -> list[str]:
         broken["days"][0]["route"]["duration_minutes"] = 999
         bad = Path(tmp) / "bad.json"
         bad.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
-        proc = subprocess.run([sys.executable, str(CHECKER), str(bad)],
+        proc = subprocess.run([sys.executable, str(CHECKER), str(bad), "--no-verification-yet"],
                               capture_output=True, text=True)
         if proc.returncode != 1 or "PLAN CONSISTENCY FAILED" not in proc.stderr:
             failures.append("cli: a defective plan must exit 1 with the failure banner on stderr")
         if "- day" not in proc.stderr:
             failures.append("cli: individual errors must be dashed lines on stderr")
 
-        missing = subprocess.run([sys.executable, str(CHECKER), str(Path(tmp) / "nope.json")],
-                                 capture_output=True, text=True)
+        # The waiver matters here for a reason worth stating: the verification gate runs BEFORE the
+        # plan is read from disk, so a bare invocation of this case would exit 1 on the missing
+        # flag and never reach the file-read guard it exists to test. It would still be "failing",
+        # so the case would look alive while asserting nothing about unreadable plans.
+        missing = subprocess.run([sys.executable, str(CHECKER), str(Path(tmp) / "nope.json"),
+                                  "--no-verification-yet"], capture_output=True, text=True)
         if missing.returncode != 2 or "ERROR" not in missing.stderr:
             failures.append("cli: an unreadable plan must exit 2 with an ERROR line, not a traceback")
         if "Traceback" in missing.stderr:
@@ -113,6 +122,132 @@ def cli_contract_cases(base: dict) -> list[str]:
         # The report names "plan.json"; the file on disk is also plan.json, so the binding holds.
         if proc.returncode != 0:
             failures.append(f"cli: --verification with a matching report must pass, got {proc.stderr[:200]}")
+
+        failures.extend(verification_flag_cases(base, report, tmp))
+    return failures
+
+
+def verification_flag_cases(base: dict, report: dict, tmp: str) -> list[str]:
+    """--verification is required, or waived out loud. Neither is not an option.
+
+    The defect these cover shipped and was invisible: `--verification` defaulted to None, and
+    check_verification -- which is the only reader of the report, is absent from PLAN_CHECKS, and
+    has no other call site in the script -- was reachable only when the flag was passed. SKILL.md
+    named the bare form in both places it names this script, so the documented invocation was the
+    disarmed one and every report check silently did not run.
+
+    Measured on a real workspace plan (plans/2027-02-12-阿利坎特...json) while writing this:
+    bare printed 13 findings, and the same plan handed a verification report belonging to another
+    trip printed 21. Those 8 include "report is dated 2026-08-04, before the plan's generated_at
+    2026-08-09" and "report says it verified 'tokyo-plan.json'" -- a mis-bound report caught at
+    build time instead of at save time, which references/research-budget.md prices at a
+    re-verification pass, ~300k light to ~700k full.
+
+    A CLI test rather than an in-process one, deliberately: all four behaviours below are argv and
+    exit codes, and the in-process `run()` helper cannot see argparse at all. That is exactly how
+    the defect survived -- every rule had a test, and nothing tested whether the rule was wired to
+    a flag anyone passes.
+    """
+    failures: list[str] = []
+    good = Path(tmp) / "plan.json"
+
+    # 1. Bare: refused. The point of the change. An exit 0 is what an assistant reads, so the
+    #    absence of a report has to cost an exit code rather than a note nobody scrolls to.
+    proc = subprocess.run([sys.executable, str(CHECKER), str(good)],
+                          capture_output=True, text=True)
+    if proc.returncode == 0:
+        failures.append("verification-flag: a bare invocation must be refused, not exit 0 -- that "
+                        "silent success is the entire defect")
+    if "--no-verification-yet" not in proc.stderr:
+        failures.append("verification-flag: the refusal must name the escape hatch, or the reader "
+                        "cannot proceed and will delete the gate instead")
+    if "PLAN CONSISTENCY OK" in proc.stdout:
+        failures.append("verification-flag: a refused run must not print the OK banner")
+
+    # 2. Waived: runs, and says so on BOTH streams. A caller keeping only stderr would otherwise
+    #    read a bare success; a caller keeping only stdout would miss the banner.
+    proc = subprocess.run([sys.executable, str(CHECKER), str(good), "--no-verification-yet"],
+                          capture_output=True, text=True)
+    if proc.returncode != 0 or "PLAN CONSISTENCY OK" not in proc.stdout:
+        failures.append(f"verification-flag: --no-verification-yet must run the plan checks and "
+                        f"pass a clean plan, got exit {proc.returncode}: {proc.stderr[:200]}")
+    if "NOT VERIFIED" not in proc.stderr:
+        failures.append("verification-flag: --no-verification-yet must print the banner on stderr")
+    if "NO VERIFICATION REPORT" not in proc.stdout:
+        failures.append("verification-flag: --no-verification-yet must record the gap as a note on "
+                        "stdout, beside the other notes an operator scans")
+
+    # 3. A good report still passes, and passing is not the same as being ignored: the mis-bound
+    #    case below is what proves this one ran rather than merely not-crashing.
+    rp = Path(tmp) / "verification.json"
+    rp.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(CHECKER), str(good), "--verification", str(rp)],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        failures.append(f"verification-flag: a matching report must pass, got {proc.stderr[:300]}")
+    if "NOT VERIFIED" in proc.stderr:
+        failures.append("verification-flag: a verified run must not print the waiver banner")
+
+    # 4. Mis-bound: a report for another plan must be named as such. This is the case that was
+    #    unreachable on the documented path, and the one that repays the flag.
+    misbound = copy.deepcopy(report)
+    misbound["plan"] = "some-other-trip.json"
+    mp = Path(tmp) / "misbound.json"
+    mp.write_text(json.dumps(misbound, ensure_ascii=False), encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(CHECKER), str(good), "--verification", str(mp)],
+                          capture_output=True, text=True)
+    if proc.returncode != 1:
+        failures.append(f"verification-flag: a report naming a different plan must fail, got exit "
+                        f"{proc.returncode}")
+    if "some-other-trip.json" not in proc.stderr:
+        failures.append("verification-flag: the mis-binding error must quote the plan the report "
+                        "claims, so the reader can tell which of the two files is wrong")
+
+    # 5. Both flags at once is a contradiction. Refused rather than resolved by precedence,
+    #    because the only way to write both is a caller appending the waiver unconditionally --
+    #    which would then "pass" forever with whatever report it also handed over.
+    proc = subprocess.run([sys.executable, str(CHECKER), str(good), "--verification", str(rp),
+                           "--no-verification-yet"], capture_output=True, text=True)
+    if proc.returncode == 0:
+        failures.append("verification-flag: --verification with --no-verification-yet must be "
+                        "refused, not silently resolved in favour of either one")
+
+    # 6. An empty --verification is the unset-shell-variable case (`--verification "$REPORT"`).
+    #    It reaches argparse as a falsy value, i.e. indistinguishable from passing nothing, which
+    #    is precisely the silent skip this whole change exists to close.
+    proc = subprocess.run([sys.executable, str(CHECKER), str(good), "--verification", ""],
+                          capture_output=True, text=True)
+    if proc.returncode == 0:
+        failures.append("verification-flag: an empty --verification path must be refused; it is "
+                        "what an unset shell variable expands to")
+    if "empty path" not in proc.stderr:
+        failures.append("verification-flag: an empty --verification must say the path was empty, "
+                        "not that no flag was given -- the reader did write the flag")
+
+    # 7. A report that is a bare list of domain blocks. check_verification opens with _obj(report),
+    #    so a list became {} and every real block was then reported as a MISSING domain: findings
+    #    that all name the wrong problem on a report whose contents were fine.
+    lp = Path(tmp) / "list-report.json"
+    lp.write_text(json.dumps(report.get("domains") or [], ensure_ascii=False), encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(CHECKER), str(good), "--verification", str(lp)],
+                          capture_output=True, text=True)
+    if proc.returncode != 2 or "must be an object" not in proc.stderr:
+        failures.append(f"verification-flag: a report that is a bare list must exit 2 naming the "
+                        f"shape, got exit {proc.returncode}: {proc.stderr[:200]}")
+    if "missing required domains" in proc.stderr:
+        failures.append("verification-flag: a bare-list report must not be reported as missing the "
+                        "domains it actually contains")
+
+    # 8. --emit-walking stays exempt. It exits before any check runs, so there is no verification
+    #    for it to skip, and making a data dump demand a report teaches the reflex of reaching for
+    #    the waiver -- which is how an escape hatch stops meaning anything.
+    proc = subprocess.run([sys.executable, str(CHECKER), str(good), "--emit-walking"],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        failures.append(f"verification-flag: --emit-walking must not require a report, got exit "
+                        f"{proc.returncode}: {proc.stderr[:200]}")
+    if "day 1" not in proc.stdout:
+        failures.append("verification-flag: --emit-walking must still print per-day walking totals")
     return failures
 
 
@@ -244,6 +379,38 @@ def full_verification() -> dict:
     }
 
 
+def draft_render_flags(plan: dict) -> list[str]:
+    """The validator flags for a page produced by render() alone, derived from the plan.
+
+    Both callers below used to invoke `validate_trip_html.py <page>` bare, which ran none of the
+    four conditional checks: the day count, the required booking-link types, the car-link rule and
+    the traveller-facing "not fact-checked" banner were all off, and the script still exited 0. So
+    a case whose whole point was "this page survives the delivery gate" was measuring a gate with
+    most of it switched off.
+
+    Derived rather than typed, so a fixture that gains a day or a ticket category stays covered
+    without anybody editing a constant here -- a hand-typed 1 would keep passing on a 2-day plan.
+
+    NOT `--plan`, deliberately: that additionally requires the gate stamp, and these pages come
+    from render() with no save_trip_deliverables.py run behind them. They are legitimate draft
+    renders and must keep validating as such; asserting the stamp here would assert something
+    about a script that never ran.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from plan_flags import derive_html_flags  # noqa: PLC0415 - import after path setup
+
+    flags = derive_html_flags(plan, plan_label="test fixture")
+    args = ["--expected-days", str(flags.expected_days),
+            "--transport-mode", flags.transport_mode]
+    for booking_type in sorted(flags.required_booking_types):
+        args += ["--require-booking-type", booking_type]
+    if not flags.required_booking_types:
+        args.append("--no-booking-types")
+    args.append("--require-unverified-banner" if flags.require_unverified_banner
+                else "--assert-verified-without-plan")
+    return args
+
+
 def fixture_passes_the_delivery_gate_cases(base: dict) -> list[str]:
     """The known-good fixture must survive the gate a real page is judged by.
 
@@ -256,13 +423,26 @@ def fixture_passes_the_delivery_gate_cases(base: dict) -> list[str]:
     """
     sys.path.insert(0, str(ROOT / "scripts"))
     from render_final_trip_html import render  # noqa: PLC0415 - import after path setup
+    from plan_flags import derive_html_flags  # noqa: PLC0415 - import after path setup
 
     failures: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         page = Path(tmp) / "fixture.html"
         page.write_text(render(copy.deepcopy(base)), encoding="utf-8")
+        # This used to invoke the validator bare, which silently ran none of the four conditional
+        # checks -- so "the known-good fixture survives the delivery gate" was measured with the
+        # day count, the booking-type requirement, the car-link rule and the unverified-banner
+        # check all switched off. The flags are derived from the fixture rather than typed, so a
+        # fixture that gains a day or a ticket category stays covered without anyone editing a
+        # constant here.
+        #
+        # Passed as explicit flags rather than as `--plan`, and the difference is the point:
+        # `--plan` additionally requires the gate stamp, and this page was produced by render()
+        # alone. That is a legitimate draft render, not a delivery, and it must keep validating
+        # as one -- asserting the stamp here would test save_trip_deliverables.py, which never ran.
         proc = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "validate_trip_html.py"), str(page)],
+            [sys.executable, str(ROOT / "scripts" / "validate_trip_html.py"),
+             str(page), *draft_render_flags(base)],
             capture_output=True, text=True)
         if proc.returncode != 0:
             reported = [line for line in (proc.stdout + proc.stderr).splitlines()
@@ -316,7 +496,8 @@ def optional_label_cases(base: dict) -> list[str]:
         except Exception:  # noqa: BLE001 - the TODO-laden template block may not validate; skip
             return failures
         proc = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "validate_trip_html.py"), str(page)],
+            [sys.executable, str(ROOT / "scripts" / "validate_trip_html.py"),
+             str(page), *draft_render_flags(plan)],
             capture_output=True, text=True)
         if "Rail, coach and ferry options" not in (proc.stdout + proc.stderr):
             failures.append("labels: an untranslated ground heading was not caught by the i18n gate")

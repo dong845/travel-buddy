@@ -108,10 +108,15 @@ def main() -> int:
                 failures.append(f"{label}: skeleton did not render first try\n{render.stdout}")
                 continue
 
-            days = len(json.loads(plan.read_text(encoding="utf-8"))["days"])
+            # `--plan` rather than a hand-counted `--expected-days`, since the plan is right
+            # there on disk. It used to read the day count out of the JSON and type it back in as
+            # a flag, which is the same two-copies-of-one-fact shape that scripts/plan_flags.py
+            # exists to remove -- and the other three settings that flag left unset were the ones
+            # that defaulted to off. This also means the skeleton is now checked by the same
+            # invocation a real delivery uses.
             validate = subprocess.run(
                 [sys.executable, str(SCRIPTS / "validate_trip_html.py"), str(html),
-                 "--expected-days", str(days)],
+                 "--plan", str(plan)],
                 capture_output=True, text=True)
             output = validate.stdout + validate.stderr
             if validate.returncode == 0:

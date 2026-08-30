@@ -118,7 +118,7 @@ start_intake_workflow.py
                     ↓
         Discovery → 候选短名单        Construction → new_plan_skeleton.py → plan JSON
                                               ↓
-                          五域并行核验              （references/verification.md）
+              并行核验：5 个真实性域 + 2 个审计员   （references/verification.md）
                                               ↓
                                 check_plan_consistency.py   （方案与自身是否自洽）
                                               ↓
@@ -139,6 +139,8 @@ start_intake_workflow.py
 **`render_final_trip_html.py`** 拒绝渲染结构不全的方案：`route.segments` 数量必须精确等于 `len(stops_in_order) - 1`、每段只能有**一个主要方式**（「地铁/公交/打车」这种选择清单判为含糊）、每个整天都要有午餐**和**晚餐，以及十来条其他规则。
 
 **`validate_trip_html.py`** 检查渲染后的页面。它最锋利的一条规则是：**只要页面 `<html lang>` 不是英文，页面里残留任何渲染器自带的英文就判失败。** 这正是 `plan_status`、预算类别、餐次、交通方式、过敏严重程度、`sources[].confidence` 都被定义成封闭枚举的原因 —— 任意类别字符串无法翻译，就会以英文泄漏到中文页面上。2.2 起这条规则不再依赖一份「已知英文字符串」的手写清单：闸门直接读取渲染器自己的替换表与枚举常量，所以新增的值无需任何人记得去补清单就会被检查。清单本身就是缺陷——`sources[].confidence` 在作者工作区里**十一个**非英文页面上把 `high`、`medium` 当正文打了出来（其中九个是带日期的已交付行程，另两个是渲染预览）；泄漏出某个英文原值的共十三个页面，而工作区里唯一那份盖过闸门章的方案也在其中 —— 两道闸门却都报 VALID。它同时强制：地图按钮必须是真正的导航 URL、大陆路线必须用高德、预订与来源行必须带上可机器校验的属性。2.0 起还会拒绝任何「按钮上写的提供方 ≠ 链接实际打开的域名」的页面：曾有九个按钮写着 *在 KLM 查看选项* 却打开 Google Flights、写着 *在 Google Maps 查看餐厅* 却打开美食博客，而当时所有闸门全绿 —— HTTPS 与唯一性都说明不了链接会去哪里。 2.1 起还会拒绝任何一张不打印评分的餐饮卡：评分只存在 JSON 里、从不渲染到页面上，与压根没去查是同一种缺陷——促成这条规则的那个页面，分数只出现在作者恰好手写进理由文字的地方。
+
+**`plan_flags.py`** 把页面检查项从「让模型回答」改成「从方案推导」。`validate_trip_html.py` 过去把天数、必须出现的预订链接类型、交通方式、以及「未经事实核验」横幅当作四个可选开关，而且**默认全部关闭** —— 于是 `validate_trip_html.py page.html` 会打印 `VALID: booking-ready HTML structure passed.` 并以 0 退出，同时这四项检查一个都没跑；其中三项还依赖 SKILL.md 从未提及的 JSON 字段（`trip.arrival_transport_mode`、`booking_options.attraction_tickets`、`booking_options.ground_transport`），模型得自己想到去翻。而 `save_trip_deliverables.py` 一直都在正确地算这四个值，位置就在那份手写副本二十行之外。现在两个调用方都从这里导入同一份定义：**只要传 `--plan <plan.json>`，就没有任何东西需要回答了。** 不传 `--plan` 时这些开关从「可选」变为「必填」—— 因为退出码 0 正是助手会读到的那个信号。
 
 **`check_plan_consistency.py`** 把「散文靠不住」的部分交给代码判定：路线合计必须由自身 segment 求和、步行数字必须从数据推导而非手写断言、每顿饭必须挂在当天路线的真实站点上且落在营业时间内、日历不得有缺口、预算合计必须等于它声称求和的那些行且声称包含的每个类别都真的有明细。
 
@@ -170,7 +172,7 @@ start_intake_workflow.py
 
 有两件事这个版本**没有**改，而它们同样是结论。核验报告那道闸门扛住了 11 次伪造与陈旧攻击——删掉一个 domain、移除两个审计员、`claims_checked` 退回数字、指针无法解析、`wrong` 结论未解决、报告声称查的是另一份计划、报告日期早于它声称检查的计划——什么都不用改。另外，第一轮里有好几个「缺陷」被撤回了：金丝雀写在了契约根本没有的字段名上（`sources[0].title`、`activity.why_it_fits`、`segment.fallback`），读起来和「这个字段从不渲染」一模一样。**先证明改动真的落进去了，再相信闸门的沉默。**
 
-**核验阶段**（[`references/verification.md`](references/verification.md)）负责只有真实世界能回答的部分：入境规则、票价与时刻、营业时间、该日期是否已开售、季节性事实。它拆成五个真实性域，外加两个完全不联网的审计员；因为让**一次**调用同时查完这么多事，每件只能分到很小一部分注意力 —— 那正是晚餐被排进已打烊餐厅的成因。运行时支持并发就并发；不支持就跑五趟**各自独立**的串行，而不是塞进一个 prompt。收益是注意力集中，不是墙钟时间。
+**核验阶段**（[`references/verification.md`](references/verification.md)）负责只有真实世界能回答的部分：入境规则、票价与时刻、营业时间、该日期是否已开售、季节性事实。它拆成五个真实性域，外加两个完全不联网的审计员；因为让**一次**调用同时查完这么多事，每件只能分到很小一部分注意力 —— 那正是晚餐被排进已打烊餐厅的成因。运行时支持并发就并发；不支持就跑五趟**各自独立**的串行，而不是塞进一个 prompt。收益是注意力集中，不是墙钟时间。闸门拒收「缺了这份计划所在档位要求的任一个块」的报告 —— 完整档位七个块，轻量档位四个（`sights_and_hours`、`transport` 与两个审计员），档位由 `check_plan_consistency.py` 读计划本身算出，而不是由谁声明。交足七个块永远不会被拒，所以档位只会把下限往下调。两个审计员在任何档位都是必需的：在促成这条规则的那次运行里，这两个最便宜的 agent 找出了 55 个缺陷中的 27 个。
 
 ### 另外两个脚本
 
@@ -184,7 +186,7 @@ start_intake_workflow.py
 
 **买不到的票不算票。** 歌舞伎座一幕見席在前一天 12:00 开售，而计划自己的时间线在那一刻把旅行者放在成田入境队列里——它自己的时间线反驳了它自己的指令，而没有任何东西去比对这两者，因为开售时刻根本不是数据。加这个字段是个**决策**而不是补丁：设成**可选**就会是这个 skill 反复出现的那个缺陷又一次——没研究过开售窗口的 agent，正是会省略这个字段的那一个；而设成必填却放任自由填写，又会诱发条件反射式的 `always_available`，那是**编造的事实**，比一个可见的空白更糟。所以它只对某一天真正排上的票必填，且每个值都欠一句 `basis` 说明规则从哪来——真开过官网的人写得出来，猜的人写不出来。闸门随后拿开售时刻去比计划自己的每一天，并且刻意对两种情况保持沉默：旅行者在场时开售，以及出发前就买好这种最常见的情形。
 
-**页面自己会说闸门跑没跑过。** 这里每一道检查都是脚本，而脚本只有被调用时才会运行——一份手写的页面绕过全部检查，而且和落盘产物看不出区别。脚本内部解决不了这件事，因为执行点在它们的上游。页面**能**做的是携带证据：闸门印章此前只写进 plan JSON 就停下了，而这正是本仓库当初为「未经事实核验」横幅解决过的同一个缺口——理由是，只存在 JSON 里的标记，永远到不了在航司柜台前举着行程单的那个人手上。现在落盘页面会带上 `data-gates-checks`，并在来源登记区渲染出一行可见文字——而那行文字明确写出这个印章**不**代表什么，因为把 22 道结构检查读成「已核实事实」，比没有印章更糟。任何缺少印章的页面，`validate_trip_html.py` 都会打一条 note。
+**页面自己会说闸门跑没跑过。** 这里每一道检查都是脚本，而脚本只有被调用时才会运行——一份手写的页面绕过全部检查，而且和落盘产物看不出区别。脚本内部解决不了这件事，因为执行点在它们的上游。页面**能**做的是携带证据：闸门印章此前只写进 plan JSON 就停下了，而这正是本仓库当初为「未经事实核验」横幅解决过的同一个缺口——理由是，只存在 JSON 里的标记，永远到不了在航司柜台前举着行程单的那个人手上。现在落盘页面会带上 `data-gates-checks`，并在来源登记区渲染出一行可见文字——而那行文字明确写出这个印章**不**代表什么，因为把二十来道结构检查读成「已核实事实」，比没有印章更糟。印章记的是**数量**而不是清单 —— `gates_stamp()` 返回 `len(PLAN_CHECKS)`，今天实测是 `{'checks': 24, 'checked_by': 'check_plan_consistency.PLAN_CHECKS'}` —— 所以这里刻意不写死一个字面数字：这句话在计数悄悄变成 24 之后，仍然写着 **22**，凡是文档手抄一遍的数字，只要有人加一道检查就会过期。任何缺少印章的页面，`validate_trip_html.py` 都会打一条 note。
 
 `save_trip_deliverables.py` 没有核验报告就拒绝保存。`--unverified` 逃生口保留 —— 一道被绕开的闸门谁也警告不到 —— 但它的代价从「沉默」变成「可见」：落盘计划记录 `verification_status: unverified`，页面最上方渲染一条随语言本地化的**「未经事实核验」**横幅。
 
@@ -210,10 +212,7 @@ python scripts/new_plan_skeleton.py --start 2026-09-11 --end 2026-09-14 \
 python scripts/check_plan_consistency.py plan.json \
   --verification verification-report.json
 
-python scripts/validate_trip_html.py final.html \
-  --expected-days 4 \
-  --require-booking-type flight --require-booking-type hotel \
-  --transport-mode public-transit
+python scripts/validate_trip_html.py final.html --plan plan.json
 
 python scripts/check_link_targets.py final.html
 ```
@@ -366,7 +365,7 @@ rm "~/Travel Buddy/profiles/<你点名的那个>.json"
 
 **校验器因为英文文本判我的页面不合格。** 非英文页面上，所有渲染器自带的字符串都必须翻译，**以可见文本形式打印出来的机器枚举值也算**。用封闭枚举，别自造类别名。
 
-**它拒绝保存，报「没有核验报告」。** 这是闸门在正常工作。按 [`references/verification.md`](references/verification.md) 跑完那一轮核验 —— 五个真实性域加两个不联网的审计员，一共七个块 —— 保存报告，再用 `--verification <report.json>` 传进去。如果你是有意保存草稿，用 `--unverified`：它会照常落盘，并在页面顶部盖一条「未经事实核验」横幅，免得有人把它当成可预订版本。
+**它拒绝保存，报「没有核验报告」。** 这是闸门在正常工作。按 [`references/verification.md`](references/verification.md) 跑完那一轮核验 —— 五个真实性域加两个不联网的审计员，走完整档位是七个块；如果这份计划够得上轻量档位，则是四个块（`sights_and_hours`、`transport` 与两个审计员）—— 保存报告，再用 `--verification <report.json>` 传进去。档位由 `check_plan_consistency.py` 读计划本身算出，不是谁声明的；交足七个块永远不会被拒，所以档位只会把下限往下调。如果你是有意保存草稿，用 `--unverified`：它会照常落盘，并在页面顶部盖一条「未经事实核验」横幅，免得有人把它当成可预订版本。
 
 **一致性闸门拒绝了一个看起来没问题的方案。** 读它点名的内容 —— 那是算术，不是口味。`walking_burden` 必须以**数字**引用由当天各 segment 算出的步行总量，这样文案就无法和数据脱节。每张餐卡都需要一个 `route_anchor` 指向当天的某个停靠点（或者用 `off_route_justification` 说明这段绕路的代价），并且要么有 `venue_hours`、要么写 `hours_status: "unverified"`。路线总计必须等于其各段之和。已声明的 `cap_per_person` 不能在没有 `overrun_acknowledged` 的情况下被突破。
 

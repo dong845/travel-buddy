@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import functools
 import json
 import re
 import sys
@@ -148,6 +149,84 @@ def _name(candidate: dict) -> str:
     return str(_obj(candidate.get("destination")).get("name") or "(unnamed candidate)")
 
 
+# --------------------------------------------------------------------------------------------
+# Where the rule is written
+# --------------------------------------------------------------------------------------------
+# 43 places this file can refuse a shortlist, and until this change not one of them named the
+# reference that states the rule. The file's own opening paragraph is the argument for fixing it:
+# "every rule about comparability, evidence and the hard-filter ordering lived in sentences, which
+# is the exact configuration this project has learned fails silently." Turning those sentences
+# into gates was half the job. The other half is that a run which trips a gate has to be able to
+# find the sentence again -- otherwise the knowledge is enforced but unreadable, and a model on a
+# non-Claude-Code CLI that never opened decision-and-research.md is told its shortlist is wrong
+# with no way to learn what right looks like.
+#
+# Every entry is read off the check that emits it, not off SKILL.md. Two of these checks say in
+# their own docstrings that they exist because SKILL.md stated a rule nothing read
+# (check_cost_scope_identity, check_scored_candidates_carry_evidence) -- so SKILL.md is precisely
+# the wrong place to have looked up where a rule lives.
+#
+# Anchors resolve to `<a id="...">` markers added to the reference files in this same change, and
+# tests/test_packaging.py fails the build if any anchor a gate can emit does not exist.
+CHECK_REFERENCES: dict[str, str] = {
+    # The comparability rules are all one rule stated once, in step 4 of the evaluation sequence:
+    # the same party size, dates/season, night count, category scope and currency. A category
+    # vocabulary that drifts into free text, a per-person figure ranked against a party total, and
+    # a flight-only figure ranked against an all-in one are three ways to break that single line.
+    "check_cost_category_vocabulary": "decision-and-research.md#evaluation-sequence",
+    "check_cost_comparable": "decision-and-research.md#evaluation-sequence",
+    "check_cost_scope_identity": "decision-and-research.md#evaluation-sequence",
+    # The hard filter runs before scoring, and an empty feasible set is an outcome rather than a
+    # scoring error. A winner that fails a constraint, a record claiming it passed while naming
+    # what it failed, and a declared conflict the pool does not support are all that ordering
+    # broken from a different side.
+    "check_no_infeasible_winner": "decision-and-research.md#evaluation-sequence",
+    "check_status_contradicts_its_own_failures": "decision-and-research.md#evaluation-sequence",
+    "check_conflict_agrees_with_the_pool": "decision-and-research.md#evaluation-sequence",
+    "check_budget_fit_is_computed": "decision-and-research.md#evaluation-sequence",
+    "check_constraint_coverage": "decision-and-research.md#evaluation-sequence",
+    # Prices and access dates are the volatile-source rules: verify live, record the access date
+    # beside the travel date range.
+    "check_price_figures_are_current": "decision-and-research.md#evidence-policy",
+    # What each finalist owes the traveller -- sources and access date, and an exclusion that says
+    # why it was dropped rather than that it scored lower.
+    "check_scored_candidates_carry_evidence": "decision-and-research.md#candidate-output-contract",
+    "check_settled_status_has_its_reason": "decision-and-research.md#candidate-output-contract",
+    "check_declared_enums": "decision-and-research.md#candidate-output-contract",
+}
+
+
+def cites(check):
+    """Stamp every finding a check appends with the reference that states the rule it enforces.
+
+    Same decorator as check_plan_consistency.py's, and deliberately a copy rather than an import.
+    Sharing it would mean a new `scripts/*.py` module, and tests/test_packaging.py fails any
+    script absent from BOTH READMEs -- so a shared helper would either ship undocumented or drag
+    two README edits into a change that has nothing to say to a reader of either. The registry
+    above is per-script anyway: these are this gate's rules and nowhere else's.
+
+    Appends, never prepends: tests/test_shortlist_consistency.py matches needles as substrings of
+    the whole output (`needle not in out`), and many are the opening words of a message.
+    """
+    suffix = CHECK_REFERENCES.get(check.__name__)
+    suffix = f" [see references/{suffix}]" if suffix else None
+
+    @functools.wraps(check)
+    def cited(*args, **kwargs):
+        if suffix is None:
+            return check(*args, **kwargs)
+        errors = args[1]
+        before = len(errors)
+        result = check(*args, **kwargs)
+        for index in range(before, len(errors)):
+            if " [see references/" not in errors[index]:
+                errors[index] += suffix
+        return result
+
+    return cited
+
+
+@cites
 def check_cost_category_vocabulary(doc: dict, errors: list[str], notes: list[str]) -> None:
     """Free text makes every set comparison lie in both directions.
 
@@ -182,6 +261,7 @@ def check_cost_category_vocabulary(doc: dict, errors: list[str], notes: list[str
                 f"compares spellings instead of scopes.")
 
 
+@cites
 def check_cost_comparable(doc: dict, errors: list[str], notes: list[str]) -> None:
     """One figure per person beside another for the whole party is a ranking, not a comparison.
 
@@ -232,6 +312,7 @@ def check_cost_comparable(doc: dict, errors: list[str], notes: list[str]) -> Non
             errors.append(f"{where} cost_estimate.total_low {low} exceeds total_high {high}.")
 
 
+@cites
 def check_cost_scope_identity(doc: dict, errors: list[str], notes: list[str]) -> None:
     """SKILL.md's own sentence, made enforceable: do not compare a flight-only figure with an
     all-in figure.
@@ -291,6 +372,7 @@ def check_cost_scope_identity(doc: dict, errors: list[str], notes: list[str]) ->
                 f"that drifts is the same scope swap arriving through a second door.")
 
 
+@cites
 def check_status_contradicts_its_own_failures(doc: dict, errors: list[str], notes: list[str]) -> None:
     """A record that says 'passed' while its own failed_constraints names what it failed.
 
@@ -311,6 +393,7 @@ def check_status_contradicts_its_own_failures(doc: dict, errors: list[str], note
                 f"two is stale, and every reader downstream believes the status.")
 
 
+@cites
 def check_no_infeasible_winner(doc: dict, errors: list[str], notes: list[str]) -> None:
     """A destination that fails a hard constraint cannot win because it scored well.
 
@@ -406,6 +489,7 @@ def check_no_infeasible_winner(doc: dict, errors: list[str], notes: list[str]) -
             "alternative explicitly conditional.")
 
 
+@cites
 def check_declared_enums(doc: dict, errors: list[str], notes: list[str]) -> None:
     """Every closed vocabulary, checked against the contract that declares it.
 
@@ -447,6 +531,7 @@ def check_declared_enums(doc: dict, errors: list[str], notes: list[str]) -> None
                 errors.append(_enum_error(where, field, value, allowed))
 
 
+@cites
 def check_settled_status_has_its_reason(doc: dict, errors: list[str], notes: list[str]) -> None:
     """`not_pursued` is a claim about what was deliberately skipped, so it owes a sentence.
 
@@ -468,6 +553,7 @@ def check_settled_status_has_its_reason(doc: dict, errors: list[str], notes: lis
                 f"ranking; without it this is indistinguishable from a filter nobody finished.")
 
 
+@cites
 def check_budget_fit_is_computed(doc: dict, errors: list[str], notes: list[str]) -> None:
     """A verdict about money that was asserted rather than computed.
 
@@ -514,6 +600,7 @@ def check_budget_fit_is_computed(doc: dict, errors: list[str], notes: list[str])
                     f"carries -- the verdict contradicts them.")
 
 
+@cites
 def check_price_figures_are_current(doc: dict, errors: list[str], notes: list[str]) -> None:
     """A figure researched long before the comparison is not a figure about the same trip.
 
@@ -554,6 +641,7 @@ def check_price_figures_are_current(doc: dict, errors: list[str], notes: list[st
                 f"keeps its own date.")
 
 
+@cites
 def check_conflict_agrees_with_the_pool(doc: dict, errors: list[str], notes: list[str]) -> None:
     """Telling a traveller to give up a requirement is expensive, so the claim has to be earned.
 
@@ -690,6 +778,7 @@ def _declared_ids(bucket) -> set[str]:
     return found
 
 
+@cites
 def check_constraint_coverage(doc: dict, errors: list[str], notes: list[str],
                               intake: dict | None = None) -> None:
     """Every constraint the traveller declared, answered for every candidate they are shown.
@@ -769,6 +858,7 @@ def check_constraint_coverage(doc: dict, errors: list[str], notes: list[str],
 
 
 
+@cites
 def check_scored_candidates_carry_evidence(doc: dict, errors: list[str], notes: list[str]) -> None:
     """SKILL.md step 5 says "score only candidates with sufficient evidence". Nothing read it.
 
