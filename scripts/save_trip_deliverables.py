@@ -170,7 +170,7 @@ def main() -> int:
         return 1
 
     # Stamped before render, not after, so the page and the JSON agree about what was run.
-    plan["gates_passed"] = gates_stamp()
+    plan["gates_passed"] = gates_stamp(plan)
     for note in notes:
         print(f"note: {note}")
     if consistency_errors:

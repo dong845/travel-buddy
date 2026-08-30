@@ -460,6 +460,7 @@ CHECK_REFERENCES: dict[str, str] = {
     "check_walking_budget": "initial-intake.md#machine-readable-values",
     "check_untyped_constraints": "initial-intake.md#machine-readable-values",
     "check_preference_coverage": "initial-intake.md#experience-taxonomy",
+    "check_preferences_came_from_the_intake": "initial-intake.md#experience-taxonomy",
     # Map URLs: endpoints are geocoder queries, transit takes no waypoints, a day map's scope has
     # to match the stops it claims to cover.
     "check_map_endpoints": "booking-html-output.md#map-endpoints",
@@ -483,6 +484,7 @@ CHECK_REFERENCES: dict[str, str] = {
     "check_cross_references": "booking-html-output.md#render-what-the-plan-collects",
     "check_budget": "initial-intake.md#budget-model",
     "check_replan_context": "replanning.md#the-gate-that-stops-it-shipping",
+    "check_dates_agree_with_the_gates_that_ran": "replanning.md#the-gate-that-stops-it-shipping",
     "check_verification": "verification.md#report-schema",
     # check_dates and check_sentinel_timestamps are deliberately absent; see
     # CHECKS_WITHOUT_A_REFERENCE below, which is where that decision is recorded so a test can
@@ -505,6 +507,11 @@ CHECK_REFERENCES: dict[str, str] = {
 CHECKS_WITHOUT_A_REFERENCE: dict[str, str] = {
     "check_dates": "date arithmetic; no reference states it and the message names the two dates",
     "check_sentinel_timestamps": "refuses the skeleton's own 1970 placeholder; nothing to read",
+    "check_verification_tier_is_stated":
+        "refuses nothing -- it reads the tier out of the plan's own fields as a note, because "
+        "SKILL.md tells the author to 'read what it printed' about a choice this gate had never "
+        "actually printed. verification.md#verify-domains states the tiers; the note quotes "
+        "required_domains_for's own reason, so it carries its argument with it",
 }
 
 
@@ -3411,7 +3418,7 @@ def check_preference_coverage(plan: dict, errors: list[str], notes: list[str]) -
             f"about an avoidance reads exactly like an itinerary that contains it.")
 
 
-def gates_stamp() -> dict:
+def gates_stamp(plan: dict | None = None) -> dict:
     """What this plan was checked against, recorded so a later audit can tell two things apart.
 
     Auditing the eleven saved plans in a real workspace meant separating "fails a rule that did
@@ -3419,8 +3426,30 @@ def gates_stamp() -> dict:
     every finding by hand and classify it. The answer mattered -- most findings turned out to be
     the second kind -- and nothing in the plan recorded which gates had ever run on it. A stamp
     costs one field and makes that question answerable instead of archaeological.
+
+    It also records the window the gates ran against, and that half answers a different question.
+    Almost every researched fact under a day is keyed to a WEEKDAY, so a date change silently
+    invalidates opening hours, closure days, market days and Sunday retail law while the plan still
+    looks complete. `replan_trip.py` exists for exactly that and records what it could not
+    recompute in `replan_context` -- but `check_replan_context` opens with "a plan with no
+    replan_context has nothing to re-verify, and nothing here fires", and the author who edits two
+    date strings by hand is precisely the author who writes no replan_context. The gate was
+    unreachable by the defect it was written for. Stamping the window the checks actually saw makes
+    the hand edit visible without asking anybody to declare it: the plan now disagrees with its own
+    receipt.
+
+    No wall-clock here, deliberately. A timestamp would make two saves of the same plan differ, and
+    this field is meant to be diffable; the date is the only part any check reads.
     """
-    return {"checks": len(PLAN_CHECKS), "checked_by": "check_plan_consistency.PLAN_CHECKS"}
+    trip = _obj(plan.get("trip")) if isinstance(plan, dict) else {}
+    stamp = {"checks": len(PLAN_CHECKS), "checked_by": "check_plan_consistency.PLAN_CHECKS"}
+    start = trip.get("start_date")
+    end = trip.get("end_date")
+    if isinstance(start, str) and start.strip():
+        stamp["start_date"] = start
+    if isinstance(end, str) and end.strip():
+        stamp["end_date"] = end
+    return stamp
 
 
 
@@ -3917,7 +3946,167 @@ def check_ticket_sale_windows(plan: dict, errors: list[str], notes: list[str]) -
                 f"they are still in transit when the seats are released. Buy it earlier, drop it, "
                 f"or say in the plan who buys it and from where.")
 
+
+def check_preferences_came_from_the_intake(plan: dict, errors: list[str],
+                                           notes: list[str]) -> None:
+    """What the form collected must reach the plan, checked against the form's own file.
+
+    check_preference_coverage holds every ranked must-have to an anchor that answers it -- and it
+    iterates `ranked_must_haves`, so an empty list produces nothing. Its own docstring blesses that
+    as a positive claim: the traveller stated no must-have. Measured on a real workspace of fifteen
+    saved plans, `ranked_must_haves` is empty on ALL FIFTEEN, so the whole check has never once
+    fired, and with it every rule downstream -- satisfies_preference quoting the traveller's own
+    words, unmet_preferences carrying a reason -- was unreachable.
+
+    The obvious reading is that those travellers stated no must-have. The intake files say
+    otherwise: SEVEN of the fifteen intakes in that same workspace carry a non-empty
+    experience.ranked_must_haves, and not one plan does. The form asked, the traveller answered, and
+    the answer stopped at the plan boundary -- which is the defect SKILL.md's "the plan must carry
+    what the traveller asked FOR" section was written about, surviving the gate written to prevent
+    it. A gate that binds only what the author chose to transcribe cannot see a transcription that
+    did not happen; it needs the other document.
+
+    A NOTE and not an error when the intake cannot be read, and that asymmetry is deliberate. This
+    repo treats a plan as a portable document -- re-rendered, replanned weeks later, audited from a
+    moved workspace, restored from backup -- and render_final_trip_html.intake_context_errors
+    records why requiring `intake_file` to resolve was tried and reverted: it failed every
+    legitimate re-save, and the way out the error suggested was to relabel the intake method, i.e.
+    to write something false. So an unreadable intake costs the cross-check, never the plan.
+    """
+    context = _obj(plan.get("intake_context"))
+    path = context.get("intake_file")
+    if not isinstance(path, str) or not path.strip() or _blank(path):
+        return
+    try:
+        intake = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        notes.append(
+            f"note: intake_context.intake_file ({path.strip()}) could not be read ({exc}), so the "
+            f"plan's ranked_must_haves were not checked against what the form actually collected. "
+            f"Not an error -- a plan outlives the workspace it was built in -- but this run did "
+            f"not verify that the traveller's own answers reached the plan.")
+        return
+    if not isinstance(intake, dict):
+        notes.append(f"note: intake_context.intake_file ({path.strip()}) is not a JSON object, so "
+                     f"the preference cross-check did not run.")
+        return
+
+    collected = [str(m).strip() for m in _seq(_obj(intake.get("experience")).get("ranked_must_haves"))
+                 if isinstance(m, str) and m.strip() and not _blank(m)]
+    if not collected:
+        return
+    preferences = _obj(_obj(plan.get("trip")).get("traveler_preferences"))
+    carried = {_fold(str(m)) for m in _seq(preferences.get("ranked_must_haves"))
+               if isinstance(m, str) and m.strip()}
+    dropped = [m for m in collected if _fold(m) not in carried]
+    if not dropped:
+        return
+    errors.append(
+        f"the intake collected {len(collected)} ranked must-have(s) and the plan carries "
+        f"{len(collected) - len(dropped)}. Missing: {'; '.join(repr(m) for m in dropped)}. These "
+        f"are the traveller's own answers to what the trip is FOR, and every rule that reads them "
+        f"-- an anchor pointing at each through satisfies_preference, an unmet one carrying its "
+        f"reason -- iterates this list, so dropping an entry does not fail those rules, it deletes "
+        f"them. Copy each into trip.traveler_preferences.ranked_must_haves in the traveller's own "
+        f"words (new_plan_skeleton.py --from-intake does it), or, where the season or the place "
+        f"genuinely cannot deliver one, carry it and say so in unmet_preferences.")
+
+
+
+
+def check_verification_tier_is_stated(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """Say which verification tier this plan qualifies for, BEFORE anyone pays for one.
+
+    SKILL.md tells the author, about the light/full choice: "check_plan_consistency.py computes
+    this from the plan's own fields, so do not argue with it -- read what it printed." That
+    sentence was not true. `required_domains_for` has exactly one call site, inside
+    check_verification, and check_verification is not in PLAN_CHECKS -- it runs only when a
+    finished verification report is passed in. So the tier was computed after the verification had
+    already been bought, and the decision it exists to settle was made without it.
+
+    The cost of that is one-sided and large. The full pass is five truth domains plus two auditors;
+    the light one is four blocks. references/research-budget.md prices the difference at roughly
+    300k against 700k. Left to judgement, the answer is whatever the author feels thorough enough
+    to say -- and measured across fifteen real saved plans, every single one computes `full`, so
+    nobody has ever been told they could have stopped at four.
+
+    A note and not an error, because there is nothing here to be wrong about: the plan's own fields
+    decide, this function only reads them out. It is the same move as everything else in this gate
+    -- do not ask the author to declare something the artifact already answers; print the answer
+    where the decision is made.
+    """
+    if not isinstance(plan, dict) or not plan.get("days"):
+        return
+    required, reason = required_domains_for(plan)
+    tier = "light" if required <= LIGHT_TIER_DOMAINS else "full"
+    blocks = sorted(required) + sorted(REQUIRED_AUDITS)
+    notes.append(
+        f"verification tier: {tier.upper()} -- {len(blocks)} block(s): {', '.join(blocks)}. "
+        f"{reason} Computed from this plan's own fields before any verification is bought; "
+        f"references/research-budget.md prices the difference between the tiers, so this is the "
+        f"cheapest sentence in the run to read.")
+
+
+
+def check_dates_agree_with_the_gates_that_ran(plan: dict, errors: list[str],
+                                              notes: list[str]) -> None:
+    """A delivered plan whose dates moved since its gates ran, with nothing saying they moved.
+
+    check_replan_context is the gate for a date change, and it opens with `if context is None:
+    return` -- so it never sees the case it exists for. `replan_trip.py` writes replan_context;
+    an author who edits two date strings by hand writes nothing, and every weekday-keyed fact in
+    the plan quietly becomes a guess: opening hours, closure days, market days, the museum that
+    shuts Mondays. SKILL.md records the measured cost twice -- a one-day shift redone by hand put
+    an off-by-one in every ticket and every anchor day index.
+
+    Asking the author to declare the edit cannot work, because not declaring it IS the edit. So
+    this reads the receipt instead. save_trip_deliverables.py stamps the window the checks ran
+    against into `gates_passed`, before it rewrites the stamp, so a plan that was delivered and
+    then hand-edited disagrees with its own record.
+
+    Three ways this deliberately stays quiet, because a check that accuses honest work gets routed
+    around:
+
+      * No stamp at all -- a plan that has never been delivered has nothing to disagree with, and
+        a freshly authored one must not be told its dates are wrong.
+      * A stamp that predates this field. The fifteen plans in a real workspace carry `gates_passed`
+        on one of them, written before the window was recorded; it has no start_date, so it is not
+        evidence either way and produces nothing.
+      * replan_context present. That is the declaration this check exists to notice the absence of,
+        and check_replan_context then holds the plan to every entry it raised. replan_trip.py also
+        clears gates_passed outright, so a legitimate shift has no stamp to compare against for a
+        second, independent reason.
+    """
+    stamp = _obj(plan.get("gates_passed"))
+    if not stamp:
+        return
+    trip = _obj(plan.get("trip"))
+    if plan.get("replan_context") is not None:
+        return
+    for field, label in (("start_date", "start"), ("end_date", "end")):
+        was = stamp.get(field)
+        now = trip.get(field)
+        if not isinstance(was, str) or not was.strip():
+            continue
+        if not isinstance(now, str) or not now.strip():
+            continue
+        if was == now:
+            continue
+        errors.append(
+            f"trip.{field} is {now} but the gates that stamped this plan ran on {was}. The "
+            f"{label} of the window moved after the plan was delivered and nothing records it: "
+            f"opening hours, closure days and market days are keyed to the WEEKDAY, so every one "
+            f"of them is now a guess while the plan still reads as checked. Shift it with "
+            f"`python scripts/replan_trip.py <plan.json> --shift-days N --out <new.json>`, which "
+            f"rewrites what is a pure function of the delta and lists the rest in "
+            f"replan_context.must_reverify -- or, if the dates were re-researched by hand, say so "
+            f"in replan_context so this gate can hold you to each entry.")
+
+
 PLAN_CHECKS = (
+    check_verification_tier_is_stated,
+    check_dates_agree_with_the_gates_that_ran,
+    check_preferences_came_from_the_intake,
     check_routes,
     check_walking_budget,
     check_implied_speed,

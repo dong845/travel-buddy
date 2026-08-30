@@ -1360,6 +1360,281 @@ def untyped_constraints_cases(base: dict) -> list[str]:
     return failures
 
 
+
+
+
+def verification_tier_note_cases(base: dict) -> list[str]:
+    """The tier has to be printed where the decision is made, not after it is paid for.
+
+    SKILL.md says of the light/full choice: "check_plan_consistency.py computes this from the
+    plan's own fields, so do not argue with it -- read what it printed." That was not true.
+    required_domains_for had exactly one call site, inside check_verification, and
+    check_verification is not in PLAN_CHECKS -- it runs only when a finished verification report is
+    handed in. The tier was computed after the verification had been bought, which is the one
+    moment it cannot help.
+
+    references/research-budget.md prices the difference between the tiers, and across fifteen real
+    saved plans every one computes `full` -- so nobody has ever been told they could have stopped
+    at four blocks. Both halves are asserted here: the note appears on an ordinary plan, and it
+    says LIGHT on a plan that actually qualifies. Without the second, the whole thing could be a
+    constant.
+    """
+    failures: list[str] = []
+
+    def notes_for(plan: dict) -> list[str]:
+        errors: list[str] = []
+        notes: list[str] = []
+        CHECKER_MODULE.check_verification_tier_is_stated(plan, errors, notes)
+        if errors:
+            failures.append(f"tier note: it must refuse nothing, got {errors}")
+        return notes
+
+    tier_notes = [n for n in notes_for(copy.deepcopy(base)) if "verification tier" in n]
+    if not tier_notes:
+        failures.append("tier note: an ordinary plan got no tier line, so the sentence SKILL.md "
+                        "tells the author to read is still not printed")
+    elif "FULL" not in tier_notes[0]:
+        failures.append(f"tier note: the fixture needs the full pass and the note does not say so: "
+                        f"{tier_notes[0]}")
+
+    # A plan that genuinely qualifies for the cheap pass, built by satisfying the conditions
+    # required_domains_for itself names -- so this cannot drift out of step with the rule.
+    light = copy.deepcopy(base)
+    for _ in range(8):
+        required, reason = CHECKER_MODULE.required_domains_for(light)
+        if required <= CHECKER_MODULE.LIGHT_TIER_DOMAINS:
+            break
+        if "no entry_context" in reason:
+            light["entry_context"] = {"status": "not_required"}
+        elif "no traveler_constraints" in reason:
+            light["trip"]["traveler_constraints"] = {
+                "dietary_or_religious_needs": [], "allergy_severity": "none",
+                "allergy_card_text": None, "max_continuous_walking_minutes": None,
+                "mobility_notes": []}
+        else:
+            break
+    required, _reason = CHECKER_MODULE.required_domains_for(light)
+    if required <= CHECKER_MODULE.LIGHT_TIER_DOMAINS:
+        light_notes = [n for n in notes_for(light) if "verification tier" in n]
+        if not light_notes or "LIGHT" not in light_notes[0]:
+            failures.append(f"tier note: a plan that qualifies for the light tier was not told so, "
+                            f"which makes the note a constant: {light_notes}")
+        elif "4 block" not in light_notes[0]:
+            failures.append(f"tier note: the light tier is four blocks and the note must say how "
+                            f"many, since that is the number the author is deciding about: "
+                            f"{light_notes[0]}")
+    else:
+        failures.append("tier note: could not build a light-tier plan from the conditions "
+                        "required_domains_for names, so the LIGHT half is asserted over nothing")
+
+    # And it must not raise on the shapes a plan can arrive in, because a note-only check that
+    # dies takes every real finding in the report with it.
+    for label, plan in (("an empty plan", {}), ("no days", {"trip": {}}),
+                        ("days as a string", {"trip": {}, "days": "nope"}),
+                        ("trip as a list", {"trip": [], "days": [{}]})):
+        try:
+            CHECKER_MODULE.check_verification_tier_is_stated(plan, [], [])
+        except Exception as exc:  # noqa: BLE001 - a raise IS the defect
+            failures.append(f"tier note: {label} raised {type(exc).__name__}: {exc}")
+    return failures
+
+
+def preferences_from_the_intake_cases(base: dict) -> list[str]:
+    """The form's answers must reach the plan, checked against the form's own file.
+
+    check_preference_coverage iterates ranked_must_haves, so an empty list produces nothing, and
+    its docstring blesses that as "the traveller stated no must-have". Measured on a real workspace
+    of fifteen saved plans it is empty on all fifteen -- so that check, and every rule downstream of
+    it, has never fired. The intake files refute the innocent reading: SEVEN of the fifteen intakes
+    in the same workspace carry a non-empty experience.ranked_must_haves and no plan carries any.
+    The answers stopped at the plan boundary, and a gate that binds only what the author chose to
+    transcribe cannot see a transcription that did not happen.
+
+    The unreadable-intake case is a NOTE on purpose and is asserted here so it stays one. A plan is
+    a portable document -- re-rendered, replanned, audited from a moved workspace -- and
+    render_final_trip_html.intake_context_errors records that requiring intake_file to resolve was
+    tried and reverted, because it failed every legitimate re-save and the way out the error
+    suggested was to relabel the intake method, i.e. to write something false.
+    """
+    failures: list[str] = []
+
+    def findings(plan: dict) -> tuple[list[str], list[str]]:
+        errors: list[str] = []
+        notes: list[str] = []
+        CHECKER_MODULE.check_preferences_came_from_the_intake(plan, errors, notes)
+        return errors, notes
+
+    def paired(tmp: Path, collected: object, carried: object) -> dict:
+        intake = tmp / "intake.json"
+        intake.write_text(json.dumps({"experience": {"ranked_must_haves": collected}},
+                                     ensure_ascii=False), encoding="utf-8")
+        plan = copy.deepcopy(base)
+        plan["intake_context"] = {"method": "html_form", "intake_file": str(intake)}
+        plan.setdefault("trip", {}).setdefault("traveler_preferences", {})
+        plan["trip"]["traveler_preferences"]["ranked_must_haves"] = carried
+        return plan
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        # CJK, because the workspace this runs on is majority Chinese and a check that only held
+        # for ASCII would hold for almost none of it.
+        wanted = ["海岛/海岸", "湖泊/森林"]
+
+        errors, _ = findings(paired(tmp, wanted, []))
+        if not errors:
+            failures.append("intake preferences: a plan carrying none of the two must-haves the "
+                            "intake collected was accepted -- that is the measured defect")
+        elif not all(w in errors[0] for w in wanted):
+            failures.append(f"intake preferences: the refusal must name what was dropped, so the "
+                            f"author does not have to diff two files: {errors[0]}")
+
+        errors, _ = findings(paired(tmp, wanted, list(wanted)))
+        if errors:
+            failures.append(f"intake preferences: a plan carrying both was refused: {errors}")
+
+        errors, _ = findings(paired(tmp, wanted, wanted[:1]))
+        if len(errors) != 1 or wanted[1] not in errors[0] or wanted[0] in errors[0]:
+            failures.append(f"intake preferences: a partial carry must name only what is missing: "
+                            f"{errors}")
+
+        # An intake that collected nothing is not evidence of anything.
+        for label, collected in (("an empty list", []), ("a missing key", None),
+                                 ("a list of blanks", ["", "   "])):
+            plan = paired(tmp, collected, [])
+            errors, _ = findings(plan)
+            if errors:
+                failures.append(f"intake preferences: {label} in the intake produced {errors}")
+
+        # Whatever a caller can put in that field, this must not raise: a gate that dies takes
+        # every other finding in the report with it.
+        for label, shape in (("a string intake", '"nope"'), ("a list intake", "[1, 2]"),
+                             ("a number intake", "7"), ("a truncated file", '{"experience":')):
+            broken = tmp / f"broken-{abs(hash(label))}.json"
+            broken.write_text(shape, encoding="utf-8")
+            plan = copy.deepcopy(base)
+            plan["intake_context"] = {"method": "html_form", "intake_file": str(broken)}
+            try:
+                errors, notes = findings(plan)
+            except Exception as exc:  # noqa: BLE001 - a raise IS the defect
+                failures.append(f"intake preferences: {label} raised "
+                                f"{type(exc).__name__}: {exc}")
+                continue
+            if errors:
+                failures.append(f"intake preferences: {label} was refused rather than noted: "
+                                f"{errors}")
+            if not notes:
+                failures.append(f"intake preferences: {label} said nothing at all, so a run that "
+                                f"could not cross-check looks exactly like one that did")
+
+        # The portable-document rule, pinned: a missing sibling file costs the check, not the plan.
+        gone = copy.deepcopy(base)
+        gone["intake_context"] = {"method": "html_form",
+                                  "intake_file": str(tmp / "never-written.json")}
+        errors, notes = findings(gone)
+        if errors:
+            failures.append(f"intake preferences: an unreadable intake refused the plan, which is "
+                            f"the rule intake_context_errors already tried and reverted: {errors}")
+        if not notes:
+            failures.append("intake preferences: an unreadable intake must SAY the cross-check did "
+                            "not run; silence makes it indistinguishable from a clean pass")
+
+    # And no intake_context at all is not this check's business.
+    bare = copy.deepcopy(base)
+    bare.pop("intake_context", None)
+    errors, notes = findings(bare)
+    if errors or notes:
+        failures.append(f"intake preferences: a plan naming no intake file must produce nothing, "
+                        f"got {errors} / {notes}")
+    return failures
+
+
+def dates_versus_the_gate_stamp_cases(base: dict) -> list[str]:
+    """A delivered plan whose dates moved with nothing saying they moved.
+
+    check_replan_context is the gate for a date change and it opens with `if context is None:
+    return`, so it never sees the case it exists for: replan_trip.py writes replan_context, and the
+    author who edits two date strings by hand writes nothing. Every weekday-keyed fact under a day
+    -- opening hours, closure days, market days, the museum that shuts Mondays -- is then a guess
+    while the plan still reads as checked. SKILL.md records the measured cost: a one-day shift
+    redone by hand put an off-by-one in every ticket and every anchor day index.
+
+    Asking the author to declare the edit cannot work, because not declaring it is the edit. So the
+    check reads the receipt: save_trip_deliverables.py stamps the window the gates ran against into
+    `gates_passed` AFTER the checks run, so a plan delivered and then hand-edited disagrees with its
+    own record.
+
+    Half these cases are about staying quiet, and that half is not optional. A check that accuses
+    honest work is a check people route around, and three shapes here are honest: a plan that was
+    never delivered, a stamp written before this field existed (one plan in a real workspace has
+    exactly that), and a shift that declared itself.
+    """
+    failures: list[str] = []
+    marker = CHECKER_MODULE.gates_stamp
+
+    def findings(plan: dict) -> list[str]:
+        errors: list[str] = []
+        CHECKER_MODULE.check_dates_agree_with_the_gates_that_ran(plan, errors, [])
+        return errors
+
+    def delivered(**trip_overrides) -> dict:
+        """A plan carrying the stamp its own dates would have produced."""
+        plan = copy.deepcopy(base)
+        plan["gates_passed"] = marker(plan)
+        plan["trip"].update(trip_overrides)
+        return plan
+
+    if not findings(delivered(start_date="2026-10-05")):
+        failures.append(
+            "dates/stamp: a delivered plan whose start_date moved with no replan_context was "
+            "accepted -- that is the hand edit this check exists for, and the one shape "
+            "check_replan_context cannot see")
+    if not findings(delivered(end_date="2026-10-30")):
+        failures.append("dates/stamp: only the start of the window is checked; a moved end_date "
+                        "re-keys the same weekday-dependent facts")
+
+    quiet = {
+        "a plan that was never delivered": copy.deepcopy(base),
+        "a stamp written before the window was recorded": {**copy.deepcopy(base),
+                                                           "gates_passed": {"checks": 24}},
+    }
+    agreeing = copy.deepcopy(base)
+    agreeing["gates_passed"] = marker(agreeing)
+    quiet["a stamp that agrees with the plan"] = agreeing
+    declared = delivered(start_date="2026-10-05")
+    declared["replan_context"] = {"must_reverify": []}
+    quiet["a shift that declared itself in replan_context"] = declared
+    for label, plan in quiet.items():
+        if found := findings(plan):
+            failures.append(f"dates/stamp: {label} must produce nothing, got {found}")
+
+    # The shapes a plan can actually carry in that key. A gate that raises here takes every other
+    # finding in the report down with it, which is how one typo hides two dozen real defects.
+    for label, stamp in (("a string", "nope"), ("a list", [1, 2]), ("null", None),
+                         ("a number", 7), ("an empty object", {}),
+                         ("a non-string date", {"checks": 24, "start_date": 20261005}),
+                         ("a blank date", {"checks": 24, "start_date": "   "})):
+        plan = copy.deepcopy(base)
+        plan["gates_passed"] = stamp
+        plan["trip"]["start_date"] = "2026-10-05"
+        try:
+            findings(plan)
+        except Exception as exc:  # noqa: BLE001 - a raise IS the defect
+            failures.append(f"dates/stamp: gates_passed as {label} raised "
+                            f"{type(exc).__name__}: {exc}")
+
+    # And the stamp itself has to carry the window, or the check above is asserted over nothing.
+    stamped = marker(copy.deepcopy(base))
+    if stamped.get("start_date") != base["trip"].get("start_date"):
+        failures.append(f"dates/stamp: gates_stamp did not record the window it checked: {stamped}")
+    if "checks" not in stamped or "checked_by" not in stamped:
+        failures.append(f"dates/stamp: gates_stamp dropped what it already recorded: {stamped}")
+    # No wall-clock: two saves of one plan must be diffable.
+    if marker(copy.deepcopy(base)) != stamped:
+        failures.append("dates/stamp: gates_stamp is not deterministic, so two saves of the same "
+                        "plan differ and the stamp stops being diffable")
+    return failures
+
+
 def untyped_marker_entry_cases(base: dict) -> list[str]:
     """A loud message that points at nothing is the same failure wearing a different coat.
 
@@ -3826,6 +4101,9 @@ def main() -> int:
     failures += constraints_panel_cases(base)
     failures += untyped_constraints_cases(base)
     failures += untyped_marker_entry_cases(base)
+    failures += dates_versus_the_gate_stamp_cases(base)
+    failures += preferences_from_the_intake_cases(base)
+    failures += verification_tier_note_cases(base)
     failures += cli_contract_cases(base)
     failures += dedupe_cases(base)
     failures += rule_split_cases()
