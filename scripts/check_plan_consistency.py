@@ -37,10 +37,13 @@ reported 13 findings, the same plan handed a report belonging to another trip re
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
 import functools
+import hashlib
 import json
 import math
+import traceback
 import urllib.parse
 import re
 import sys
@@ -3945,6 +3948,674 @@ PLAN_CHECKS = (
 )
 
 
+# ----------------------------------------------------------------------------------------------
+# What gets PRINTED, and how many times the same sentence gets printed.
+#
+# Measured on plans/2026-09-09-tokyo-5d4n.json with --no-verification-yet, at the commit before
+# this one: 122 findings in 48,841 bytes of output, and the same handful of rule rationales was
+# most of it -- the top one re-printed 48 times, and the `[see references/...]` citations added in
+# the previous commit had become the single most repeated string in the file. The gate loop runs
+# this script once per fix cycle, so every repeat is paid again on every cycle.
+#
+# The fix is NOT to collapse findings into bare pointers. What an author acts on is each finding's
+# own HEAD -- which venue, which value, which two strings disagree -- and replacing that with "see
+# rule 7" sends them back into the plan to rediscover what the gate already knew, which costs more
+# than it saves. So every finding keeps its own dashed line and its own instance text verbatim;
+# only the repeated TAIL is suppressed, and only after the rule has been stated in full once.
+#
+# Nothing below decides WHETHER a finding fires. It is all presentation, and the finding set is
+# byte-identical to what the checks produced.
+
+
+class FindingLog(list):
+    """The findings list, plus a record of the source line each finding was appended from.
+
+    It is a `list` everywhere that matters: `cites()` type-checks `isinstance(args[1], list)`,
+    save_trip_deliverables.py builds a plain list and hands it to these same checks, and every
+    check appends to it exactly as before. The only thing added is a parallel note of WHERE each
+    string came from, which is what lets the printer tell a rule's fixed rationale from the part
+    of the message that is about this venue on this day.
+
+    Reading the site off the stack rather than asking each check to name its rule is deliberate,
+    and it is the same argument cites() makes two hundred lines up about citations. Not one of
+    this file's many `errors.append(...)` sites carries a rule id; adding one to each is a chance
+    to paste the wrong id at every site, it covers only the sites that exist today, and -- worst
+    -- it would edit the finding strings themselves, which is the one thing this change must not
+    do. A stack frame cannot drift out of date with the code it points at.
+
+    `extend` is overridden as well as `append` because check_verification merges whole lists in
+    (`errors.extend(_claims_pointer_errors(...))`). Without it those findings would have no site
+    and the two lists would fall out of step, silently mis-attributing every finding after them --
+    the sites list must stay exactly as long as self or the attribution is nonsense rather than
+    absent, and nonsense is the failure this file exists to refuse.
+    """
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self.sites: list[tuple[str, int] | None] = []
+        self.checks: list[str] = []
+        # Set by the caller around each check, so a finding can be attributed to the check that
+        # produced it without wrapping PLAN_CHECKS (which would break the identity assertions in
+        # tests/test_plan_consistency.py for the same reason cites() decorates at the `def`).
+        # A finding appended outside any check keeps the empty string.
+        self.current_check = ""
+
+    def _site(self, depth: int) -> tuple[str, int] | None:
+        try:
+            frame = sys._getframe(depth)
+        except (AttributeError, ValueError):  # pragma: no cover - non-CPython, or too shallow
+            # An interpreter without frame introspection loses the exact split and falls back to
+            # the estimate below. It must not lose the findings, so this is None, not an error.
+            return None
+        return (frame.f_code.co_filename, frame.f_lineno)
+
+    def append(self, item) -> None:
+        # depth 2: 0 is _site, 1 is this method, 2 is the check that called append.
+        self.sites.append(self._site(2))
+        self.checks.append(self.current_check)
+        super().append(item)
+
+    def extend(self, items) -> None:
+        # Materialised first: a generator consumed by super().extend() would leave the site and
+        # check lists short by however many items it yielded.
+        items = list(items)
+        site = self._site(2)
+        for _ in items:
+            self.sites.append(site)
+            self.checks.append(self.current_check)
+        super().extend(items)
+
+
+@functools.lru_cache(maxsize=8)
+def _emission_templates(filename: str) -> dict[int, tuple[int, str | None]]:
+    """Source line -> (the line the append starts on, the trailing string literal written there).
+
+    That trailing literal is the rule's own words. An f-string's constant parts are the sentence
+    the author wrote and its `{}` holes are the only instance-specific part, so the literal that
+    ENDS the expression is exactly the rationale that repeats. Recovering it from the source is
+    what makes the head/tail split exact rather than guessed.
+
+    The alternative -- taking the longest common suffix of the findings one site produced -- was
+    built first and measurably eats instance text. On the Tokyo plan it cut the venue-link rule at
+    the two characters every venue name in that group happened to end with, leaving a dashed line
+    that no longer named the venue: precisely the "bare pointer" failure this whole change is
+    against. That estimate survives below as the fallback for the few sites whose message is not a
+    single f-string, where nothing better is available.
+
+    Every line of a multi-line call maps to the same entry, because a frame's line number is the
+    line the call expression starts on under some interpreters and the line being executed under
+    others, and this must not depend on which.
+
+    Returns {} rather than raising when the source cannot be read or parsed -- a zipped skill, a
+    .pyc-only install, a syntax error introduced by an editor mid-save. The printer then falls
+    back to the estimate, which is fatter but still correct. A lint that refuses to run because it
+    could not read its own source would be a far bigger outage than a fatter report.
+    """
+    try:
+        source = Path(filename).read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=filename)
+    except (OSError, SyntaxError, ValueError, UnicodeDecodeError):  # pragma: no cover
+        return {}
+
+    index: dict[int, tuple[int, str | None]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr in ("append", "extend")
+                and isinstance(func.value, ast.Name) and func.value.id == "errors"):
+            continue
+        trailing = _trailing_literal(node.args[0]) if len(node.args) == 1 else None
+        for line in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+            index.setdefault(line, (node.lineno, trailing))
+    return index
+
+
+def _trailing_literal(expression: ast.AST | None) -> str | None:
+    """The constant text an appended message ends with, or None when it does not end in one.
+
+    None is a real answer and has to stay one. `errors.append(f"...{tail_chosen_above}")` ends in
+    a hole, and `errors.append("a" + b)` is not an f-string at all; guessing a literal for either
+    would put instance text into the rules table, where it would be printed once and dropped from
+    every other finding that fired the same rule. The caller falls back to the estimate instead.
+    """
+    node = expression
+    # cite() wraps a message to attach a narrower citation than the check's default; the message
+    # is its second argument, so look through it rather than at it.
+    while (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+           and node.func.id == "cite" and len(node.args) > 1):
+        node = node.args[1]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr) and node.values:
+        last = node.values[-1]
+        if isinstance(last, ast.Constant) and isinstance(last.value, str):
+            return last.value
+    return None
+
+
+def _estimated_tails(messages: list[str]) -> list[str]:
+    """A tail per message for a group whose source template could not be read.
+
+    Only suffixes that begin at a WORD START are considered, and that is the whole safety of the
+    estimate. The raw longest common suffix splits mid-word: findings about venues whose names all
+    end "店）" share those two characters, so the shared part begins inside the venue name and the
+    head that survives no longer says which venue -- the bare-pointer failure, arrived at from the
+    other direction. A whitespace boundary means every head ends on a whole word, so anything
+    unique to one finding stays on that finding's own line. A message with no whitespace at all
+    (a Chinese sentence) therefore shares nothing rather than being cut inside a name.
+
+    Greedy by bytes saved: repeatedly take the word-aligned suffix with the highest
+    (occurrences - 1) * length, assign it to every message that ends with it, and look again at
+    what is left. One site can emit two different sentences -- a branch that picks one of two
+    rationales before interpolating it -- and a single common suffix over the whole group would
+    collapse to the citation alone, so the clusters have to be found rather than assumed.
+
+    Messages with nothing to share get "": the caller prints those in full, which is what the
+    output did before any of this existed.
+    """
+    tails = [""] * len(messages)
+    remaining = set(range(len(messages)))
+    while len(remaining) > 1:
+        counts: dict[str, list[int]] = {}
+        for index in remaining:
+            message = messages[index]
+            seen: set[str] = set()
+            # Only the tail end of each message is a candidate. Every word start would make the
+            # candidate set quadratic in message length, and one check here already emits a
+            # kilobyte-and-a-half finding with a list embedded in it -- enough for a lint to
+            # start allocating megabytes over a report nobody reads. Nothing in this file writes
+            # a rationale anywhere near this long, so the bound costs no real dedupe.
+            first = max(0, len(message) - _MAX_ESTIMATED_TAIL)
+            for position in range(first, len(message)):
+                if position and not message[position - 1].isspace():
+                    continue
+                suffix = message[position:]
+                if suffix not in seen:
+                    seen.add(suffix)
+                    counts.setdefault(suffix, []).append(index)
+        best: tuple[int, int, str] | None = None
+        for suffix, owners in counts.items():
+            if len(owners) < 2:
+                continue
+            # Ties broken by length then by the text itself, so two runs of the same input print
+            # the same bytes -- a report that reorders itself cannot be diffed across a fix.
+            score = (len(owners) - 1) * len(suffix)
+            candidate = (score, len(suffix), suffix)
+            if best is None or candidate > best:
+                best = candidate
+        if best is None:
+            break
+        suffix = best[2]
+        owners = counts[suffix]
+        for index in owners:
+            tails[index] = suffix
+            remaining.discard(index)
+    return tails
+
+
+class Finding:
+    """One finding, split into what it says about this instance and what its rule says.
+
+    `head + tail` is the original string, byte for byte. That invariant is the whole defence
+    against this becoming a summary: nothing is reworded, nothing is dropped, and a reader given
+    the head and the rules table can reconstruct exactly what the old output printed.
+    """
+
+    __slots__ = ("message", "rule_id", "head", "tail")
+
+    def __init__(self, message: str, rule_id: str, head: str, tail: str) -> None:
+        self.message = message
+        # The check name is the rule id's prefix rather than a field of its own: one place for it
+        # means the two cannot disagree, and a second copy would only ever be read to confirm the
+        # first.
+        self.rule_id = rule_id
+        self.head = head
+        self.tail = tail
+
+
+def split_findings(findings: list[str],
+                   sites: list[tuple[str, int] | None] | None = None,
+                   checks: list[str] | None = None) -> list[Finding]:
+    """Attach a rule id to every finding and cut off the part of it that is the rule.
+
+    Accepts a plain list -- callers that did not use a FindingLog, and older tests -- and then
+    falls back to the estimate for everything, so this is never the reason a report fails to
+    print.
+
+    Two sites that end in the same sentence get the same rule id: same words, same rule, and the
+    reader should not be told twice that they need to read it. Sites in different checks stay
+    apart even then, because the check name is what the citation and the worklist are keyed on.
+    """
+    count = len(findings)
+    sites = list(sites) if sites is not None else [None] * count
+    checks = list(checks) if checks is not None else [""] * count
+    # A short sites/checks list would silently mis-attribute every finding past the end rather
+    # than fail, and mis-attribution here means printing one rule's rationale under another's id.
+    if len(sites) != count or len(checks) != count:
+        raise ValueError(
+            f"split_findings got {count} findings but {len(sites)} site(s) and {len(checks)} "
+            f"check name(s). They are parallel lists; a mismatch means some finding would be "
+            f"printed under another finding's rule.")
+
+    groups: dict[tuple[str, object], list[int]] = {}
+    for index in range(count):
+        site = sites[index]
+        anchor: object = None
+        if site is not None:
+            anchor = _emission_templates(site[0]).get(site[1], (site[1], None))[0]
+        groups.setdefault((checks[index], anchor), []).append(index)
+
+    tails: list[str] = [""] * count
+    for (_check, _anchor), members in groups.items():
+        site = sites[members[0]]
+        template = None
+        if site is not None:
+            template = _emission_templates(site[0]).get(site[1], (0, None))[1]
+        cuts = [_template_cut(findings[index], template) for index in members] if template else []
+        if template and all(cut is not None for cut in cuts):
+            for index, cut in zip(members, cuts):
+                tails[index] = findings[index][cut:]
+            continue
+        for index, tail in zip(members, _estimated_tails([findings[i] for i in members])):
+            tails[index] = tail
+
+    split: list[Finding] = []
+    for index in range(count):
+        tail = tails[index][_closing_punctuation(tails[index]):]
+        check = checks[index] or "check"
+        # A tail is the rule, so identical tails are one rule. With no tail there is nothing to
+        # hash, and the site stands in -- those findings are printed whole anyway, so the id only
+        # has to be unique within the run, not stable across edits.
+        material = tail if tail else f"@{sites[index]!r}"
+        rule_id = f"{check}#{hashlib.sha1(material.encode('utf-8')).hexdigest()[:8]}"
+        head = findings[index][:len(findings[index]) - len(tail)] if tail else findings[index]
+        split.append(Finding(findings[index], rule_id, head, tail))
+    return split
+
+
+def _closing_punctuation(tail: str) -> int:
+    """How many characters at the front of `tail` belong to the head instead.
+
+    A template's trailing literal starts wherever the last `{}` hole ended, which is usually just
+    INSIDE the punctuation that closes the value: the dining rule's literal begins "' has no
+    venue_hours", so cutting there leaves a head ending on an unclosed quote and a rule that opens
+    with a stray one. Moving a leading run of punctuation back to the head fixes both.
+
+    Only a run of non-alphanumeric characters, and only when whitespace (or the end) follows it,
+    so this can never move a word. "_url. Two options..." keeps its "_url." on the rule side
+    because a letter follows the underscore, which is the case that makes a naive "move the
+    punctuation" rule eat half a field name. CJK counts as alphanumeric to str.isalnum(), so a
+    Chinese rationale is never mistaken for punctuation.
+    """
+    length = 0
+    while length < len(tail) and not tail[length].isalnum() and not tail[length].isspace():
+        length += 1
+    if length and (length == len(tail) or tail[length].isspace()):
+        return length
+    return 0
+
+
+def _template_cut(message: str, template: str) -> int | None:
+    """Where `template` starts in `message`, or None if this message did not come from it.
+
+    Searched in the message MINUS its citation, because the citation is appended after the
+    f-string was rendered and is full of dots and slashes: a one-character template like "." would
+    otherwise match inside `references/booking-html-output.md` and cut the message in the middle
+    of its rationale. Anchored with endswith rather than a search, so a template that matches
+    anywhere other than the very end of the rendered message is refused instead of guessed at.
+    """
+    cut = message.rfind(_CITED)
+    body = message[:cut] if cut >= 0 else message
+    if not template or not body.endswith(template):
+        return None
+    return len(body) - len(template)
+
+
+# The longest tail the estimate will look for; see _estimated_tails.
+_MAX_ESTIMATED_TAIL = 2000
+
+# The tags that carry a rule from its first finding to the rest. Two different strings on purpose:
+# a reader who lands in the middle of the output and wants the rule can search for "R7, stated
+# here" and land on the one line that states it, which a single shared tag would not give them.
+_RULE_STATED_HERE = "[rule {tag}, stated here]"
+_RULE_STATED_ABOVE = "[rule {tag}, stated above]"
+_DEDUPE_LEGEND = (
+    'Rules are stated once. A finding tagged "[rule R1, stated here]" carries that rule\'s full '
+    'wording; later findings of the same rule print what is specific to them and carry '
+    '"[rule R1, stated above]" instead. Search for "R1, stated here" to read the rule. '
+    'Pass --json for the same findings with each rule listed once and a pointer per finding.'
+)
+
+
+def format_findings(split: list[Finding]) -> tuple[list[str], list[str]]:
+    """(legend lines, one line per finding) for the failure block, rule rationales stated once.
+
+    Every finding keeps its own line and its own instance text. Only a rule that fired more than
+    once is deduplicated, and only when suppressing its tail actually saves more than the
+    back-reference costs -- otherwise the finding prints exactly the bytes it printed before.
+
+    A finding whose head is blank is left whole as well, and the test is made per finding rather
+    than per rule. That happens when the rule's message has no interpolation at all, so the head
+    would be nothing but a tag and the reader would learn less than the old output told them.
+
+    A report where the whole scheme would not pay for itself prints byte-for-byte what it printed
+    before the scheme existed. A two-finding plan repeating one rule saves one tail and spends the
+    legend explaining how to read it, which came out 60 bytes WORSE on a real workspace plan --
+    and a "saving" that can make the output bigger is one nobody can reason about.
+    """
+    # Suppressing a tail is only worth it if the tail is longer than the back-reference that
+    # replaces it. Sized from the tags themselves rather than from numbers somebody picked, so
+    # they stay true if the wording changes.
+    repeat_cost = len(_RULE_STATED_ABOVE.format(tag="R99")) + 1
+    state_cost = len(_RULE_STATED_HERE.format(tag="R99")) + 1
+    legend_cost = len(_DEDUPE_LEGEND) + 3
+    seen: dict[str, int] = {}
+    for finding in split:
+        seen[finding.rule_id] = seen.get(finding.rule_id, 0) + 1
+
+    tags: dict[str, str] = {}
+    for finding in split:
+        if finding.rule_id in tags or seen[finding.rule_id] < 2:
+            continue
+        if len(finding.tail) <= repeat_cost:
+            continue
+        tags[finding.rule_id] = f"R{len(tags) + 1}"
+
+    saved = -legend_cost if tags else 0
+    counted: set[str] = set()
+    for finding in split:
+        if finding.rule_id not in tags:
+            continue
+        if finding.rule_id not in counted:
+            counted.add(finding.rule_id)
+            saved -= state_cost
+        elif finding.head.strip():
+            saved += len(finding.tail) - repeat_cost
+    if saved <= 0:
+        tags = {}
+
+    lines: list[str] = []
+    stated: set[str] = set()
+    for finding in split:
+        tag = tags.get(finding.rule_id)
+        if tag is None:
+            lines.append(finding.message)
+        elif finding.rule_id not in stated:
+            stated.add(finding.rule_id)
+            lines.append(f"{finding.message} {_RULE_STATED_HERE.format(tag=tag)}")
+        elif not finding.head.strip():
+            lines.append(finding.message)
+        else:
+            separator = "" if finding.head[-1:].isspace() else " "
+            lines.append(f"{finding.head}{separator}{_RULE_STATED_ABOVE.format(tag=tag)}")
+
+    legend = [_DEDUPE_LEGEND] if stated else []
+    return legend, lines
+
+
+# ----------------------------------------------------------------------------------------------
+# Where in the plan, not just what.
+#
+# The prose report tells an author WHAT is wrong and leaves them to open the plan and find WHERE.
+# Measured on this workspace: 15 saved plans run from 28,943 to 2,132,252 bytes, median 85,836 --
+# roughly 21.5k tokens to re-read a median plan, once per fix cycle, because the finding named a
+# venue and not a field. Every pointer below is derived from what the finding itself says and is
+# then required to RESOLVE against the plan in hand; one that does not resolve is dropped rather
+# than printed, because a pointer into a field that does not exist costs the same read it was
+# meant to save and teaches the author to stop trusting the field.
+
+_EXPLICIT_POINTER = re.compile(r"\$\.([^\s'\"]+)")
+_LEADING_POINTER = re.compile(r"^([^\s.\[\]]+(?:\[\d+\])*(?:\.[^\s.\[\]]+(?:\[\d+\])*)+)")
+_DAY_SEGMENT = re.compile(r"^day (\d+) segment (\d+)\b")
+_DAY_ONLY = re.compile(r"^day (\d+)\b")
+_QUOTED = re.compile(r"'([^']{2,})'|\"([^\"]{2,})\"")
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _day_pointer(plan: object, number: str) -> str | None:
+    """`days[i]` for the day the message calls "day N", found by the day's own number field.
+
+    Positional guessing (day 3 -> days[2]) is wrong the moment a plan numbers its days from
+    anything but 1, or a replan drops a day and leaves the numbers alone. Both are shapes this
+    repo has shipped, so the index is looked up rather than assumed.
+    """
+    for index, day in enumerate(_seq(_obj(plan).get("days"))):
+        if str(_obj(day).get("number")) == number:
+            return f"days[{index}]"
+    return None
+
+
+def _plan_value_locations(plan: object) -> dict[str, list[str]]:
+    """Every string in the plan, mapped to the pointers that hold it.
+
+    This is what turns "the venue link for 'X'" into a field: the finding quotes a value, and the
+    plan holds that value in exactly one place often enough to be worth looking. Values held in
+    more than one place are kept with all their pointers so the caller can see the ambiguity and
+    decline, rather than picking the first and being wrong half the time.
+
+    Short strings are skipped. A two-character value is a status code or a mode, matches
+    everywhere, and would only ever produce an ambiguous answer.
+    """
+    locations: dict[str, list[str]] = {}
+
+    def walk(node: object, pointer: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                # A key holding a dot or a bracket cannot be written in the pointer syntax
+                # resolve_pointer accepts, so its subtree is left out rather than given a path
+                # that would not resolve. Fewer pointers, never a wrong one.
+                if isinstance(key, str) and not set("[].").intersection(key):
+                    walk(value, f"{pointer}.{key}" if pointer else key)
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                walk(value, f"{pointer}[{index}]")
+        elif isinstance(node, str) and len(node) > 2 and pointer:
+            locations.setdefault(node, []).append(pointer)
+
+    walk(plan, "")
+    return locations
+
+
+def _refine_to_named_field(plan: object, pointer: str, text: str) -> str:
+    """Append the one field of `pointer`'s object that `text` names, if there is exactly one.
+
+    "origin='...' is free text" names `origin`, and pointing at the field beats pointing at the
+    segment that holds it. Exactly one, because a message that names two fields does not say
+    which one is wrong, and a pointer that picks the wrong one of two sends the author to a field
+    that is fine -- worse than the coarser pointer it replaced.
+    """
+    node: object = plan
+    for part in pointer.split("."):
+        step = _POINTER_STEP.match(part)
+        if not step or not isinstance(node, dict):
+            return pointer
+        node = node.get(step.group(1))
+        for index in _POINTER_INDEX.findall(step.group(2)):
+            if not isinstance(node, list) or int(index) >= len(node):
+                return pointer
+            node = node[int(index)]
+    if not isinstance(node, dict):
+        return pointer
+    words = set(_IDENTIFIER.findall(text))
+    named = [key for key in node if isinstance(key, str) and key in words]
+    return f"{pointer}.{named[0]}" if len(named) == 1 else pointer
+
+
+def pointer_for(text: str, plan: object, values: dict[str, list[str]] | None = None) -> str | None:
+    """A path into this plan for the thing the finding is about, or None if it does not name one.
+
+    None is a first-class answer and the caller prints it as such. An author who cannot tell "this
+    gate could not name a location" from "somebody forgot the field" is back to reading the whole
+    plan, which is the cost this exists to remove.
+
+    Candidates run most specific first and each one must resolve against the plan before it is
+    used. The value-derived candidate is additionally required to sit under the day the finding
+    names: an exact string match somewhere else in the plan contradicts the finding's own words,
+    and the finding's words win.
+    """
+    if not isinstance(text, str) or not text:
+        return None
+
+    explicit = _EXPLICIT_POINTER.search(text)
+    if explicit:
+        # A pointer quoted mid-sentence carries the sentence's punctuation with it. No pointer
+        # ends in one of these, so trimming them cannot shorten a real path.
+        quoted = explicit.group(1).rstrip(".,;:)")
+        if resolve_pointer(plan, quoted):
+            return quoted
+
+    base: str | None = None
+    leading = _LEADING_POINTER.match(text)
+    if leading and resolve_pointer(plan, leading.group(1)):
+        base = leading.group(1)
+    if base is None:
+        day_segment = _DAY_SEGMENT.match(text)
+        day_only = _DAY_ONLY.match(text)
+        if day_segment:
+            day = _day_pointer(plan, day_segment.group(1))
+            candidate = f"{day}.route.segments[{int(day_segment.group(2)) - 1}]" if day else None
+            if candidate and resolve_pointer(plan, candidate):
+                base = candidate
+            elif day and resolve_pointer(plan, day):
+                base = day
+        elif day_only:
+            day = _day_pointer(plan, day_only.group(1))
+            if day and resolve_pointer(plan, day):
+                base = day
+
+    if values is None:
+        values = _plan_value_locations(plan)
+    for match in _QUOTED.finditer(text):
+        quoted = match.group(1) or match.group(2)
+        held = values.get(quoted)
+        if not held or len(held) != 1:
+            continue
+        owner = held[0].rsplit(".", 1)[0] if "." in held[0] else held[0]
+        if base is not None and not owner.startswith(base):
+            continue
+        if resolve_pointer(plan, owner):
+            return _refine_to_named_field(plan, owner, text)
+
+    if base is not None:
+        return _refine_to_named_field(plan, base, text)
+    return None
+
+
+def json_report(split: list[Finding], notes: list[str], plan: object,
+                ok: bool, extra: dict | None = None) -> str:
+    """The same findings, addressed to a model that would otherwise re-read the plan to place them.
+
+    `message` is the finding's own instance text and `rules[rule_id]` is its rule, stated once for
+    however many findings hit it -- verbatim, including the citation. Concatenating them gives
+    back the exact line the prose report prints, which is the property that keeps this from
+    quietly becoming a summary: the reasoning is what lets a reader generalise to the case the
+    rule never enumerated, so it is carried, not compressed.
+
+    `notes` rides along because the prose report prints notes and one of them is the NOT VERIFIED
+    warning. A --json mode that dropped it would let a caller who switched modes call an unchecked
+    plan clean, which is the exact disarm this script's own history is made of.
+    """
+    values = _plan_value_locations(plan) if split else {}
+    rules: dict[str, str] = {}
+    # Named `entries`, not `findings`: tests/test_packaging.py takes an AST census of every
+    # `findings.append(...)` in the two gates that cite per call site and requires each one to be
+    # a cite() call. This list holds JSON records rather than findings, and a sink name that lies
+    # to that census would either fail it or teach the next person to widen it.
+    entries: list[dict] = []
+    for finding in split:
+        rules.setdefault(finding.rule_id, finding.tail)
+        entries.append({
+            "rule_id": finding.rule_id,
+            "pointer": pointer_for(finding.head or finding.message, plan, values),
+            "message": finding.head,
+        })
+    payload = {"ok": ok, "findings": entries, "rules": rules, "notes": list(notes)}
+    if extra:
+        payload.update(extra)
+    return json_document(payload)
+
+
+def json_document(payload: dict) -> str:
+    """`payload` as JSON with one line per finding and one per rule.
+
+    Measured on the Tokyo plan: 35,663 bytes at indent=2 against 32,736 this way, because a
+    pretty-printer spends four lines and twenty spaces of indentation on every finding. A single
+    line also means a finding can be quoted, grepped and diffed as a unit, which the one-giant-
+    line alternative (32,117 bytes) gives up for another 600.
+
+    Hand-assembled JSON is exactly the kind of thing that ships subtly invalid, so the result is
+    parsed before it is returned. A failure falls back to the standard encoder rather than taking
+    the gate down -- the caller asked for machine-readable output and must get it -- but says so
+    on stderr, because a formatter quietly disagreeing with itself is worth knowing about.
+    """
+    lines = ["{"]
+    items = list(payload.items())
+    for position, (key, value) in enumerate(items):
+        comma = "," if position < len(items) - 1 else ""
+        prefix = f"  {json.dumps(key, ensure_ascii=False)}: "
+        if isinstance(value, list) and value:
+            body = ",\n".join(f"    {json.dumps(item, ensure_ascii=False)}" for item in value)
+            lines.append(f"{prefix}[\n{body}\n  ]{comma}")
+        elif isinstance(value, dict) and value:
+            body = ",\n".join(
+                f"    {json.dumps(name, ensure_ascii=False)}: {json.dumps(item, ensure_ascii=False)}"
+                for name, item in value.items())
+            lines.append(f"{prefix}{{\n{body}\n  }}{comma}")
+        else:
+            lines.append(f"{prefix}{json.dumps(value, ensure_ascii=False)}{comma}")
+    lines.append("}")
+    text = "\n".join(lines)
+    try:
+        json.loads(text)
+    except ValueError as exc:  # pragma: no cover - a formatter bug, not an input problem
+        print(f"WARNING: the compact JSON writer produced text json.loads rejected ({exc}); "
+              f"falling back to the standard encoder.", file=sys.stderr)
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    return text
+
+
+def json_refusal(rule_id: str, message: str) -> str:
+    """A --json body for a run that was refused before it could read the plan.
+
+    A caller that adds --json to every invocation gets JSON from every exit, including the ones
+    that used to be a bare stderr line. Anything else makes the flag unusable in a wrapper: the
+    one run that fails is the one whose output cannot be parsed.
+    """
+    return json_document(
+        {"ok": False,
+         "findings": [{"rule_id": rule_id, "pointer": None, "message": message}],
+         "rules": {rule_id: ""},
+         "notes": []})
+
+
+def run_plan_checks(plan: dict) -> tuple[FindingLog, list[str], list[str]]:
+    """Run every check over `plan`, surviving a check that raises.
+
+    A crashing check used to take the whole gate down with a traceback, which loses every other
+    check's findings and hands the operator a broken tool instead of a plan to fix.
+    The traceback is still printed in full -- this is not a swallow -- but the crash is also
+    recorded as a finding so it is visible in whichever form the caller asked for, and the caller
+    exits 2 rather than 1 so "the gate could not finish" never reads as "the plan is wrong".
+    """
+    errors = FindingLog()
+    notes: list[str] = []
+    crashed: list[str] = []
+    for check in PLAN_CHECKS:
+        errors.current_check = check.__name__
+        try:
+            check(plan, errors, notes)
+        except Exception as exc:  # noqa: BLE001 - reported, not swallowed; see the docstring
+            traceback.print_exc(file=sys.stderr)
+            crashed.append(check.__name__)
+            errors.append(
+                f"{check.__name__} raised {type(exc).__name__}: {exc}. The check could not finish, "
+                f"so whatever it enforces was NOT enforced on this plan and the findings below are "
+                f"incomplete. The traceback is on stderr.")
+    errors.current_check = ""
+    return errors, notes, crashed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("plan", help="Plan JSON path")
@@ -3957,7 +4628,26 @@ def main() -> int:
                              "the gap instead of leaving a silent exit 0.")
     parser.add_argument("--emit-walking", action="store_true",
                         help="Print computed per-day walking totals and exit 0")
+    parser.add_argument("--json", action="store_true",
+                        help="Print the findings as JSON on stdout instead of prose on stderr: "
+                             "{ok, findings:[{rule_id, pointer, message}], rules:{rule_id: the "
+                             "rule's own wording, stated once}, notes}. `pointer` is a path into "
+                             "this plan (days[0].dining[1].venue_hours) that has been checked to "
+                             "resolve, or null when the finding names no location -- null means "
+                             "this gate could not place it, not that the field is missing. Exit "
+                             "codes are unchanged. Every exit prints JSON, including the refusals "
+                             "above, so a wrapper can parse every run.")
     args = parser.parse_args()
+
+    def refuse(rule_id: str, message: str) -> None:
+        """Print a pre-check refusal in whichever form the caller asked for.
+
+        stderr keeps the prose either way. A caller reading stderr for the reason and stdout for
+        the JSON gets both, and neither reader has to know which mode the other is in.
+        """
+        print(message, file=sys.stderr)
+        if args.json:
+            print(json_refusal(rule_id, message))
 
     # Same shape as check_shortlist_consistency.py's --intake/--no-intake pair and
     # save_trip_deliverables.py's --verification/--unverified pair, and for the same reason.
@@ -3984,64 +4674,73 @@ def main() -> int:
         # asked for nothing. Saying "no --verification" to someone who wrote --verification sends
         # them looking in the wrong place, so name what actually arrived.
         if args.verification is not None and not str(args.verification).strip():
-            print(
+            refuse(
+                "cli.empty_verification_path",
                 "ERROR: --verification was given an empty path. That is what an unset shell "
                 "variable expands to, so the report you meant to pass is not the one that "
-                "arrived. Pass the report JSON, or pass --no-verification-yet deliberately.",
-                file=sys.stderr)
+                "arrived. Pass the report JSON, or pass --no-verification-yet deliberately.")
             return 1
         # Both flags at once is a contradiction, not a preference order. The shortlist's version
         # silently lets --intake win; here it is refused, because the only way to write both is a
         # caller that appends the waiver unconditionally, and that caller would go on "passing"
         # forever with whatever report it also happened to hand over.
         if args.verification and args.no_verification_yet:
-            print(
+            refuse(
+                "cli.contradictory_verification_flags",
                 "ERROR: --verification and --no-verification-yet are mutually exclusive. One says "
-                "the report exists and the other says it does not. Pass whichever is true.",
-                file=sys.stderr)
+                "the report exists and the other says it does not. Pass whichever is true.")
             return 1
         if not args.verification and not args.no_verification_yet:
-            print(
+            refuse(
+                "cli.missing_verification",
                 "ERROR: No --verification. Pass the verification report JSON produced by the "
                 "parallel-verify stage in references/verification.md, or pass "
                 "--no-verification-yet to run the plan checks without it and record the gap. "
                 "Without it the checks that read the report do not run at all: a report missing "
                 "a required domain, an audit, or a resolvable pointer -- or one written for a "
                 "different plan entirely -- reports clean on exactly the run that motivated "
-                "them.",
-                file=sys.stderr)
+                "them.")
             return 1
 
     try:
         plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - surfaced verbatim to the operator
-        print(f"ERROR: could not read plan JSON: {exc}", file=sys.stderr)
+        refuse("cli.unreadable_plan", f"ERROR: could not read plan JSON: {exc}")
         return 2
 
     if not isinstance(plan, dict):
-        print(f"ERROR: plan JSON must be an object, got {type(plan).__name__}.", file=sys.stderr)
+        refuse("cli.plan_not_an_object",
+               f"ERROR: plan JSON must be an object, got {type(plan).__name__}.")
         return 2
 
     if args.emit_walking:
+        # --json is honoured here too rather than refused. A wrapper that appends the flag to
+        # every gate call would otherwise get prose from exactly one of them, which is how a
+        # caller ends up parsing output it cannot parse.
+        walking = []
         for day in [_obj(d) for d in _seq(plan.get("days"))]:
             minutes, km = walking_totals(day)
             on_foot = activity_on_foot_minutes(day)
+            walking.append({"day": day.get("number"), "date": day.get("date"),
+                            "minutes": minutes, "km": km, "on_foot_minutes": on_foot})
+            if args.json:
+                continue
             # Appended only when the plan carries it, so the line an existing plan prints is
             # byte-for-byte what it printed before.
             extra = f" (+{on_foot} min on foot inside activities)" if on_foot else ""
             print(f"day {day.get('number')} ({day.get('date')}): {minutes} min / {km} km{extra}")
+        if args.json:
+            print(json_report([], [], plan, True, extra={"walking": walking}))
         return 0
 
-    errors: list[str] = []
-    notes: list[str] = []
-    for check in PLAN_CHECKS:
-        check(plan, errors, notes)
+    errors, notes, crashed = run_plan_checks(plan)
 
     if args.verification:
         try:
             report = json.loads(Path(args.verification).read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001
-            print(f"ERROR: could not read verification report: {exc}", file=sys.stderr)
+            refuse("cli.unreadable_verification",
+                   f"ERROR: could not read verification report: {exc}")
             return 2
         # The plan gets this guard two screens up and the report did not, which mattered because
         # check_verification opens with `_obj(report)`: a report that is a bare list -- a hand-
@@ -4050,12 +4749,15 @@ def main() -> int:
         # domain. Eight findings that all name the wrong problem, on a report whose contents were
         # fine. Name the shape instead; the domains are not missing, the object around them is.
         if not isinstance(report, dict):
-            print(f"ERROR: verification report JSON must be an object, got "
-                  f"{type(report).__name__}. A bare list of domain blocks is not a report -- wrap "
-                  f"it as {{\"checked_at\": ..., \"plan\": ..., \"domains\": [...], "
-                  f"\"audits\": [...]}}; see templates/verification-report.json.", file=sys.stderr)
+            refuse("cli.verification_not_an_object",
+                   f"ERROR: verification report JSON must be an object, got "
+                   f"{type(report).__name__}. A bare list of domain blocks is not a report -- wrap "
+                   f"it as {{\"checked_at\": ..., \"plan\": ..., \"domains\": [...], "
+                   f"\"audits\": [...]}}; see templates/verification-report.json.")
             return 2
+        errors.current_check = check_verification.__name__
         check_verification(report, errors, notes, plan=plan, plan_path=args.plan)
+        errors.current_check = ""
     elif args.no_verification_yet:
         # Printed here, before the notes and before any finding, and printed to stderr as well as
         # carried in notes. Those are two different readers: the note loop below writes to stdout
@@ -4076,15 +4778,28 @@ def main() -> int:
             "present it, and do not call it verified. Pass --verification <report.json> to arm "
             "the check.")
 
+    # A check that raised did not enforce whatever it enforces, so the run is incomplete whether
+    # or not anything else fired. Exit 2 -- the code this script already uses for "could not run"
+    # -- keeps that distinct from exit 1, "the plan is wrong".
+    status = 2 if crashed else (1 if errors else 0)
+
+    if args.json:
+        print(json_report(split_findings(errors, errors.sites, errors.checks), notes, plan,
+                          ok=not errors and not crashed))
+        return status
+
     for note in notes:
         print(f"note: {note}")
     if errors:
         print("PLAN CONSISTENCY FAILED", file=sys.stderr)
-        for error in errors:
-            print(f"- {error}", file=sys.stderr)
-        return 1
+        legend, lines = format_findings(split_findings(errors, errors.sites, errors.checks))
+        for line in legend:
+            print(f"({line})", file=sys.stderr)
+        for line in lines:
+            print(f"- {line}", file=sys.stderr)
+        return status
     print("PLAN CONSISTENCY OK")
-    return 0
+    return status
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ sequentially costs five times the wall-clock and, worse, spreads one agent's att
 five domains until each gets a fifth of it. That is how a dinner gets scheduled at a closed
 restaurant: not from ignorance, but from attention already spent elsewhere.
 
+<a id="verify-domains"></a>
 ## Run the five domains concurrently — plus the two auditors
 
 Always all five, always in one fan-out, and always with the two network-free auditors described
@@ -64,10 +65,14 @@ interesting at that moment — which is how a dinner ends up booked at a restaur
 17:00. Five sequential focused passes preserve that benefit entirely and cost only time. Five
 domains crammed into one prompt do not, however fast they return.
 
+<a id="prompt-shape"></a>
 ### Prompt shape
 
-Each verifier gets the plan path and this instruction. The default must be doubt, because an
-agent asked to "check" a claim tends to find support for it:
+Each verifier gets **its own domain slice** of the plan — `python scripts/plan_slice.py <plan.json>
+--domain <name>`, which writes `slices/<plan-stem>.slice-<name>.json` beside the plan — and this
+instruction. Hand over that path, not the plan's, and read [the slice](#plan-slice) below for what
+it does and does not remove. The default must be doubt, because an agent asked to "check" a claim
+tends to find support for it:
 
 > Be adversarial: try to **refute** each claim. Use official sources — government, transit
 > agency, operator, airline — over aggregators and blogs. If a fact cannot be confirmed from a
@@ -82,6 +87,63 @@ Add two auditors alongside the five, in the same fan-out — they need no networ
 - **completeness** — "what is missing?" Which stated preference is served only by a token
   anchor, which hard constraint is asserted but never measured, which collected field never
   reaches the page.
+
+<a id="plan-slice"></a>
+### The slice each verifier reads
+
+`scripts/plan_slice.py <plan.json> --domain <name>` writes a projection of the plan for one of the
+five domains and prints exactly which top-level blocks it removed. It removes nothing else: kept
+blocks are byte-identical and in their original order, so a `claims_checked` pointer into one of
+them resolves against the real plan too, which is what the gate will check.
+
+The five domains **do not partition the plan**, and the table above is prose, not a schema. So the
+tool subtracts rather than selects: `trip`, `days` and `budget` are kept unconditionally, a block
+is dropped only where that domain's row cannot be answered from any field in it, and a top-level
+key the tool has never seen is kept and reported. Building it the other way round — an allow-list
+per domain — takes `days` away from `booking_and_lodging`, which needs it to answer where the
+traveller is when the seats go on sale, and takes the flight cards away from `entry`, which needs
+them for the connection airports.
+
+**Accept the smaller saving; it is not the same size on every plan.** Measured 2026-08-30 across
+the 15 plans in one real workspace, five domains each:
+
+- On the median plan (85,836 bytes) the slices come out 3.3%–7.4% smaller. That is the ordinary
+  case, and most of what a domain does not read is small.
+- On the largest plan (2,132,252 bytes) they come out ~96% smaller, because that plan carries an
+  `imagery` block of base64 photographs and no truth domain reads a photograph. On a plan like
+  that, five verifiers reading the plan is the dominant line in the ~700k this pass costs.
+- 13 of those 75 slices come out **larger** than the plan: all five domains on each of the two
+  smallest plans, and single domains on two more. A small plan carries almost none of the
+  droppable blocks, so all that is left is the tool's own provenance header. It says so, in
+  those words, and when it does, hand that domain the plan path instead.
+
+What is *kept* is the part worth understanding, because each one was an argument someone lost.
+`booking_options` stays in all five: `sights_and_hours` needs the timed-entry rules on the ticket
+cards, `entry` needs the connection airports on the flight cards, and `seasonality` needs it
+because 3 of those 15 plans state a **sunset or daylight fact inside `booking_options`** — twice
+on a flight card, as the stated reason for preferring one flight over another. `sources` stays in all five because the first move
+in refuting a claim is opening the source the plan leaned on, and dropping entries from it would
+renumber `sources[n]` and break pointers. `destination_experience_anchors` stays for `seasonality`
+because 2 of those 15 plans state a season-dependent fact inside `why_it_matters` — a winter
+closing time in one, a January sea temperature in the other.
+
+Two rules for using it:
+
+1. **If a claim you need is not in the slice, open the full plan** — its path and SHA-256 are in
+   the file's `plan_slice` header — and say so in your findings. Reporting `unverifiable` because
+   a block was projected away would turn a token saving into a defect, which is the one way this
+   change can make the pass worse.
+2. **Never hand a slice to `check_plan_consistency.py`, and never slice the two auditors.** The
+   gate reads the whole plan. So do `consistency` and `completeness`: every question they ask
+   compares two parts of the plan to each other, so a block removed from the file is
+   indistinguishable from a block the plan never had. The tool refuses their names for that
+   reason rather than with a usage error.
+
+Slices land in `slices/` beside the plan rather than in `plans/` itself, and that is not tidiness:
+`audit_workspace.py` recognises a plan by its *shape* — a `days` list and a `trip` key, which every
+slice has — over a non-recursive `plans/*.json` glob, so five slices dropped in there become five
+extra "plans" in every later audit, each reported as an itinerary missing blocks it never had.
+Point `--out` somewhere else if you like; the tool warns when you aim it back at `plans/`.
 
 ## Merging: the part that is not automatic
 

@@ -48,6 +48,33 @@ CONTRACT_FIELDS = {
 }
 
 
+# Files removed on purpose, each with the reason, because this repository had nowhere to write
+# one down. A deletion and an accident look identical in a tree: the file is simply not there, and
+# the next author who misses it restores it in good faith. `CHECKS_WITHOUT_A_REFERENCE` already
+# established the shape of the answer for gate checks -- an explicit entry carrying a reason, so
+# that silence is never mistaken for a decision -- and this is that idiom applied to files.
+#
+# Entries stay forever; this is a register, not a to-do list. Removing one re-opens the question.
+DELETED_ON_PURPOSE = {
+    "assets/final-trip-template.html": (
+        "A hand-assembly starting point in a skill that forbids hand assembly. SKILL.md's "
+        "final-delivery gate says 'Never hand the traveller a page you assembled yourself', "
+        "because every check here is a script and a script runs only when it is called, so a "
+        "hand-written page bypasses all of them and otherwise looks identical. The file was "
+        "offered as 'the structural starting point' in a sentence that then told the reader to "
+        "prefer the renderer instead, which is advice arguing with itself. Nothing loaded it: no "
+        "script referenced it (the two intake servers reach assets/ by pathlib, for the two forms "
+        "they serve), and it was named only in SKILL.md and references/booking-html-output.md, "
+        "both pointing at the path this skill refuses to take. Run through its own validator with "
+        "the manual flags it allows, the file was INVALID -- exit 1, and among the findings, "
+        "unsupported booking type '{{booking_type}}', map links that are not directions URLs, a "
+        "missing verification banner, and 'Final HTML still contains a template token or TODO'. "
+        "The renderer emits the same structure and is gated; the JSON contract carries the "
+        "fields. Neither job needed this file. Deleted deliberately at 2.4.0; git history holds "
+        "it at 64b8b34 if the shape is ever wanted again."),
+}
+
+
 def dig(plan: dict, path: str):
     node = plan
     for part in filter(None, path.split(".")):
@@ -96,6 +123,42 @@ def main() -> int:
     for target in sorted(referenced):
         if not (ROOT / target).exists():
             failures.append(f"SKILL.md references {target}, which does not exist")
+
+    # 2b. The other direction of check 2, and the one nothing was watching: a file deleted on
+    #     purpose must stay deleted, and must stay unmentioned.
+    #
+    #     Check 2 catches a pointer to a file that is gone. It cannot catch the opposite repair,
+    #     which is the likelier one -- an author meets a reference to a file that does not exist,
+    #     assumes the deletion was the mistake, and restores the file from git. That reading is
+    #     reasonable, and here it would be wrong, so the reason is written in DELETED_ON_PURPOSE
+    #     and this check makes it unmissable rather than leaving it to be rediscovered.
+    #
+    #     Both halves are asserted because either alone is passable while the intent is defeated.
+    #     Restoring the file with no pointer leaves dead weight in the package that the next
+    #     reader takes for something shipped; adding a pointer back without the file trips check 2
+    #     with a message about a missing file, which invites exactly the wrong repair. The reason
+    #     is required to be substantial for the same motive check 5c has: an entry with an empty
+    #     string in it is a deletion nobody explained, which is the state this register exists to
+    #     end.
+    for path, reason in sorted(DELETED_ON_PURPOSE.items()):
+        if len(reason.split()) < 12:
+            failures.append(
+                f"DELETED_ON_PURPOSE[{path!r}] gives no real reason. Write why the file was "
+                f"removed and what replaced it; a bare entry is the silence this register "
+                f"replaces.")
+        if (ROOT / path).exists():
+            failures.append(
+                f"{path} is back, but it was deleted on purpose. If restoring it is right, delete "
+                f"its DELETED_ON_PURPOSE entry in the same change and say why the reason no "
+                f"longer holds. The recorded reason was: {reason}")
+        pointing = [name for name, text in (("SKILL.md", skill),) + tuple(
+            (ref.relative_to(ROOT).as_posix(), ref.read_text(encoding="utf-8"))
+            for ref in sorted((ROOT / "references").glob("*.md"))) if path in text]
+        if pointing:
+            failures.append(
+                f"{', '.join(pointing)} still points at {path}, which was deleted on purpose, so "
+                f"a reader is sent to a file that is not shipped. The recorded reason was: "
+                f"{reason}")
 
     # 3. A reference file with no pointer in SKILL.md is unreachable, which is indistinguishable
     #    from having deleted it -- the model never learns it should be read.

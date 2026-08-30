@@ -94,6 +94,19 @@ with headroom for the orchestrator. Also:
 - **Never let an agent silently exhaust the shared quota.** Tell it the cap and tell it to report
   what it could not check rather than spending past it. An unchecked fact that says so is a
   finding; an unchecked fact that does not is a defect.
+- **Send a path, never a file of this skill's prose.** An agent's prompt is its domain, its cap,
+  its named sources, its return schema, and a *path* to any artifact it needs — the plan, its
+  domain slice, a scratch file a sibling wrote. The agent can open a path if it needs it and skip
+  it if it does not; a paste is paid for in every prompt whether it is read or not, and it is the
+  largest line in this budget that nothing above measures. Measured 2026-08-30,
+  [booking-html-output.md](booking-html-output.md) is 42,639 bytes — roughly 10.7k tokens at the
+  ~4 bytes-per-token ratio `scripts/check_plan_consistency.py` already uses for a plan. The rough
+  target below contemplates 13 agents (3 feasibility + 3 design + 5 domains + 2 auditors), so
+  pasting that one reference into each of them is ≈139k tokens of prompt before a single search,
+  and the six research agents' share alone, ≈64k, is close to a third of the ≈220k those six cost
+  in total. The exception is content the agent must apply **verbatim** — the adversarial
+  instruction in [verification.md](verification.md#prompt-shape), a provider's coordinate-order
+  rule — and that travels as the sentence, not as its file.
 
 ## 4. Bound the schema
 

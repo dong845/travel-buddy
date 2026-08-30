@@ -48,6 +48,15 @@ def run(plan: dict, verification: dict | None = None) -> tuple[int, str]:
     shells out -- a handful of times instead of seventy. This helper reproduces main()'s output
     format exactly (notes to stdout, "PLAN CONSISTENCY FAILED" plus dashed errors to stderr) so
     every existing assertion, which matches on those strings, keeps testing what it always did.
+
+    "Exactly" now includes the rule-deduplication main() applies before printing: a rule that
+    fires more than once states its rationale on the first finding and back-references it on the
+    rest. Reproducing that here rather than printing the raw list is the whole point of the
+    helper -- a harness that rebuilt the OLD format would let every needle below keep passing
+    against output no CLI run produces, which is the drift this docstring exists to prevent. The
+    findings themselves are untouched, so a needle that names a venue, a value or a field still
+    matches; a needle that reaches for a rule's rationale now has to find it where a reader would,
+    on that rule's first finding.
     """
     # main() rejects a non-object plan before any check sees it, and one case below depends on
     # that: a plan that is a list must exit 2 with an ERROR line rather than reaching a check and
@@ -57,18 +66,25 @@ def run(plan: dict, verification: dict | None = None) -> tuple[int, str]:
     if not isinstance(plan, dict):
         return 2, f"ERROR: plan JSON must be an object, got {type(plan).__name__}.\n"
 
-    errors: list[str] = []
-    notes: list[str] = []
-    for check in CHECKER_MODULE.PLAN_CHECKS:
-        check(plan, errors, notes)
+    # run_plan_checks(), not a bare loop: it is what main() calls, it is what records the emission
+    # site each finding came from, and it is what survives a check that raises. A loop here would
+    # be a second implementation of the thing under test.
+    errors, notes, crashed = CHECKER_MODULE.run_plan_checks(plan)
     if verification is not None:
+        errors.current_check = CHECKER_MODULE.check_verification.__name__
         CHECKER_MODULE.check_verification(
             verification, errors, notes, plan=plan, plan_path="plan.json")
+        errors.current_check = ""
+    status = 2 if crashed else (1 if errors else 0)
     out = "".join(f"note: {note}\n" for note in notes)
     if errors:
-        out += "PLAN CONSISTENCY FAILED\n" + "".join(f"- {e}\n" for e in errors)
-        return 1, out
-    return 0, out + "PLAN CONSISTENCY OK\n"
+        legend, lines = CHECKER_MODULE.format_findings(
+            CHECKER_MODULE.split_findings(errors, errors.sites, errors.checks))
+        out += "PLAN CONSISTENCY FAILED\n"
+        out += "".join(f"({line})\n" for line in legend)
+        out += "".join(f"- {line}\n" for line in lines)
+        return status, out
+    return status, out + "PLAN CONSISTENCY OK\n"
 
 
 def cli_contract_cases(base: dict) -> list[str]:
@@ -1514,6 +1530,329 @@ def verification_banner_cases(base: dict) -> list[str]:
     if "Not fact-checked" in zh_page or "skipped the five-domain" in zh_page:
         failures.append("banner: renderer English leaked onto the Chinese page")
 
+    return failures
+
+
+def repeated_rule_plan(base: dict, count: int = 6) -> dict:
+    """A plan that trips one rule `count` times, each time about a different venue.
+
+    The fixture is clean by construction, so a report with anything to deduplicate has to be
+    built. Every part of these names is chosen to make the test adversarial rather than
+    decorative. They END with the same characters, which is what real workspace venue names do
+    ("...（当日择店）") and what makes a naive longest-common-suffix split cut INSIDE the name; the
+    unique ASCII token in the middle makes "did this finding's own text survive" decidable; and
+    the CJK makes it decidable for a language with no spaces, which is the half of the workspace a
+    whitespace-shaped rule would quietly get wrong.
+
+    Verified adversarial rather than assumed: removing the word-start rule from the estimate makes
+    the case below report 9 lost tokens, and removing the closing-punctuation move makes it report
+    5. A probe that passes no matter what the code does is not a test.
+    """
+    plan = copy.deepcopy(base)
+    template = copy.deepcopy(plan["days"][0]["dining"][0])
+    stops = []
+    for index in range(count):
+        stop = copy.deepcopy(template)
+        stop["meal"] = ("breakfast", "lunch", "dinner")[index % 3]
+        stop["venue_name"] = f"测试餐厅UniqueVenueToken{index}号（当日择店）"
+        stop["venue_hours"] = ""
+        stops.append(stop)
+    plan["days"][0]["dining"] = stops
+    return plan
+
+
+def dedupe_cases(base: dict) -> list[str]:
+    """The rule rationale is printed once; everything each finding says for itself survives.
+
+    The property under test is NOT a byte count. It is that suppressing a repeated rationale
+    cannot cost the reader anything only that finding said -- because a report that saves bytes by
+    dropping which venue is broken sends the author back into the plan, which costs more than it
+    saved. Tokens rather than raw substrings, and the difference is worth stating: a substring
+    that STRADDLES the cut (the end of the venue name plus the first words of the rule) is by
+    construction split across two printed lines, and no deduplication scheme of any shape can keep
+    it contiguous. Both halves are printed; only the join is not. Every token, on either side of
+    the cut, must still be there.
+    """
+    failures: list[str] = []
+    plan = repeated_rule_plan(base)
+    errors, notes, crashed = CHECKER_MODULE.run_plan_checks(plan)
+    if crashed:
+        return [f"dedupe: the probe plan crashed {crashed}, so nothing below was tested"]
+    split = CHECKER_MODULE.split_findings(errors, errors.sites, errors.checks)
+    legend, lines = CHECKER_MODULE.format_findings(split)
+    printed = "\n".join(legend + lines)
+
+    if len(lines) != len(errors):
+        failures.append(f"dedupe: {len(errors)} findings printed as {len(lines)} lines; every "
+                        f"finding must keep its own dashed line")
+
+    repeated = [f for f in split if sum(1 for g in split if g.rule_id == f.rule_id) > 1]
+    if not repeated:
+        failures.append("dedupe: the probe plan produced no repeated rule, so this case proved "
+                        "nothing -- rebuild it until one rule fires more than once")
+    if not legend:
+        failures.append("dedupe: a report with a repeated rule printed no legend, so a reader "
+                        "landing on a back-reference has nothing telling them what it means")
+
+    counts: dict[str, int] = {}
+    for message in errors:
+        for token in set(message.split()):
+            counts[token] = counts.get(token, 0) + 1
+    lost = sorted(token for token, seen in counts.items() if seen == 1 and token not in printed)
+    if lost:
+        failures.append(f"dedupe: {len(lost)} token(s) appear in exactly one finding and in none "
+                        f"of the printed lines: {lost[:5]}")
+
+    for finding in split:
+        if finding.head + finding.tail != finding.message:
+            failures.append(f"dedupe: head+tail does not rebuild the finding: {finding.head!r} + "
+                            f"{finding.tail!r}")
+            break
+
+    # The scheme must never make a report bigger. A legend costs bytes whether or not the
+    # deduplication it explains earns them back, and a "saving" that can go negative is one
+    # nobody can reason about.
+    plain = "\n".join(f.message for f in split)
+    if len(printed) >= len(plain):
+        failures.append(f"dedupe: printing {len(printed)} bytes where the undeduplicated report "
+                        f"is {len(plain)} -- the repeated rule was not suppressed")
+
+    # A report with nothing to share must come out byte-identical to what it printed before any of
+    # this existed, or every clean-ish run pays for a feature it does not use.
+    single = copy.deepcopy(base)
+    single["days"][0]["dining"][0]["venue_hours"] = ""
+    errors, _notes, _crashed = CHECKER_MODULE.run_plan_checks(single)
+    split = CHECKER_MODULE.split_findings(errors, errors.sites, errors.checks)
+    legend, lines = CHECKER_MODULE.format_findings(split)
+    if legend or lines != list(errors):
+        failures.append("dedupe: a report with no repeated rule was rewritten anyway; it must be "
+                        "byte-identical to the plain finding list")
+    return failures
+
+
+def rule_split_cases() -> list[str]:
+    """The head/tail cut, on the inputs that break a scheme tuned to one example.
+
+    Empty, one finding, wrong-type, CJK with no spaces, and parallel lists that do not line up.
+    The last one has to RAISE: a short sites list would print one rule's rationale under another
+    rule's id, and a wrong attribution is worse than a missing one because it reads as an answer.
+    """
+    failures: list[str] = []
+    module = CHECKER_MODULE
+
+    if module.split_findings([]) != []:
+        failures.append("split: an empty finding list must split to an empty list")
+    if module.format_findings([]) != ([], []):
+        failures.append("split: an empty split must print nothing at all")
+
+    lone = module.split_findings(["day 1: something is wrong."])
+    if len(lone) != 1 or lone[0].head + lone[0].tail != "day 1: something is wrong.":
+        failures.append("split: a single finding with no site must survive intact")
+
+    try:
+        module.split_findings(["a", "b"], sites=[None], checks=["x", "y"])
+    except ValueError:
+        pass
+    else:
+        failures.append("split: parallel lists of different lengths must raise, not mis-attribute")
+
+    # No spaces anywhere, which is the shape a Chinese message actually has. The estimate must
+    # still refuse to cut inside a word: with no whitespace boundary there is nothing safe to
+    # share, so it must share nothing rather than slice a name in half.
+    cjk = ["东银座一带的餐厅没有营业时间", "浅草一带的餐厅没有营业时间"]
+    for finding in module.split_findings(cjk):
+        if finding.tail and " " not in finding.tail:
+            failures.append(f"split: cut a space-free message at {finding.tail!r}, which can only "
+                            f"be inside a word")
+
+    if module._closing_punctuation("_url. Two options") != 0:
+        failures.append("split: moved '_url.' to the head, which eats half a field name")
+    if module._closing_punctuation("' has no venue_hours") != 1:
+        failures.append("split: left the closing quote on the rule, so the head ends unbalanced")
+    if module._closing_punctuation(" while hours_status is") != 0:
+        failures.append("split: moved leading whitespace, which belongs to neither side")
+    return failures
+
+
+def pointer_cases(base: dict) -> list[str]:
+    """Every pointer resolves against the plan it was derived from, or is None and says so.
+
+    A pointer that does not resolve costs exactly the read it was meant to save, and teaches an
+    author to stop reading the field -- which is worse than never having had it.
+    """
+    failures: list[str] = []
+    module = CHECKER_MODULE
+    plan = repeated_rule_plan(base)
+    errors, _notes, _crashed = module.run_plan_checks(plan)
+    split = module.split_findings(errors, errors.sites, errors.checks)
+    placed = 0
+    for finding in split:
+        pointer = module.pointer_for(finding.head or finding.message, plan)
+        if pointer is None:
+            continue
+        placed += 1
+        if not module.resolve_pointer(plan, pointer):
+            failures.append(f"pointer: {pointer!r} does not resolve against the plan it came from")
+    if not placed:
+        failures.append("pointer: nothing in this report was placed, so nothing was tested")
+
+    if module.pointer_for("", plan) is not None:
+        failures.append("pointer: empty text must place nothing")
+    if module.pointer_for(None, plan) is not None:
+        failures.append("pointer: a non-string must place nothing rather than raise")
+    if module.pointer_for("day 1: x", []) is not None:
+        failures.append("pointer: a plan that is not an object must place nothing rather than raise")
+    if module.pointer_for("day 9999: nothing here", plan) is not None:
+        failures.append("pointer: a day the plan does not have must place nothing")
+
+    # The day is found by its own number field, not by position, because a replan can leave a
+    # plan numbered 2,3,4 and positional arithmetic then points at the wrong day in silence.
+    renumbered = copy.deepcopy(base)
+    renumbered["days"][0]["number"] = 7
+    if module.pointer_for("day 7: anything", renumbered) != "days[0]":
+        failures.append("pointer: day 7 in a one-day plan numbered 7 must resolve to days[0]")
+    if module.pointer_for("day 1: anything", renumbered) is not None:
+        failures.append("pointer: day 1 must place nothing when no day is numbered 1")
+    return failures
+
+
+def json_output_cases(base: dict) -> list[str]:
+    """--json is parseable on every exit, and rebuilds the prose findings exactly.
+
+    Run through the real CLI rather than in-process: the point of the flag is that a wrapper can
+    parse whatever comes back, and the exits that used to print a bare stderr line are the ones
+    most likely to break it.
+    """
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        def gate(plan: dict, *extra: str) -> tuple[int, str, str]:
+            path = Path(tmp) / "plan.json"
+            path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+            proc = subprocess.run([sys.executable, str(CHECKER), str(path),
+                                   "--no-verification-yet", *extra],
+                                  capture_output=True, text=True)
+            return proc.returncode, proc.stdout, proc.stderr
+
+        code, out, err = gate(base, "--json")
+        try:
+            doc = json.loads(out)
+        except ValueError as exc:
+            return [f"json: a clean plan did not print valid JSON ({exc}): {out[:200]}"]
+        if code != 0 or doc["ok"] is not True or doc["findings"]:
+            failures.append(f"json: a clean plan must be ok with no findings, got {code} {doc['ok']}")
+
+        # CJK, and a lot of it: ensure_ascii=False is what keeps the report readable, and a
+        # \u-escaped one is both bigger and unsearchable.
+        cjk_plan = repeated_rule_plan(base)
+        code, out, err = gate(cjk_plan, "--json")
+        try:
+            doc = json.loads(out)
+        except ValueError as exc:
+            return [f"json: a CJK plan did not print valid JSON ({exc}): {out[:200]}"]
+        if code != 1 or doc["ok"] is not False:
+            failures.append(f"json: a plan with findings must exit 1 and say ok false, got {code}")
+        if "测试餐厅UniqueVenueToken0号（当日择店）" not in out:
+            failures.append("json: CJK was escaped or lost; the report has to stay searchable")
+        for finding in doc["findings"]:
+            if set(finding) != {"rule_id", "pointer", "message"}:
+                failures.append(f"json: a finding carries {sorted(finding)}, not the three fields "
+                                f"a caller is told to expect")
+                break
+            if finding["rule_id"] not in doc["rules"]:
+                failures.append(f"json: {finding['rule_id']} has no entry in rules, so its "
+                                f"reasoning is nowhere in the output")
+                break
+        if not any(f["pointer"] is None for f in doc["findings"]) and \
+                not all(f["pointer"] for f in doc["findings"]):
+            failures.append("json: pointer must be present on every finding, null or not")
+
+        # The whole defence against this becoming a why-strip: message + its rule rebuilds the
+        # finding the checks produced, byte for byte, so nothing was reworded and nothing dropped.
+        # Compared against the checks' own output rather than against the printed prose, because
+        # the prose is deduplicated too and comparing two compressions proves neither.
+        raw, _notes, _crashed = CHECKER_MODULE.run_plan_checks(cjk_plan)
+        rebuilt = [f["message"] + doc["rules"][f["rule_id"]] for f in doc["findings"]]
+        if rebuilt != list(raw):
+            failures.append(f"json: rebuilding the findings did not give back what the checks "
+                            f"produced ({len(rebuilt)} against {len(raw)})")
+            for built, original in zip(rebuilt, raw):
+                if built != original:
+                    failures.append(f"json: rebuilt {built[:90]!r} against {original[:90]!r}")
+                    break
+        _code, _out, err = gate(cjk_plan)
+        prose = [line for line in err.splitlines() if line.startswith("- ")]
+        if len(prose) != len(raw):
+            failures.append(f"json: {len(raw)} findings printed as {len(prose)} dashed lines")
+        for finding in doc["findings"]:
+            if finding["pointer"] and not CHECKER_MODULE.resolve_pointer(cjk_plan,
+                                                                        finding["pointer"]):
+                failures.append(f"json: pointer {finding['pointer']!r} does not resolve")
+                break
+
+        # Refused before the plan is read: a wrapper that always passes --json must always get
+        # JSON, including from the exits that are only a stderr line without it.
+        path = Path(tmp) / "plan.json"
+        path.write_text(json.dumps(base, ensure_ascii=False), encoding="utf-8")
+        for argv, label in (
+                ([str(CHECKER), str(path), "--json"], "no --verification"),
+                ([str(CHECKER), str(Path(tmp) / "nope.json"), "--no-verification-yet", "--json"],
+                 "unreadable plan"),
+                ([str(CHECKER), str(path), "--verification", "", "--json"], "empty report path")):
+            proc = subprocess.run([sys.executable, *argv], capture_output=True, text=True)
+            if proc.returncode == 0:
+                failures.append(f"json: {label} must not exit 0")
+            try:
+                refused = json.loads(proc.stdout)
+            except ValueError as exc:
+                failures.append(f"json: {label} printed unparseable stdout ({exc})")
+                continue
+            if refused["ok"] is not False or not refused["findings"]:
+                failures.append(f"json: {label} produced JSON that does not say what went wrong")
+
+        # --emit-walking honours the flag too, for the same reason.
+        proc = subprocess.run([sys.executable, str(CHECKER), str(path), "--emit-walking", "--json"],
+                              capture_output=True, text=True)
+        try:
+            walking = json.loads(proc.stdout)
+        except ValueError as exc:
+            failures.append(f"json: --emit-walking did not print valid JSON ({exc})")
+        else:
+            if not walking.get("walking"):
+                failures.append("json: --emit-walking printed no walking totals")
+
+        # A check that raises must not take the JSON down with it: the run is incomplete, which is
+        # exit 2 and a finding that says so, not a traceback where the report should be.
+        crasher = Path(tmp) / "crashing_gate.py"
+        crasher.write_text(
+            "import importlib.util, sys\n"
+            f"spec = importlib.util.spec_from_file_location('m', {str(CHECKER)!r})\n"
+            "m = importlib.util.module_from_spec(spec)\n"
+            f"sys.path.insert(0, {str(CHECKER.parent)!r})\n"
+            "spec.loader.exec_module(m)\n"
+            "def check_that_raises(plan, errors, notes):\n"
+            "    raise ValueError('probe: this check cannot finish')\n"
+            "m.PLAN_CHECKS = m.PLAN_CHECKS + (check_that_raises,)\n"
+            "sys.argv = ['gate'] + sys.argv[1:]\n"
+            "raise SystemExit(m.main())\n", encoding="utf-8")
+        for extra, parses in ((["--json"], True), ([], False)):
+            proc = subprocess.run([sys.executable, str(crasher), str(path),
+                                   "--no-verification-yet", *extra],
+                                  capture_output=True, text=True)
+            if proc.returncode != 2:
+                failures.append(f"crash: a raising check must exit 2, got {proc.returncode}")
+            if "ValueError" not in proc.stderr or "Traceback" not in proc.stderr:
+                failures.append("crash: the traceback must still reach stderr in full")
+            if "check_that_raises" not in proc.stdout + proc.stderr:
+                failures.append("crash: the report must name the check that could not finish")
+            if not parses:
+                continue
+            try:
+                doc = json.loads(proc.stdout)
+            except ValueError as exc:
+                failures.append(f"crash: --json stopped being JSON when a check raised ({exc})")
+                continue
+            if doc["ok"] is not False:
+                failures.append("crash: a run that could not finish must not report ok")
     return failures
 
 
@@ -3488,6 +3827,10 @@ def main() -> int:
     failures += untyped_constraints_cases(base)
     failures += untyped_marker_entry_cases(base)
     failures += cli_contract_cases(base)
+    failures += dedupe_cases(base)
+    failures += rule_split_cases()
+    failures += pointer_cases(base)
+    failures += json_output_cases(base)
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)

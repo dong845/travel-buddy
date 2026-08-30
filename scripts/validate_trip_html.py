@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ast
 import html as html_module
+import json
 import re
 import sys
 from functools import lru_cache
@@ -303,7 +304,20 @@ def cite(rule_id: str, message: str) -> str:
             f"cite() called with unknown rule_id {rule_id!r}. Add it to RULE_REFERENCES with the "
             f"reference section that states the rule, or drop the cite() call -- a citation that "
             f"points at the wrong place costs a read and teaches a wrong location.")
-    return f"{message} [see references/{RULE_REFERENCES[rule_id]}]"
+    text = f"{message} [see references/{RULE_REFERENCES[rule_id]}]"
+    # Remembered here, at the one funnel every finding in this file passes through, so --json can
+    # say WHICH rule a finding broke. Recovering it from the printed citation is not possible:
+    # several rule ids share a reference section (booking.required_types and
+    # booking.search_buttons both point at #booking-links), so the citation identifies the
+    # paragraph and not the rule. Keyed by the finished string because that is what the errors
+    # list carries; the map is small, bounded by the number of distinct messages this file can
+    # produce, and only ever read.
+    _RULE_OF_FINDING[text] = rule_id
+    return text
+
+
+# Finding text -> the rule id cite() was called with. Written by cite(), read by --json.
+_RULE_OF_FINDING: dict[str, str] = {}
 
 
 def classes(attrs: dict[str, str]) -> set[str]:
@@ -957,10 +971,55 @@ def is_directions_link(provider: str, url: str) -> bool:
     return not bool(place_parts & {"place", "poi", "detail", "details", "location", "search"})
 
 
+class SourceLineLog(list):
+    """The findings list, plus the position on the page each finding was appended from.
+
+    A finding tells an author WHAT is wrong on a page that runs to hundreds of kilobytes; the
+    position is what saves them re-reading it to find WHERE. HTMLParser already knows the answer
+    -- getpos() is the position of the construct being handled -- so it is read off the parser at
+    append time rather than reconstructed afterwards by searching the page for a string, which
+    would find the first of several identical buttons as often as the right one.
+
+    Line AND column, because line alone is a false comfort here: render_final_trip_html.py emits
+    the whole body as one line, so a delivered page in this workspace is a few dozen short lines
+    and one that is almost all of it, and three findings about three different buttons all reported
+    "line 32". The column is what makes the answer narrower than the document.
+
+    None is the honest answer for a finding raised after the page was parsed ("8 of 8 dining cards
+    print no rating line" is about the whole document) and for one about markup that is missing
+    altogether, which by definition has no position. The caller prints null rather than a guess.
+    """
+
+    def __init__(self, locator) -> None:
+        super().__init__()
+        self.positions: list[tuple[int, int] | None] = []
+        self.days: list[dict] = []
+        self._locator = locator
+
+    def append(self, item) -> None:
+        self.positions.append(self._locator())
+        super().append(item)
+
+    def extend(self, items) -> None:
+        # Materialised first: a generator consumed by super().extend() would leave the position
+        # list short, and a short parallel list mis-attributes every finding after it.
+        items = list(items)
+        position = self._locator()
+        for _ in items:
+            self.positions.append(position)
+        super().extend(items)
+
+
 class TripHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.errors: list[str] = []
+        # False except while feed()/close() are running, so getpos() is only trusted when it is
+        # actually tracking a position. After parsing it keeps returning the last one it saw,
+        # which would stamp every page-wide finding with the line of the closing tag -- a number
+        # that looks like an answer and is not.
+        self._parsing = False
+        self.errors: list[str] = SourceLineLog(
+            lambda: self.getpos() if self._parsing else None)
         self.stack: list[tuple[str, dict | None]] = []
         self.days: list[dict] = []
         self.active_days: list[dict] = []
@@ -985,6 +1044,23 @@ class TripHTMLParser(HTMLParser):
         self.has_page_nav = False
         self.day_nav_targets: set[str] = set()
         self.undecidable_provider_links: list[str] = []
+
+    def feed(self, data) -> None:
+        self._parsing = True
+        try:
+            super().feed(data)
+        finally:
+            # finally, not a trailing assignment: a malformed page that makes the parser raise
+            # would otherwise leave the flag stuck on, and every later finding would be stamped
+            # with a stale line number.
+            self._parsing = False
+
+    def close(self) -> None:
+        self._parsing = True
+        try:
+            super().close()
+        finally:
+            self._parsing = False
 
     def check_provider_target(self, kind: str, provider: str, href: str) -> None:
         """A button that names one provider and opens another is a lie the page tells silently."""
@@ -1028,7 +1104,11 @@ class TripHTMLParser(HTMLParser):
             number = attrs.get("data-day", "")
             if not number.isdigit() or int(number) < 1:
                 self.errors.append(cite("html.day_card_contract", "Every .day-card needs a positive integer data-day."))
-            record = {"number": number, "classes": set(), "map_links": 0, "route_segments": [], "segment_map_links": []}
+            # "position" rides along so a finding raised about this day AFTER parsing -- "Day 3
+            # is missing sections" is decided once the whole card has been seen -- can still be
+            # placed on the page instead of leaving the author to scroll for day 3.
+            record = {"number": number, "classes": set(), "map_links": 0, "route_segments": [],
+                      "segment_map_links": [], "position": self.getpos()}
             self.days.append(record)
             self.active_days.append(record)
         if self.active_days:
@@ -1176,6 +1256,13 @@ def validate(
             f"{len(parser.undecidable_provider_links)} link(s) (no matchable token in the provider "
             "name); check these by eye: " + "; ".join(parser.undecidable_provider_links))
     errors = parser.errors
+    # The day records ride out with the findings so a caller can place a finding raised after
+    # parsing ("Day 3 is missing sections") on the page. Attached rather than returned separately
+    # because save_trip_deliverables.py imports validate() and calls it positionally; a changed
+    # signature there is a broken save path, which is the one path that writes files a traveller
+    # keeps.
+    if isinstance(errors, SourceLineLog):
+        errors.days = parser.days
     if require_unverified_banner and 'id="verification-notice"' not in content:
         errors.append(cite("delivery.verification_banner", 
             "page carries no verification notice while the plan is not marked verified. The "
@@ -1436,6 +1523,119 @@ def validate(
     return errors
 
 
+# ----------------------------------------------------------------------------------------------
+# The same findings, addressed to a model rather than to a person reading a terminal.
+#
+# The prose report says WHAT is wrong; the author then opens the page to find WHERE, and a
+# delivered page is bigger than the plan behind it. In a gate loop that read is paid once per fix
+# cycle. Nothing below changes which findings fire or what they say -- `message` plus its rule is
+# the prose line, byte for byte.
+
+_HTML_ID = re.compile(r"#([A-Za-z][\w-]*)")
+_HTML_DAY = re.compile(r"\bDay (\d+)\b")
+
+
+def _at(position: object) -> str | None:
+    """A (line, column) pair as the pointer string, or None if it is not one."""
+    if (isinstance(position, tuple) and len(position) == 2
+            and all(isinstance(part, int) for part in position)):
+        return f"line {position[0]} col {position[1]}"
+    return None
+
+
+def finding_pointer(message: str, position: object, content: str,
+                    days: list[dict] | None = None) -> str | None:
+    """Where on the page this finding is, as "line N col M", or None when there is no such place.
+
+    Three sources, most exact first: where the parser was when the finding was raised, the
+    declaration of an id the message names, and the day card the message names. Each is checked
+    against the page before it is used -- an id nothing declares and a day nothing rendered
+    produce None, not a number -- because a wrong position costs the same read it was meant to
+    save, and after one wrong answer an author stops reading the field at all.
+
+    None is a real answer and stays one. "Missing required region #trip-plan" is a finding about
+    markup that is not there; the honest pointer is no pointer.
+    """
+    located = _at(position)
+    if located:
+        return located
+    if not isinstance(message, str) or not isinstance(content, str):
+        return None
+    for match in _HTML_ID.finditer(message):
+        offset = content.find(f'id="{match.group(1)}"')
+        if offset >= 0:
+            # Backed up to the tag that carries the attribute, so every pointer this function
+            # returns names the same kind of thing: the start of an element. Pointing at the
+            # attribute instead would put half the pointers mid-tag, and a reader would have to
+            # work out which convention each one used.
+            opening = content.rfind("<", 0, offset)
+            if opening >= 0:
+                offset = opening
+            line = content.count("\n", 0, offset) + 1
+            return f"line {line} col {offset - content.rfind(chr(10), 0, offset) - 1}"
+    day = _HTML_DAY.search(message)
+    if day:
+        for record in days or []:
+            if str(record.get("number")) == day.group(1):
+                located = _at(record.get("position"))
+                if located:
+                    return located
+    return None
+
+
+def findings_json(errors: list[str], positions: list[object], notes: list[str],
+                  content: str, days: list[dict] | None, ok: bool) -> str:
+    """{ok, findings:[{rule_id, pointer, message}], rules:{rule_id: its citation}, notes}.
+
+    `rules` holds each rule's citation once instead of once per finding, and `message` plus that
+    citation is exactly the line the prose report prints -- the same losslessness the plan gate
+    keeps, and the same reason: a report that rewrites its findings is a summary, and a summary is
+    the thing an author cannot check against the page.
+
+    This file's messages are one or two sentences with no repeated rationale to suppress: measured
+    across every delivered page in a real workspace that has a plan beside it, the whole prose
+    report runs a few kilobytes -- small enough that suppressing anything in it would save less
+    than the confusion it bought.
+    So the flag is here for the rule id and the line number, not to make it smaller, and it is
+    printed with the standard encoder rather than the plan gate's compact one -- at this size the
+    indentation is worth more than the bytes it costs.
+    """
+    # Named `entries`, not `findings`: tests/test_packaging.py takes an AST census of every
+    # `findings.append(...)` in this file and requires each one to be a cite() call, which is the
+    # gate that stops a new rule shipping uncited. This list holds JSON records, not findings, and
+    # a sink name that lies to that census would either fail it or teach people to widen it.
+    entries = []
+    rules: dict[str, str] = {}
+    for index, error in enumerate(errors):
+        rule_id = _RULE_OF_FINDING.get(error, "uncited")
+        cut = error.rfind(" [see references/")
+        message = error[:cut] if cut >= 0 else error
+        rules.setdefault(rule_id, error[cut:] if cut >= 0 else "")
+        position = positions[index] if index < len(positions) else None
+        entries.append({
+            "rule_id": rule_id,
+            "pointer": finding_pointer(message, position, content, days),
+            "message": message,
+        })
+    return json.dumps({"ok": ok, "findings": entries, "rules": rules, "notes": list(notes)},
+                      ensure_ascii=False, indent=2)
+
+
+def json_refusal(rule_id: str, message: str) -> str:
+    """A --json body for a run refused before it could read the page.
+
+    A caller that adds --json to every invocation must get JSON from every exit. Anything else
+    makes the flag unusable in a wrapper, because the one run that fails is the one whose output
+    cannot be parsed.
+    """
+    return json.dumps(
+        {"ok": False,
+         "findings": [{"rule_id": rule_id, "pointer": None, "message": message}],
+         "rules": {rule_id: ""},
+         "notes": []},
+        ensure_ascii=False, indent=2)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Validate a Travel Buddy final HTML page.",
@@ -1494,7 +1694,29 @@ def main() -> int:
              "so the 'not fact-checked' banner is not required. Prints that the status was "
              "asserted rather than read.",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the findings as JSON instead of prose: {ok, findings:[{rule_id, pointer, "
+             "message}], rules:{rule_id: the citation for that rule, stated once}, notes}. "
+             "`pointer` is \"line N col M\" in the page being validated, checked against it, or "
+             "null "
+             "when the finding is about the whole document or about markup that is missing -- "
+             "null means this gate could not place it, not that nobody looked. Exit codes are "
+             "unchanged, and every exit prints JSON so a wrapper can parse every run.",
+    )
     args = parser.parse_args()
+
+    def refuse(rule_id: str, message: str, stream=sys.stderr) -> None:
+        """Print a pre-validation refusal in whichever form the caller asked for.
+
+        The prose keeps its stream either way, so a caller reading stderr for the reason and
+        stdout for the JSON gets both and neither has to know which mode the other is in.
+        """
+        print(message, file=stream)
+        if args.json:
+            print(json_refusal(rule_id, message))
+
     if args.expected_days is not None and args.expected_days < 1:
         parser.error("--expected-days must be positive")
     if args.require_booking_type and args.no_booking_types:
@@ -1506,6 +1728,7 @@ def main() -> int:
 
     plan_summary = ""
     plan_title: str | None = None
+    asserted_without_plan = ""
     if args.plan:
         # A manual flag beside --plan is two answers to one question, and the failure would be
         # silent in the direction that matters: a hand-typed --expected-days 4 overriding a
@@ -1522,17 +1745,17 @@ def main() -> int:
             ) if given
         ]
         if conflicting:
-            print(
+            refuse(
+                "cli.plan_and_manual_flags",
                 f"ERROR: {', '.join(conflicting)} cannot be combined with --plan. The plan already "
                 f"decides every one of these, and a hand-typed value beside it silently checks the "
                 f"page against a different trip than the one being delivered. Drop the flag, or "
-                f"drop --plan and supply them all.",
-                file=sys.stderr)
+                f"drop --plan and supply them all.")
             return 1
         try:
             flags = load_html_flags(args.plan)
         except PlanFlagsError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            refuse("cli.unreadable_plan", f"ERROR: {exc}")
             return 2
         expected_days = flags.expected_days
         required_booking_types = set(flags.required_booking_types)
@@ -1559,7 +1782,8 @@ def main() -> int:
         if not args.require_unverified_banner and not args.assert_verified_without_plan:
             missing.append("--require-unverified-banner or --assert-verified-without-plan")
         if missing:
-            print(
+            refuse(
+                "cli.missing_plan_or_flags",
                 "ERROR: No --plan. Pass the saved plan JSON "
                 "(<workspace>/plans/<date>-<slug>.json) so the day count, the required "
                 "booking-link types, the transport mode and the 'not fact-checked' banner are all "
@@ -1568,17 +1792,25 @@ def main() -> int:
                 "all: the page is compared against no day count, no required booking link and "
                 "neither car-link rule, an unverified plan is never asked for the banner that "
                 "tells the traveller its fares and entry rules were never checked, and the script "
-                "still prints VALID and exits 0 -- which is exactly the run that motivated this.",
-                file=sys.stderr)
+                "still prints VALID and exits 0 -- which is exactly the run that motivated this.")
             return 1
         expected_days = args.expected_days
         required_booking_types = set(args.require_booking_type)
         transport_mode = args.transport_mode
         require_unverified_banner = args.require_unverified_banner
         if args.assert_verified_without_plan:
-            # Loud, on stdout, beside the result -- not a debug line. The operator has just turned
-            # off a traveller-facing warning using a fact nothing checked.
-            print(
+            # Loud, beside the result -- not a debug line. The operator has just turned off a
+            # traveller-facing warning using a fact nothing checked.
+            #
+            # It used to `print()` straight to stdout here, which was right until --json existed
+            # and then quietly wasn't: under --json this line landed ABOVE the JSON body, so
+            # `json.loads(stdout)` raised on exactly the run where the banner had been disarmed --
+            # the one run a wrapper most needs to see. A wrapper that recovers by skipping
+            # unparseable lines then drops the warning entirely, which is worse than crashing.
+            # Carried as a note instead: it reaches the prose output through the same `note:`
+            # channel as everything else, and the JSON body through `notes`, so neither form can
+            # have it silently removed by a fix aimed at the other.
+            asserted_without_plan = (
                 "ASSERTED, NOT READ: --assert-verified-without-plan was passed, so the "
                 "'not fact-checked' banner is not required of this page. Nothing here verified "
                 "that claim; no plan was read. If the plan behind this page is not actually "
@@ -1586,7 +1818,7 @@ def main() -> int:
     try:
         content = load_html(args.html)
     except OSError as exc:
-        print(f"ERROR: Could not read HTML: {exc}", file=sys.stderr)
+        refuse("cli.unreadable_html", f"ERROR: Could not read HTML: {exc}")
         return 2
     if plan_title is not None:
         # Establish that the plan and the page are the same trip BEFORE any setting derived from
@@ -1602,25 +1834,36 @@ def main() -> int:
         # every delivered page in a real workspace on the day it shipped.
         page_title = page_h1(content)
         if page_title is None:
-            print(
+            refuse(
+                "cli.page_has_no_title",
                 f"ERROR: --plan was given but this page has no <h1> to identify it, so there is no "
                 f"way to tell it is the delivery for {args.plan}. Every page this skill renders "
                 f"carries the trip title as its only <h1>; a page without one did not come from "
-                f"render_final_trip_html.py. Validate it without --plan, or render it properly.",
-                file=sys.stderr)
+                f"render_final_trip_html.py. Validate it without --plan, or render it properly.")
             return 2
         if page_title != plan_title:
-            print(
+            refuse(
+                "cli.plan_and_page_are_different_trips",
                 f"ERROR: the plan and the page are different trips. The page is titled "
                 f"{page_title!r}; {args.plan} is {plan_title!r}. Every setting --plan derives -- "
                 f"day count, booking types, transport mode, the 'not fact-checked' banner -- would "
                 f"have been checked against the wrong trip, and the run would have reported on a "
-                f"pairing nobody established.",
-                file=sys.stderr)
+                f"pairing nobody established.")
             return 2
-    if plan_summary:
-        print(f"note: {plan_summary}")
     notes: list[str] = []
+    if asserted_without_plan:
+        notes.append(asserted_without_plan)
+    if plan_summary:
+        # Carried in notes for --json, printed for prose, and never both: the note loop below
+        # prints everything in `notes`, so appending AND printing it put the "derived from plan"
+        # line on the page twice. Caught by diffing this gate's whole output over the real
+        # workspace against the previous commit -- no test asserted the line's multiplicity.
+        # --json has to carry it because a caller who switched modes would otherwise lose the one
+        # line saying which plan armed the run.
+        if args.json:
+            notes.append(plan_summary)
+        else:
+            print(f"note: {plan_summary}")
     errors = validate(
         content,
         expected_days,
@@ -1629,6 +1872,13 @@ def main() -> int:
         notes,
         require_unverified_banner=require_unverified_banner,
     )
+    if args.json:
+        # getattr, not errors.positions: validate() returns the parser's list, and a future
+        # caller handing it a plain list must lose the positions rather than crash the gate.
+        positions = list(getattr(errors, "positions", []))
+        days = list(getattr(errors, "days", []))
+        print(findings_json(list(errors), positions, notes, content, days, ok=not errors))
+        return 1 if errors else 0
     for note in notes:
         print(f"note: {note}")
     if errors:
