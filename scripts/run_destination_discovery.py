@@ -48,6 +48,21 @@ def interactive_terminal() -> bool:
     Residual gap, stated rather than hidden: a harness that allocates a full pty looks like a
     terminal here. The env markers above catch the two we know, and --assistant none or
     TRAVEL_BUDDY_ASSISTANT=none is the explicit escape for the rest.
+
+    That residual gap is no longer a gap this function is allowed to lose, because it no longer
+    gates the spawn at all. opencode, Cursor and Cline set none of the markers above AND allocate
+    a full pty, so on the owner's own machine -- where `codex` sits on PATH at
+    ~/.local/bin/codex -- `auto` read "human at a keyboard" and started exactly the detached
+    second planner this whole module exists to prevent. The lesson is that a tty answers "is a
+    terminal device attached", which is not the question: "did a human open this, with nothing
+    else already listening" has no signal at all, because allocating a pty is the cheapest way
+    for a harness to look like a shell. The prose escape this paragraph used to offer -- "pass
+    --assistant none if you are in one" -- asked the harness to know it was the exception, which
+    is the same losing bet as the assistant-name list one paragraph up, only phrased as
+    documentation instead of code. So resolve_assistant() now stands down under `auto` whatever
+    this returns, and this function survives to say WHY it stood down. Keep it: "no terminal
+    here" and "a terminal, but auto still never spawns" send the caller to two different next
+    steps, and a stand-down with no reason reads like a crash.
     """
     try:
         return sys.stdin.isatty() and sys.stdout.isatty()
@@ -56,7 +71,28 @@ def interactive_terminal() -> bool:
         return False
 
 
-def resolve_assistant(requested: str) -> str:
+def announce_stand_down(reason: str) -> None:
+    """Say out loud that `auto` launched nothing, and how to launch something on purpose.
+
+    A stand-down that prints nothing is indistinguishable from a crash, from a no-op, and from a
+    child that started and died -- and the caller here is usually a model, which will read the
+    silence as "the runner handled it" and stop. That is how a traveller ends up with neither
+    planner: the assistant believes a discovery task is running, the discovery task was never
+    started, and nobody is left holding the intake. serve_trip_intake.py already prints its own
+    "nothing was launched" line, but never how to get a child on purpose, so a caller who
+    genuinely wanted one had no next command to type. One line, on stdout rather than stderr,
+    because the harnesses that most need it redirect stdout to a file they poll.
+    """
+    print(
+        f"AUTOMATIC DESTINATION DISCOVERY SKIPPED under --assistant auto ({reason}). The saved "
+        "intake file named in this output is yours to continue from, in the assistant you already "
+        "have open. To start a detached planner on purpose instead, rerun with --assistant codex "
+        "or --assistant claude, or export TRAVEL_BUDDY_ASSISTANT=codex.",
+        flush=True,
+    )
+
+
+def resolve_assistant(requested: str, *, announce: bool = True) -> str:
     """Decide whether to spawn a continuation assistant, and which one.
 
     This used to read CLAUDECODE and answer "claude" -- using the proof that an assistant was
@@ -70,6 +106,31 @@ def resolve_assistant(requested: str) -> str:
     explicit request, or positive evidence of an interactive terminal. An explicit --assistant or
     TRAVEL_BUDDY_ASSISTANT still wins, because a caller who names an assistant has decided on
     purpose.
+
+    The "or positive evidence of an interactive terminal" half of that sentence is superseded; it
+    is kept because it records what the second fix believed, and the belief is the thing that has
+    to stay visible. opencode, Cursor and Cline set none of ASSISTANT_ALREADY_DRIVING and allocate
+    a full pty, so the tty test saw a human; `codex` was on PATH; `auto` resolved to "codex" and
+    spawned the competing planner anyway -- on precisely the harnesses this skill's owner runs it
+    on. No third signal repairs that. The docstring above already argues that enumerating
+    assistant names goes stale the day after it is written, and enumerating pty-allocating
+    harnesses would go stale the same way, so answering the question at all is the mistake.
+
+    So `auto` now NEVER spawns. Spawning became opt-in and nothing else: `--assistant codex`,
+    `--assistant claude`, or TRAVEL_BUDDY_ASSISTANT=codex|claude. That has a real cost -- the
+    traveller who submitted the form in a genuinely bare terminal now types one more command,
+    and announce_stand_down() exists so they are told which one. It is the cheap side of the
+    trade. What it buys is the end of the failure recorded above: a second unattended planner
+    reading a stale intake and writing a Brauhaus dinner for a traveller with a severe dairy
+    allergy into a plan stamped `verification_status: verified`. One extra command against a
+    medical risk saved as verified is not a close call.
+
+    Every earlier stand-down branch is kept below rather than collapsed into a single
+    `return "none"`. They no longer change the answer, only the reason reported with it, and the
+    reason is the whole remaining message: "an assistant is already driving this workspace",
+    "nothing here is a terminal" and "auto never spawns" send a caller to three different next
+    steps. Collapsing them would save four lines and delete the only thing this function still
+    tells anyone.
     """
     if requested != "auto":
         return requested
@@ -77,13 +138,20 @@ def resolve_assistant(requested: str) -> str:
     if configured in ASSISTANTS - {"auto"}:
         return configured
     if any(os.environ.get(name) for name in ASSISTANT_ALREADY_DRIVING):
-        return "none"
-    if not interactive_terminal():
-        return "none"
-    if shutil.which("codex"):
-        return "codex"
-    if shutil.which("claude"):
-        return "claude"
+        driving = ", ".join(name for name in ASSISTANT_ALREADY_DRIVING if os.environ.get(name))
+        reason = f"an assistant is already driving this workspace: {driving} is set"
+    elif not interactive_terminal():
+        reason = "stdin and stdout are not both a terminal, so something is already driving this run"
+    elif not (shutil.which("codex") or shutil.which("claude")):
+        reason = "neither the codex nor the claude CLI is on PATH, so there is nothing to start"
+    else:
+        # The branch the pty harnesses land in: a terminal is attached, both CLIs may well be
+        # installed, and the answer is still no. Naming that explicitly matters -- a caller who
+        # sees "auto never spawns" knows the missing child was a decision, not a broken PATH.
+        reason = ("`auto` never spawns a second planner: a terminal is not evidence that nobody "
+                  "is already planning this trip")
+    if announce:
+        announce_stand_down(reason)
     return "none"
 
 
@@ -188,13 +256,17 @@ def main() -> int:
     if not inside(result_path, workspace / "plans") or not inside(log_path, workspace / "plans"):
         raise ValueError("Automatic-discovery results must stay inside the workspace plans folder.")
 
-    assistant = resolve_assistant(args.assistant)
+    # announce=False because the branch below says the same thing with the concrete intake path
+    # filled in, which is strictly more useful. Two near-identical paragraphs in a row is how a
+    # reader learns to skim both, and the one worth reading is the one carrying the path.
+    assistant = resolve_assistant(args.assistant, announce=False)
     if assistant == "none":
         print("AUTOMATIC DESTINATION DISCOVERY SKIPPED: no continuation assistant was started.", flush=True)
         print(
             f"The saved intake is at {intake}. If an assistant is already open in this workspace, "
-            "hand it that path and continue there. To start one from a bare terminal instead, rerun "
-            "with --assistant codex or --assistant claude.",
+            "hand it that path and continue there. `--assistant auto` starts nothing by itself, "
+            "not even from a bare terminal: to start a detached planner on purpose, rerun with "
+            "--assistant codex or --assistant claude, or export TRAVEL_BUDDY_ASSISTANT=codex.",
             flush=True,
         )
         return 0

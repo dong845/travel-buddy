@@ -213,5 +213,14 @@
   "fig_shape_caption": "Fixed points across the day",
   "fig_longest_walk": "Longest single walk",
   "photo_credit_label": "Photo credit",
-  "photo_source_label": "via Wikimedia, from the article"
+  "photo_source_label": "via Wikimedia, from the article",
+  "confidence_high": "high",
+  "confidence_medium": "medium",
+  "confidence_low": "low",
+  "confidence_researched": "researched",
+  "confidence_unverified": "not verified",
+  "severity_none": "none",
+  "severity_preference": "preference",
+  "severity_intolerance": "intolerance",
+  "severity_severe": "severe (can be life-threatening)"
 }

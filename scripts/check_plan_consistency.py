@@ -481,9 +481,26 @@ def check_walking_budget(plan: dict, errors: list[str], notes: list[str]) -> Non
     max_day = max(load, key=lambda n: load[n])
     min_day = min(load, key=lambda n: load[n])
 
-    cap = _obj(_obj(plan.get("trip")).get("traveler_constraints")).get("max_continuous_walking_minutes")
+    constraints = _obj(_obj(plan.get("trip")).get("traveler_constraints"))
+    cap = constraints.get("max_continuous_walking_minutes")
     if isinstance(cap, bool) or not isinstance(cap, (int, float)):
         cap = None
+
+    # Whether a null cap is the traveller's answer or nobody's, which is a distinction the note
+    # further down asserted an answer to without ever asking. It said "this traveller stated no
+    # walking limit" on every day of every plan whose cap was null -- including the skeleton's own
+    # output, where the cap is null for the opposite reason: nobody has been asked yet. Measured on
+    # a freshly generated three-day skeleton before this line existed, the one report carried three
+    # copies of "Not an error -- this traveller stated no walking limit" AND the two
+    # check_untyped_constraints errors, one of them "max_continuous_walking_minutes was never typed
+    # -- untyped_constraints still names it". Two claims about one field in one report, and the
+    # reassuring one was the false one. The marker is the authority here; the note follows it.
+    # The third element is deliberately dropped here: which junk entries the marker carries is
+    # check_untyped_constraints' business to report, and this note only has to know whether the
+    # CAP is among the fields the marker readably names.
+    marker_state, marker_fields, _ = read_untyped_constraints(constraints)
+    cap_untyped = (marker_state == UNTYPED_MARKER_FIELDS
+                   and "max_continuous_walking_minutes" in marker_fields)
 
     for day in days:
         number = day.get("number")
@@ -513,10 +530,32 @@ def check_walking_budget(plan: dict, errors: list[str], notes: list[str]) -> Non
                     f"0 where the activity genuinely involves no walking; that is a fact the gate "
                     f"can check and silence is not.")
         elif walked_in_activities == 0 and any(_seq(day.get("activities"))):
-            notes.append(
-                f"day {number}: no activity declares on_foot_minutes, so the page's walking figure "
-                f"counts only the legs between stops, not the time spent on foot at them. Not an "
-                f"error -- this traveller stated no walking limit -- but the figure is a floor.")
+            # The measurement is identical in all three branches and only the standing of the null
+            # cap differs, so the sentence that reports the measurement is written once. The third
+            # branch is not hypothetical bookkeeping: an unreadable marker is a live state --
+            # check_untyped_constraints refuses it by name -- and routing it to the "stated no
+            # walking limit" wording would rebuild the same contradiction one shape to the left.
+            floor = (f"day {number}: no activity declares on_foot_minutes, so the page's walking "
+                     f"figure counts only the legs between stops, not the time spent on foot at "
+                     f"them.")
+            if cap_untyped:
+                notes.append(
+                    f"{floor} Nobody has stated a walking limit either -- "
+                    f"{UNTYPED_CONSTRAINTS_MARKER} still names max_continuous_walking_minutes, so "
+                    f"the null cap is the skeleton's default and not the traveller's answer. This "
+                    f"day's walking is unmeasured from both ends: no per-activity minutes, and no "
+                    f"cap to measure them against. check_untyped_constraints reports the untyped "
+                    f"field itself; this note is what it costs on this day.")
+            elif marker_state == UNTYPED_MARKER_UNREADABLE:
+                notes.append(
+                    f"{floor} Whether anybody stated a walking limit cannot be read off this plan: "
+                    f"{UNTYPED_CONSTRAINTS_MARKER} is present in a shape nothing can act on, which "
+                    f"check_untyped_constraints reports on its own terms. Until it is readable "
+                    f"this note will not tell you the null cap was the traveller's answer.")
+            else:
+                notes.append(
+                    f"{floor} Not an error -- this traveller stated no walking limit -- but the "
+                    f"figure is a floor.")
 
         burden = str(_route(day).get("walking_burden") or "")
         if not burden.strip():
@@ -1390,6 +1429,52 @@ def required_domains_for(plan: dict | None) -> tuple[set[str], str]:
         elif _seq(constraints.get("mobility_notes")):
             disqualifiers.append(
                 "mobility notes stated in prose while max_continuous_walking_minutes is null")
+
+        # And the case both branches above still read as settled: nobody typed the field at all.
+        # The two clauses this function tests for -- a severity of none/preference, and a null cap
+        # -- were, until the skeleton started marking them, EXACTLY the values new_plan_skeleton.py
+        # emitted when it could not know the answer. So the plan that had never been asked the
+        # question qualified for the cheap tier on the strength of not having been asked, and the
+        # reason string above would have told the operator, in so many words, "no severe allergy or
+        # walking cap". An untyped constraint is an open question, and an open question is the one
+        # thing a tier decision must never read as a clean bill of health.
+        # UNTYPED_CONSTRAINTS_MARKER is defined beside check_untyped_constraints further down,
+        # with the measurement that motivated it; module-level names resolve at call time, so the
+        # constant lives next to the check that owns it rather than being hoisted up here.
+        #
+        # This was the THIRD inline reading of the one key, and it kept its own shape test long
+        # after read_untyped_constraints was written to end exactly that. It cost the same defect
+        # the reviewer found in check_untyped_constraints: `sorted(str(f) for f in untyped)` on a
+        # marker of {"": "x"} produced named == [""], so the tier explained itself to the operator
+        # as "the skeleton's untyped_constraints marker on  -- nobody typed that constraint",
+        # naming nothing after the word "on". One reader now, so the two cannot drift again.
+        state, named, _ = read_untyped_constraints(constraints)
+        if state != UNTYPED_MARKER_CLEAR:
+            named = sorted(name.strip() for name in named)
+            # The named fields are spliced in rather than the sentence naming both by hand: an
+            # author who types one and leaves the other should read which one is still open, and a
+            # reason string that says "the allergy severity or the walking cap" when only the cap
+            # is marked is the tier explaining itself with a fact that is not true of this plan.
+            #
+            # And when the marker names nothing readable at all, the reason says THAT rather than
+            # pretending to a field list it does not have. Withholding the light tier is still
+            # right in that case -- an unreadable marker is an open question nobody can close --
+            # but the operator has to be told the tier was withheld because the marker is
+            # illegible, not because some field they cannot see is untyped.
+            if named:
+                disqualifiers.append(
+                    "the skeleton's " + UNTYPED_CONSTRAINTS_MARKER + " marker"
+                    + f" on {', '.join(named)}"
+                    + " -- nobody typed "
+                    + ("those constraints" if len(named) != 1 else "that constraint")
+                    + ", so the defaults sitting in them are an unanswered question rather than a "
+                      "settled 'no constraint'")
+            else:
+                disqualifiers.append(
+                    "the skeleton's " + UNTYPED_CONSTRAINTS_MARKER + " marker in a shape that "
+                    "names no field -- check_untyped_constraints reports it entry by entry; until "
+                    "it is readable nobody can say which constraints are still unanswered, and an "
+                    "unanswerable question is not a settled 'no constraint'")
 
     # The reason string claimed "single-city" and nothing tested it. Four days across Ghent and
     # Bruges with a coach between them read as light, dropping `transport` -- so nobody checked
@@ -2801,9 +2886,25 @@ def check_prose_texture(plan: dict, errors: list[str], notes: list[str]) -> None
     if not days:
         return
 
-    narrative: list[tuple[str, str]] = []
-    for day in days:
+    # (display label, folded-on-demand text, SCOPE). Three elements, and the annotation now says
+    # three: it read `list[tuple[str, str]]` while every append below passed a triple, so the
+    # third element -- the only one the cross-scope comparison actually needs -- was invisible to
+    # a reader and to a type checker alike. That is how the comparison below ended up re-deriving
+    # the scope by slicing the human-readable label instead of reading the field that carries it.
+    # The label is prose for an operator to act on; the scope is the datum. Kept separate on
+    # purpose, because the label's shape changes whenever someone adds a new kind of field here
+    # and the scope's meaning does not.
+    narrative: list[tuple[str, str, str]] = []
+    for position, day in enumerate(days):
         number = day.get("number")
+        # The scope identifies the day RECORD by its place in the list, not by the number printed
+        # on it. `number` is traveller-supplied data and can be missing or repeated: two days that
+        # both omit it used to fold into one scope named "dayNone", and the within-scope rule --
+        # the one that is an ERROR because it is always wrong -- then fired on two fields that sit
+        # on two different cards. That is the false positive this rule's own comment warns about,
+        # arriving through the identity key rather than through the comparison. A record's
+        # position is the one thing about it that is always present and always unique.
+        scope = f"day#{position}"
         route = _obj(day.get("route"))
         for field, value in (("focus", day.get("focus")),
                              ("contingency", day.get("contingency")),
@@ -2811,12 +2912,12 @@ def check_prose_texture(plan: dict, errors: list[str], notes: list[str]) -> None
                              ("route.walking_burden", route.get("walking_burden")),
                              ("route.fallback_plan", route.get("fallback_plan"))):
             if isinstance(value, str) and len(value.strip()) > 20 and not _blank(value):
-                narrative.append((f"day {number} {field}", value.strip(), f"day{number}"))
+                narrative.append((f"day {number} {field}", value.strip(), scope))
         for index, card in enumerate(_seq(day.get("dining")), 1):
             reason = _obj(card).get("why_this_stop")
             if isinstance(reason, str) and len(reason.strip()) > 20 and not _blank(reason):
                 narrative.append((f"day {number} dining[{index}].why_this_stop", reason.strip(),
-                                  f"day{number}"))
+                                  scope))
     for index, anchor in enumerate(_seq(plan.get("destination_experience_anchors"))):
         reason = _obj(anchor).get("why_it_matters")
         if isinstance(reason, str) and len(reason.strip()) > 20 and not _blank(reason):
@@ -2829,28 +2930,61 @@ def check_prose_texture(plan: dict, errors: list[str], notes: list[str]) -> None
     # Across days it stays a note, because two days can honestly carry the same walking figure or
     # the same wet-weather fallback, and an error there would fire on correct work -- it fired on
     # a test that legitimately clones a day to exercise replanning.
+    #
+    # THE ANCHOR LIST IS ONE SCOPE, and that is a decision rather than a leftover. Two anchors are
+    # two DIFFERENT places, so one rationale copied onto both is false about at least one of them:
+    # "the one place the whole trip was planned around" cannot be two places. That is the same
+    # always-wrong shape as one sentence under two headings of a day card, so identical anchor
+    # rationales stay an ERROR. It is NOT the honest-repetition case that keeps the cross-scope
+    # finding at note level -- two days really can share a wet-weather fallback; two anchors
+    # cannot share the reason they are each singular.
     seen: dict[tuple[str, str], str] = {}
-    cross_day: list[str] = []
+    cross_scope: list[str] = []
     for where, text, scope in narrative:
         key = _fold(text)
         if (scope, key) in seen:
+            # Same defect, two different pages, so the sentence that tells the operator WHERE to
+            # look has to follow the scope. Telling someone their two anchors sit "under two
+            # headings on the same card" sends them to a day card that is fine, and a message
+            # that points at the wrong place is how a real finding gets dismissed as noise.
+            printed = ("under two different headings on the same card, so the traveller reads one "
+                       "sentence twice and learns nothing the second time. Say something "
+                       "different, or leave the weaker field out."
+                       if scope != "anchors" else
+                       "as the reason for two different anchors, so one sentence stands in for "
+                       "two separate places and cannot be true of both. Say what each anchor is "
+                       "actually for, or drop the weaker one.")
             errors.append(
-                f"{where} repeats {seen[(scope, key)]} word for word. The page prints both, under "
-                f"two different headings on the same card, so the traveller reads one sentence "
-                f"twice and learns nothing the second time. Say something different, or leave the "
-                f"weaker field out.")
+                f"{where} repeats {seen[(scope, key)]} word for word. The page prints both, "
+                f"{printed}")
         else:
             seen[(scope, key)] = where
-    elsewhere: dict[str, str] = {}
+    # The cross-SCOPE pass reads the scope the tuple already carries. The version before this one
+    # recovered the day number by splitting the DISPLAY LABEL on whitespace and taking token 1 --
+    # "day 3 focus" -> "3" -- which held only because every label it had ever been tried on began
+    # with "day <N> ". Anchor labels are "anchor[0].why_it_matters": one token, no space, so
+    # `.split()[1]` raised IndexError. Not a cosmetic crash: check_prose_texture is in PLAN_CHECKS
+    # and save_trip_deliverables.py runs PLAN_CHECKS, so a plan whose two anchors shared a sentence
+    # took down the only path that writes files a traveller keeps, and took it down with a
+    # traceback -- the operator saw a broken tool instead of a plan to fix, which is worse than a
+    # missed finding because it stops the run rather than the ship. Parsing a label to recover a
+    # value the record already holds re-breaks the moment anyone adds a label in a new shape, and
+    # adding anchors to this list was exactly that moment.
+    elsewhere: dict[str, tuple[str, str]] = {}
     for where, text, scope in narrative:
         key = _fold(text)
-        if key in elsewhere and elsewhere[key].split()[1] != where.split()[1]:
-            cross_day.append(f"{where} = {elsewhere[key]}")
-        elsewhere.setdefault(key, where)
-    if len(cross_day) > 2:
-        notes.append(f"note: {len(cross_day)} narrative field(s) are word-for-word identical "
-                     f"across different days. Sometimes honest, often a day nobody wrote: "
-                     f"{'; '.join(cross_day[:3])}")
+        earlier = elsewhere.get(key)
+        if earlier is not None and earlier[1] != scope:
+            cross_scope.append(f"{where} = {earlier[0]}")
+        elsewhere.setdefault(key, (where, scope))
+    if len(cross_scope) > 2:
+        # Wording follows the fix: the pairs this collects are no longer necessarily two days --
+        # a day field and an anchor rationale is the same repetition and is now reachable, so the
+        # note must not tell the operator to go compare two days that may not be involved.
+        notes.append(f"note: {len(cross_scope)} narrative field(s) are word-for-word identical "
+                     f"in two different places -- two days, or a day and the destination "
+                     f"anchors. Sometimes honest, often a day nobody wrote: "
+                     f"{'; '.join(cross_scope[:3])}")
 
     # Every dash a writer of any language actually reaches for. The first version matched the
     # Chinese —— and the typographic em dash only, so an English plan written with the ASCII "--"
@@ -3080,6 +3214,320 @@ def check_sentinel_timestamps(plan: dict, errors: list[str], notes: list[str]) -
         f"actually checked, or remove the claim it supports.")
 
 
+# The two traveller constraints the gates MEASURE -- the allergy severity and the walking cap --
+# arrive from intake as prose, and nothing converts a sentence into an enum or a number. The
+# skeleton therefore cannot know either one, and until it said so it emitted values that read as
+# answers: allergy_severity "none" and max_continuous_walking_minutes null. Measured on a real
+# five-day plan: with those untouched defaults, deleting EVERY activity's on_foot_minutes changed
+# the error count not at all, 2 -> 2, because check_walking_budget arms itself off `cap is not
+# None`; with the cap typed as 25, the same deletion produced five precise findings naming each
+# day. Worse than lax, it was profitable: SKILL.md's light verification tier is allowed only when
+# allergy_severity is none/preference AND the cap is null -- which is to say the skeleton's
+# untouched defaults were exactly what bought the cheap tier. A model that never typed those two
+# fields switched the walking checks off and skipped four verification domains in one move, and
+# neither gate said a word.
+#
+# Neither field can hold a `TODO:` string the way the free-text fields do: validate_plan requires
+# allergy_severity to be an ALLERGY_SEVERITIES member or null, and max_continuous_walking_minutes
+# to be a positive whole number or null, so prose in either one stops the skeleton rendering at
+# all -- and the enum's message would then read "must be one of: none, preference, intolerance,
+# severe" about a placeholder, sending the author hunting for a typo instead of telling them
+# nobody answered the question. And null cannot carry the meaning either: for the cap, null IS the
+# documented answer "the traveller stated no limit", so overloading it would destroy the very
+# distinction this exists to make.
+#
+# So the marker sits BESIDE them, keyed by the field it stands for, carrying the same `TODO:`
+# prose every other unfilled value in the skeleton carries. new_plan_skeleton.py imports this name
+# rather than restating the string, because a gate keyed on a spelling nothing produces passes
+# every test in the suite while never once firing on a real plan.
+UNTYPED_CONSTRAINTS_MARKER = "untyped_constraints"
+
+# What each marked field means when it IS typed, quoted back to the author so the error says what
+# to write rather than only what is wrong. Keyed by field name; a field named in the marker that
+# is not listed here still reports, with a generic instruction, because a marker nobody recognises
+# is still a question nobody answered.
+UNTYPED_CONSTRAINT_GUIDANCE = {
+    "allergy_severity": (
+        "type none | preference | intolerance | severe from the traveller's own words -- 'none' "
+        "is a claim that there is nothing to avoid, so it has to be a claim somebody made"),
+    "max_continuous_walking_minutes": (
+        "type the minutes they said they can walk at a stretch, or null if they stated no limit "
+        "-- null switches every per-leg and per-activity walking check off, so it has to be a "
+        "decision rather than a default"),
+}
+
+
+# The three answers the marker can give, named once rather than re-derived at each call site.
+# THREE functions in this file read this one key -- required_domains_for for the verification
+# tier, check_untyped_constraints for the refusal, and check_walking_budget for its per-day note --
+# and each read it with its own inline shape test. That is exactly how the first two came to
+# disagree about the same plan. required_domains_for asks `if untyped:`, so
+# `"untyped_constraints": false` is falsy and the light tier is allowed; check_untyped_constraints
+# asked `isinstance(marker, (dict, list, tuple, str)) and not marker`, which no bool and no number
+# satisfies, so the SAME plan was refused with "is a bool (False). It must be an object keyed by
+# the constraint fields nobody has typed yet". Measured on this module before this function
+# existed: False -> 1 error, 0 -> 1 error, 0.0 -> 1 error, while "" -> 0, {} -> 0, [] -> 0 -- six
+# spellings of one sentence and three of them were refused. One reader, so the disagreement has
+# nowhere left to live.
+UNTYPED_MARKER_CLEAR = "clear"            # no marker, or a marker that says "nothing is untyped"
+UNTYPED_MARKER_FIELDS = "fields"          # the marker names the fields nobody has typed
+UNTYPED_MARKER_UNREADABLE = "unreadable"  # a marker is there in a shape nothing can act on
+
+
+def _as_json_text(value: object) -> str:
+    """The value as it is spelled in the .json file the author is looking at, never as Python.
+
+    The author reads a JSON document. Telling them an entry is `None` sends them searching a file
+    whose word is `null`, and telling them it is `['allergy_severity']` sends them searching for
+    single quotes JSON does not have. check_untyped_constraints already applied this rule to the
+    marked field's VALUE and the rule was never carried across to the marker's own ENTRIES, which
+    is how `trip.traveler_constraints.None` and `trip.traveler_constraints.['allergy_severity']`
+    reached an operator. Falls back to repr rather than raising, because a crash inside an error
+    message loses every other finding in the report with it.
+    """
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+# What separates a marker entry that can be reported from one that can only be refused.
+#
+# A marker entry has exactly one job: name a field of traveler_constraints, so the refusal can say
+# "type THIS, then delete THIS entry". An entry that does that is READABLE, and it stays readable
+# even when the name is one this module has never heard of ("pace") or is not in the block yet --
+# those are answerable questions with a concrete subject, and the message tells the author which
+# case they are in. An entry that does NOT name anything is UNREADABLE, and there are exactly two
+# ways to fail to name something: be an empty or whitespace-only string, or not be a string at all
+# (a number, null, true, a nested list or object -- shapes a hand-edit produces and JSON permits
+# inside a list).
+#
+# The decision the reviewer's finding forced: both categories are REFUSED, and neither is dropped.
+# What differs is what the message is allowed to claim. A readable entry gets the full instruction
+# quoting the field. An unreadable entry gets an honest "this entry names no field" refusal that
+# says what is wrong with it and shows it in JSON spelling -- because the previous behaviour,
+# str()-ing it into an error path, produced `trip.traveler_constraints.` with nothing after the
+# dot: a message that is loud, points at nothing, and cannot be acted on, which is the same
+# silence the check exists to prevent wearing a different coat.
+#
+# And the split is PER ENTRY, not per marker. `{"allergy_severity": "TODO", "": "x"}` carries one
+# perfectly good question and one piece of junk; refusing the whole marker as unreadable would
+# bury the half the author can actually act on.
+def _split_marker_entries(entries: list[tuple[str, object]]) -> tuple[list[str], list[tuple[str, object]]]:
+    """(readable field names, unreadable [location, entry] pairs) from the marker's raw entries.
+
+    `location` is the JSON path suffix the entry sits at -- "" for a dict key, "[2]" for the third
+    member of a list -- so the refusal can point an author at one entry of many rather than at the
+    marker as a whole.
+    """
+    readable: list[str] = []
+    unreadable: list[tuple[str, object]] = []
+    for location, entry in entries:
+        # str.strip() removes U+3000 IDEOGRAPHIC SPACE as well as ASCII blanks, so a marker key
+        # pasted out of a Chinese intake is judged by the same rule as an English one rather than
+        # slipping through as a "name" made of invisible width.
+        if isinstance(entry, str) and entry.strip():
+            readable.append(entry)
+        else:
+            unreadable.append((location, entry))
+    return readable, unreadable
+
+
+def read_untyped_constraints(constraints: object) -> tuple[str, list[str], list[tuple[str, object]]]:
+    """What the skeleton's "nobody typed this" marker says, for every check that must obey it.
+
+    Returns (state, fields, unreadable): one of the UNTYPED_MARKER_* constants; the field names the
+    marker readably carries; and the entries that name no field, as (location, entry) pairs kept
+    verbatim so a refusal can show the author exactly what to delete. Takes the
+    traveler_constraints block rather than the plan, and _obj()s it, so a plan whose constraints are
+    a string or a list gets a finding from the caller instead of a traceback that loses every other
+    finding in the report.
+
+    The states are what callers need to say different things about. A refusal wants to name the
+    untyped fields; a note about a null walking cap wants to know whether anybody answered at all;
+    a tier decision wants to know only whether a question is open. None of them can be written
+    correctly against a raw `if marker:`.
+
+    UNTYPED_MARKER_FIELDS means the marker names at least one field. A container whose every entry
+    is unreadable is UNTYPED_MARKER_UNREADABLE, not FIELDS with an empty list: `{"": "x"}` asserts
+    that a question is open and then names nothing, which is the same standing as a bare `true`,
+    and callers that branch on the state must not be told a field list exists when it does not.
+    `unreadable` is populated in BOTH of those states, because the FIELDS case can carry junk
+    beside good names and the junk must still be refused.
+    """
+    marker = _obj(constraints).get(UNTYPED_CONSTRAINTS_MARKER)
+    if marker is None:
+        return UNTYPED_MARKER_CLEAR, [], []
+    # An emptied container is the author saying "I typed them and cleared the marker", which is
+    # the intended exit. Accepting {} and [] rather than only a deleted key means the honest edit
+    # does not depend on knowing that the whole key must go.
+    if isinstance(marker, (dict, list, tuple, str)) and not marker:
+        return UNTYPED_MARKER_CLEAR, [], []
+    # `false` and `0` are that same sentence in the scalar spelling, and an author who writes
+    # either one plainly means "nothing here is untyped" -- there is no second reading. Excluded
+    # deliberately: `true` and any non-zero number, which say a question is open while naming
+    # nothing, and are handled as unreadable below. NaN fails `== 0` and lands there too, which is
+    # right: nobody can act on it either.
+    if isinstance(marker, (int, float)) and marker == 0:
+        return UNTYPED_MARKER_CLEAR, [], []
+    if isinstance(marker, dict):
+        # Keys are taken RAW rather than str()-ed. JSON can only produce string keys, but this
+        # module is imported and called with Python-built dicts by tests and by sibling scripts,
+        # and str()-ing a key was precisely what turned `{7: "x"}` into a field named "7" and
+        # `{None: "x"}` into a field named "None" -- names that appear nowhere in any plan file.
+        entries = [("", name) for name in marker]
+    elif isinstance(marker, (list, tuple)):
+        # Tolerated because a hand-edit that keeps only the field names is still an honest,
+        # readable marker; refusing it would fail the author for a shape that says the same thing.
+        # Indexed, because a list is the shape where one bad member sits among good ones and
+        # "delete the entry" is only actionable if the author is told which entry.
+        entries = [(f"[{i}]", item) for i, item in enumerate(marker)]
+    else:
+        return UNTYPED_MARKER_UNREADABLE, [], []
+    fields, unreadable = _split_marker_entries(entries)
+    state = UNTYPED_MARKER_FIELDS if fields else UNTYPED_MARKER_UNREADABLE
+    return state, fields, unreadable
+
+
+def check_untyped_constraints(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """Refuse a plan still carrying the skeleton's "nobody typed this" marker.
+
+    This is check_sentinel_timestamps' sibling and it is written to the same rule: fire on the
+    SENTINEL, never on the value the sentinel stands in for. That rule is the whole reason this
+    check can live in PLAN_CHECKS at all.
+
+    Where it belongs was the real decision. render_final_trip_html.intake_context_errors solves a
+    similar-looking problem -- a field a plan must answer before a traveller may be handed it --
+    and is called from save_trip_deliverables.py rather than from validate_plan, deliberately,
+    because it fires on ABSENCE: putting it in the shared validator would fail the skeleton's own
+    output and retroactively invalidate every plan already saved in a workspace, which
+    audit_workspace.py re-reads with these same checks. That precedent does not transfer here, and
+    the difference is exactly the one it names. This check fires only when a key is PRESENT, and
+    the only thing that writes that key is a skeleton generated after this change: no plan written
+    before it can carry the marker, so no plan written before it can newly fail. Verified rather
+    than assumed -- all fifteen plans in the measured workspace produce byte-identical findings
+    with this check in PLAN_CHECKS, twelve because they carry no traveler_constraints block at all
+    and three because they carry a typed cap and no marker.
+
+    Being in PLAN_CHECKS is what makes it worth having: that tuple is what save_trip_deliverables.py
+    runs on the one path that writes files a traveller keeps, what audit_workspace.py runs over a
+    whole workspace, and what an author sees in the skeleton's own worklist. A save-time-only check
+    would let the marker survive every intermediate run and surface at the end, which is the point
+    where an operator is most tempted to reach for a bypass.
+    """
+    constraints = _obj(_obj(plan.get("trip")).get("traveler_constraints"))
+    marker = constraints.get(UNTYPED_CONSTRAINTS_MARKER)
+    # The three shape branches this function used to carry inline now live in
+    # read_untyped_constraints, with their reasoning moved across word for word, because
+    # check_walking_budget has to reach the same verdict about the same key and a second copy of
+    # the logic is a second answer waiting to happen.
+    state, fields, unreadable = read_untyped_constraints(constraints)
+    if state == UNTYPED_MARKER_CLEAR:
+        return
+    if state == UNTYPED_MARKER_UNREADABLE and not unreadable:
+        # A truthy value of any other shape -- a bare string, a number, True -- is a marker
+        # nobody can act on. Say so loudly rather than guessing which fields it meant: silently
+        # ignoring an unrecognised marker is how this whole class of defect stayed invisible.
+        #
+        # Guarded on `not unreadable` because there is now a second way to reach UNREADABLE: a
+        # container whose every ENTRY is junk, e.g. {"": "x"}. That one is not a marker of the
+        # wrong shape -- the shape is right and the contents name nothing -- so it falls through
+        # to the per-entry refusals below, which can point at the offending entry instead of
+        # re-describing the whole object back to its author.
+        errors.append(
+            f"trip.traveler_constraints.{UNTYPED_CONSTRAINTS_MARKER} is a "
+            f"{type(marker).__name__} ({marker!r}). It must be an object keyed by the constraint "
+            f"fields nobody has typed yet, as new_plan_skeleton.py writes it, or be deleted once "
+            f"they are typed. A marker whose shape nothing can read is a question nobody answered "
+            f"and nobody can see. If you meant that nothing here is untyped, the readable "
+            f"spellings are {{}}, [], \"\", false and 0, and all five are accepted -- "
+            f"{marker!r} is refused because it cannot be told apart from an author who set out to "
+            f"list the open fields and never did.")
+        return
+
+    # The entries that name no field, refused on their own terms. Reported BEFORE the readable
+    # ones and sorted by their JSON location so the order is stable run to run: a report whose
+    # lines reshuffle between runs cannot be diffed, and audit_workspace.py diffs these.
+    #
+    # This whole loop is the reviewer's finding. These entries used to be str()-ed straight into
+    # the readable path, which produced "trip.traveler_constraints. was never typed" for {"": "x"}
+    # -- an error naming no field, telling the author to type "it" and then delete '' -- and
+    # "trip.traveler_constraints.None" / ".7" / ".['allergy_severity']" for the non-string members
+    # of a list. Every one of those is loud and unactionable, which is the failure this check
+    # exists to prevent, not a milder version of it.
+    for location, entry in sorted(unreadable, key=lambda pair: (pair[0], _as_json_text(pair[1]))):
+        where = (f"{UNTYPED_CONSTRAINTS_MARKER}{location}" if location
+                 else f"a key of {UNTYPED_CONSTRAINTS_MARKER}")
+        if isinstance(entry, str):
+            # Split from the non-string case because the fix differs. Whitespace is invisible on
+            # screen, so an author told only "unreadable" would look at a line that appears to
+            # hold a name; naming the character count is what makes it findable.
+            wrong = ("it is an empty string" if not entry
+                     else f"it is {len(entry)} whitespace character"
+                          f"{'' if len(entry) == 1 else 's'} and nothing else")
+        else:
+            # "of type int" rather than "a int": the type name is chosen by Python, so no article
+            # written here can be right for all of them, and a report that reads as broken English
+            # is a report an operator trusts less than it deserves.
+            wrong = f"it is of type {type(entry).__name__} ({_as_json_text(entry)}), not a string"
+        errors.append(
+            f"trip.traveler_constraints.{UNTYPED_CONSTRAINTS_MARKER}: the entry at {where} names "
+            f"no field -- {wrong}. This entry is unreadable, so there is nothing to tell you to "
+            f"type: a marker entry exists to name one field of trip.traveler_constraints, and "
+            f"this one names none. Replace it with the field name the traveller's answer belongs "
+            f"in, or delete the entry outright if it is left-over punctuation from a hand-edit. "
+            f"Refused rather than skipped because an entry nobody can read is still an author "
+            f"asserting that a question is open, and dropping it silently would hand the "
+            f"traveller a plan whose open question nothing ever printed. If you meant that "
+            f"nothing here is untyped, the readable spellings are {{}}, [], \"\", false and 0.")
+
+    for field in sorted(fields):
+        # The name as it will be quoted and looked up. A key carrying surrounding whitespace is
+        # readable -- it names something -- but " allergy_severity " matches no key in the block by
+        # string equality and looks identical to the clean spelling in any editor, so the padding
+        # is stripped for the lookup and called out separately below rather than silently producing
+        # a "not even present" that sends the author hunting a field that is right there.
+        clean = field.strip()
+        guidance = UNTYPED_CONSTRAINT_GUIDANCE.get(
+            clean, "type it from the traveller's own words, then delete this entry")
+        # Quoted in JSON spelling, not Python's: the author is looking at a .json file, and an
+        # error that says the field is "still None" sends them searching a document that has no
+        # such word in it. json.dumps falls back to repr for a value it cannot serialise rather
+        # than raising, because a crash inside an error message loses the other findings with it.
+        present = field in constraints or clean in constraints
+        held = constraints.get(field, constraints.get(clean))
+        shown = _as_json_text(held)
+        current = (f"still {shown}" if present
+                   else "not even present in trip.traveler_constraints")
+        # Two different jobs wearing one message. A KNOWN field that the block has not got yet is
+        # answered by typing it into the block. A name this module has never heard of -- "pace",
+        # a typo, a constraint the schema has no slot for -- cannot be answered that way at all,
+        # and an author told to "type it" would add a key nothing reads. Say which case it is.
+        unknown = (clean not in UNTYPED_CONSTRAINT_GUIDANCE and not present)
+        tail = ""
+        if unknown:
+            tail = (f" Note that {_as_json_text(clean)} is not a field this checker recognises and "
+                    f"is not in the block either, so typing it into trip.traveler_constraints buys "
+                    f"nothing on its own: either it is a misspelling of a real constraint field, "
+                    f"or the traveller's answer belongs somewhere this schema does carry it.")
+        if field != clean:
+            tail += (f" The marker entry is spelled {_as_json_text(field)}, with whitespace around "
+                     f"the name; that padding never matches the block's key and is invisible in an "
+                     f"editor, so fix the entry to {_as_json_text(clean)} as well.")
+        errors.append(
+            # The path carries `clean`, never the padded spelling: an error path ending in
+            # invisible whitespace is unclickable, ungreppable, and indistinguishable from the
+            # clean field it is not.
+            f"trip.traveler_constraints.{clean} was never typed -- "
+            f"{UNTYPED_CONSTRAINTS_MARKER} still names it and the field is {current}. {guidance}, "
+            f"then delete {_as_json_text(field)} from {UNTYPED_CONSTRAINTS_MARKER}. Until then "
+            f"this is not the "
+            f"traveller's answer, it is the skeleton's default: the intake collects this as prose "
+            f"and nothing converts a sentence into an enum or a number, so an untyped field leaves "
+            f"the walking and dining gates measuring nothing while the plan reads as though the "
+            f"traveller had no constraint at all.{tail}")
+
+
 SALE_STATUSES = ("always_available", "scheduled_release", "at_the_door", "sold_out_or_unavailable")
 
 
@@ -3230,6 +3678,10 @@ PLAN_CHECKS = (
     check_preference_coverage,
     check_prose_texture,
     check_sentinel_timestamps,
+    # Next to check_sentinel_timestamps on purpose: both refuse a value new_plan_skeleton.py wrote
+    # because it could not know the answer, and both are safe here only because they fire on the
+    # sentinel rather than on the field it stands in for.
+    check_untyped_constraints,
     check_ticket_sale_windows,
 )
 

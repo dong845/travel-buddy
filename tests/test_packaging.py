@@ -27,11 +27,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # Fields the deterministic gate requires, and where a plan author would look for them.
+#
+# The last two entries were added after the same drift happened again, one release later and in
+# both directions at once. `untyped_constraints` shipped live in four places -- the skeleton wrote
+# it, check_plan_consistency refused a plan carrying it, check_walking_budget read it, and
+# required_domains_for withheld the light verification tier over it -- while `grep -c
+# untyped_constraints templates/final-trip-plan.json` returned 0, so an author filling in the
+# contract met a refusal naming a key the contract had never shown them. `imagery_sidecar` was the
+# quieter half of the same gap: fetch_plan_imagery.py writes it into the plan and two consumers
+# refuse loudly when it names a file that is not there, and the contract said nothing at all. Key
+# PRESENCE is all this asserts -- the template's own values are `{}` and `null`, both of which mean
+# "not filled in" to every reader -- because presence is exactly what was missing.
 CONTRACT_FIELDS = {
     "dining card": ("days.0.dining.0", {"route_anchor", "off_route_justification",
                                         "venue_hours", "hours_status"}),
     "budget": ("budget", {"cap_per_person", "overrun_acknowledged"}),
-    "plan root": ("", {"verification_status", "verification_report"}),
+    "plan root": ("", {"verification_status", "verification_report", "imagery_sidecar"}),
+    "traveler constraints": ("trip.traveler_constraints", {"untyped_constraints"}),
 }
 
 

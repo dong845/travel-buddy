@@ -41,6 +41,20 @@ indistinguishable from an author who measured the day and found no walking in it
 the holes in this design, and they are stated rather than papered over -- check every
 `checked_at`, and every activity's on-foot minutes, before delivery.
 
+A third hole was the same shape and worse, because it paid. `allergy_severity: "none"` and
+`max_continuous_walking_minutes: null` are not sentinels at all: they are answers, and they were
+being written by a script that cannot know either one. Measured on a real five-day plan, with
+those defaults untouched, deleting EVERY activity's `on_foot_minutes` changed the finding count
+from 2 to 2 -- every walking check no-ops when the cap is null -- while the same deletion against a
+typed cap of 25 produced five precise findings. And SKILL.md allows the light verification tier
+only when the severity is none/preference AND the cap is null, so those two defaults were also
+exactly what bought the cheaper pass: never typing them switched the walking checks off and
+skipped four verification domains at once. Neither field can hold a TODO string (validate_plan
+would refuse to render the skeleton at all), so the marker lives beside them in
+`trip.traveler_constraints[UNTYPED_CONSTRAINTS_MARKER]`, one entry per untyped field, and
+`check_untyped_constraints` refuses the plan until the author deletes it. That is a hole closed,
+not another one stated.
+
 --from-intake
 -------------
 The traveller already answered these questions once. Copying their answers by hand is where they
@@ -61,6 +75,15 @@ import json
 import sys
 from pathlib import Path
 
+# The gate owns the name of the marker this script writes, and this script imports it rather than
+# restating the string. save_trip_deliverables.py learned the same lesson about its copy of the
+# check list: a duplicated constant is a gate that silently falls behind, and here the failure
+# would be the quietest kind -- the skeleton writing `untyped_constraints` while the checker reads
+# `untyped_constraint`, every test in the suite green, and the marker never firing on a real plan.
+# Python puts the script's own directory on sys.path, which is how save_trip_deliverables.py
+# imports the same module when run as `python scripts/...`.
+from check_plan_consistency import UNTYPED_CONSTRAINTS_MARKER
+
 TODO = "TODO: "
 # Typed fields cannot hold prose, so they get type-valid sentinels instead. The URL sentinel is
 # chosen so three separate gates still object: it is HTTPS (renderer accepts it), it contains
@@ -69,6 +92,33 @@ TODO = "TODO: "
 # merely conspicuous on the page -- and that is a stated limit, not an oversight.
 URL = "https://example.invalid/TODO-replace-with-a-researched-url"
 DATE = "1970-01-01"
+
+# The third sentinel, and the one the two above could not express. `allergy_severity` and
+# `max_continuous_walking_minutes` are the fields the walking and dining gates MEASURE, and this
+# script cannot know either: the intake form collects both as prose and nothing turns a sentence
+# into an enum or a number. Neither field can hold a TODO string -- validate_plan requires the
+# severity to be an ALLERGY_SEVERITIES member or null and the cap to be a positive whole number or
+# null, so prose in either one stops the skeleton rendering at all, and the enum's "must be one of:
+# none, preference, intolerance, severe" would then be reported about a placeholder, which reads as
+# a typo rather than as an unanswered question. Null cannot carry the meaning either: for the cap,
+# null IS the documented answer "the traveller stated no limit".
+#
+# So the marker sits beside them, keyed by the field it stands for and carrying the same TODO prose
+# every other unfilled value here carries. Deleting an entry is how an author says they typed that
+# field; check_untyped_constraints refuses the plan until both are gone, and required_domains_for
+# refuses the light verification tier while either remains.
+UNSET_CONSTRAINTS = {
+    "allergy_severity": (
+        f"{TODO}type the traveller's allergy severity -- none | preference | intolerance | severe "
+        f"-- from their own words, then delete this entry. 'none' asserts there is nothing to "
+        f"avoid, so it has to be a claim somebody made rather than the value that was here."),
+    "max_continuous_walking_minutes": (
+        f"{TODO}type the minutes the traveller said they can walk at a stretch, or set the field "
+        f"to null if they stated no limit, then delete this entry. Null switches every per-leg and "
+        f"per-activity walking check off: measured on a real five-day plan, deleting every "
+        f"activity's on_foot_minutes changed the finding count from 2 to 2 with the cap null, and "
+        f"produced five precise findings with it typed as 25."),
+}
 
 # Which intake flag each required trip field can arrive from, named in the error when neither the
 # flag nor the file carries it. "--start is required" sends the operator back to the command line;
@@ -566,12 +616,33 @@ def main() -> int:
             # be worse -- these are the fields the dining and walking gates read, and a gate that
             # reads a sentence measures nothing. --from-intake fills the two list fields; the
             # severity, the card text and the walking cap have no intake key and are authored here.
+            #
+            # That paragraph was right about the list fields and wrong about the other two, and the
+            # measurement says how wrong: with `allergy_severity: "none"` and
+            # `max_continuous_walking_minutes: null` left untouched, deleting EVERY activity's
+            # on_foot_minutes from a real five-day plan changed the error count from 2 to 2 --
+            # every walking check silently no-ops, because check_walking_budget arms itself off
+            # `cap is not None`. And SKILL.md's light verification tier is allowed only when the
+            # severity is none/preference AND the cap is null, so those two defaults did not merely
+            # fail to enforce anything: they were exactly what bought the cheaper pass. A model that
+            # never typed them switched the walking checks off and skipped four verification domains
+            # in one move, and no gate said a word.
+            #
+            # "A TODO would be worse" stays true OF THESE FIELDS -- prose in either one fails
+            # validate_plan and the skeleton stops rendering at all -- which is why the marker sits
+            # beside them instead of in them. The severity now starts as null rather than "none":
+            # null is the one value the enum validator accepts that is not an answer, so the page
+            # prints no allergy row and required_domains_for already reads it as unsettled, while
+            # "none" was the plan asserting on the traveller's behalf that there was nothing to
+            # avoid. Empty is still a claim for the two LIST fields; leave them empty only when the
+            # traveller stated nothing.
             "traveler_constraints": {
                 "dietary_or_religious_needs": dietary,
-                "allergy_severity": "none",
+                "allergy_severity": None,
                 "allergy_card_text": None,
                 "max_continuous_walking_minutes": None,
                 "mobility_notes": mobility,
+                UNTYPED_CONSTRAINTS_MARKER: dict(UNSET_CONSTRAINTS),
             },
             # The other half of the same form. traveler_constraints is what the traveller cannot
             # have; this is what they came for, and until it existed nothing downstream could tell
@@ -756,14 +827,21 @@ def main() -> int:
     # into the typed fields the gates read. Both are named because both went missing in the
     # measured run: a severe dairy allergy that reached no dining card, and a 20-30 minute
     # walking limit against a day that scheduled hours of it.
+    #
+    # The wording tracks what the file now says: both fields carry an entry in
+    # trip.traveler_constraints[UNTYPED_CONSTRAINTS_MARKER] instead of a value that reads as an
+    # answer, so the note names the marker the author has to clear. A note that described a value
+    # the skeleton no longer writes would send them to the wrong line.
     if mobility:
-        print("  NOTE: trip.traveler_constraints.max_continuous_walking_minutes is still null. "
-              "Set it to the number those mobility notes state, or no gate measures the limit.",
+        print("  NOTE: trip.traveler_constraints.max_continuous_walking_minutes is still null and "
+              f"marked untyped in {UNTYPED_CONSTRAINTS_MARKER}. Set it to the number those "
+              "mobility notes state and delete the marker entry, or no gate measures the limit.",
               file=sys.stderr)
     if dietary:
-        print("  NOTE: trip.traveler_constraints.allergy_severity is still 'none' and "
-              "allergy_card_text is null. Set the severity (preference | intolerance | severe) "
-              "and write the card, or the plan asserts there is nothing to avoid.",
+        print("  NOTE: trip.traveler_constraints.allergy_severity is still null and marked untyped "
+              f"in {UNTYPED_CONSTRAINTS_MARKER}, and allergy_card_text is null. Set the severity "
+              "(none | preference | intolerance | severe), write the card, and delete the marker "
+              "entry, or nothing on the page or in the gates knows there is anything to avoid.",
               file=sys.stderr)
     return 0
 

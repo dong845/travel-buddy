@@ -145,6 +145,54 @@ def main() -> int:
         if missing:
             failures.append(f"skeleton {label} is missing template field(s): {missing}")
 
+    # The two constraints the walking and dining gates MEASURE must leave this script marked as
+    # untyped, not answered. They used to be emitted as `allergy_severity: "none"` and
+    # `max_continuous_walking_minutes: null` -- values a reader cannot tell from a traveller's
+    # answer -- for two fields the skeleton cannot know, because the intake collects both as prose
+    # and nothing turns a sentence into an enum or a number. Measured on a real five-day plan with
+    # those defaults untouched, deleting every activity's on_foot_minutes changed the finding count
+    # from 2 to 2; with the cap typed as 25 the same deletion produced five precise findings. And
+    # SKILL.md's light verification tier is allowed only when the severity is none/preference AND
+    # the cap is null, so the untouched defaults also bought the cheaper pass.
+    #
+    # The marker's KEY is imported from the checker rather than spelled here, because that is the
+    # failure this case exists to catch: a skeleton writing `untyped_constraints` while the gate
+    # reads `untyped_constraint` keeps every test in the suite green and never fires on a plan.
+    sys.path.insert(0, str(SCRIPTS))
+    from check_plan_consistency import (  # noqa: PLC0415 - import after path setup
+        UNTYPED_CONSTRAINTS_MARKER, check_untyped_constraints)
+
+    emitted = skeleton["trip"]["traveler_constraints"]
+    if emitted.get("allergy_severity") is not None:
+        failures.append(
+            f"skeleton emits allergy_severity={emitted.get('allergy_severity')!r}, which reads as "
+            f"the traveller's answer. It cannot know this field; it must leave it unset.")
+    if emitted.get("max_continuous_walking_minutes") is not None:
+        failures.append(
+            f"skeleton emits max_continuous_walking_minutes="
+            f"{emitted.get('max_continuous_walking_minutes')!r} rather than leaving it unset.")
+    unset = emitted.get(UNTYPED_CONSTRAINTS_MARKER)
+    if not isinstance(unset, dict):
+        failures.append(
+            f"skeleton emits no {UNTYPED_CONSTRAINTS_MARKER} marker "
+            f"(found {unset!r}); nothing distinguishes 'nobody typed it' from 'genuinely none'")
+    else:
+        for field in ("allergy_severity", "max_continuous_walking_minutes"):
+            if field not in unset:
+                failures.append(f"{UNTYPED_CONSTRAINTS_MARKER} does not name {field}")
+            elif "TODO:" not in str(unset[field]):
+                failures.append(
+                    f"{UNTYPED_CONSTRAINTS_MARKER}[{field!r}] carries no TODO marker, so it does "
+                    f"not read as unfilled the way every other blank in this skeleton does")
+    # And the gate that reads the marker must actually fire on the skeleton's own output -- the
+    # one assertion a matching key name still cannot make on its own.
+    found: list[str] = []
+    check_untyped_constraints(skeleton, found, [])
+    if len(found) != 2:
+        failures.append(
+            f"check_untyped_constraints reports {len(found)} finding(s) on a fresh skeleton, "
+            f"expected one per untyped constraint: {found}")
+
     compare("trip", template["trip"], skeleton["trip"])
     compare("days[].dining[]", template["days"][0]["dining"][0], skeleton["days"][0]["dining"][0])
     compare("days[].route.segments[]", template["days"][0]["route"]["segments"][0],

@@ -56,6 +56,18 @@ from pathlib import Path
 # it fails loudly at startup, which is the correct place to find out.
 from check_plan_consistency import WEEKDAYS, _parse_weekday_prefix
 
+# Same reasoning as the import above, for the other thing a plan points at from outside itself.
+# `imagery_sidecar` is a name RELATIVE to the plan, so a replan that writes the new plan into any
+# other directory hands the traveller a plan naming a file that is not beside it -- and both
+# consumers are required to refuse that rather than render silently. Reimplementing "where does
+# this plan's payload live" here would be a second answer to a question that already has one.
+from fetch_plan_imagery import (
+    ImagerySidecarError,
+    resolve_plan_imagery,
+    sidecar_path_for,
+    write_json_atomic,
+)
+
 # ----------------------------------------------------------------------------------------------
 # What may be rewritten
 # ----------------------------------------------------------------------------------------------
@@ -124,7 +136,29 @@ _CLOSURE_GLUE = 4
 #   ui_labels      - renderer vocabulary, not trip content.
 #   profile_context, replan_context - bookkeeping about the run, not claims about the trip.
 WEEKDAY_SCAN_EXEMPT_ROOTS = frozenset({"sources", "ui_labels", "profile_context", "replan_context"})
-PROSE_SCAN_EXEMPT_ROOTS = frozenset({"ui_labels", "profile_context", "replan_context", "_contract"})
+# The prose scan skips the same bookkeeping subtrees, and two more that are not prose at all:
+#   imagery_sidecar - a FILE NAME, and one this script rewrites itself. fetch_plan_imagery.py
+#                    derives that name from the plan's stem, and every plan in a real workspace is
+#                    named for its start date, so the scan saw the old date inside the name, called
+#                    it a sentence quoting a date that moved, and filed an entry at the same path
+#                    the imagery block below writes to. The two merged into ONE entry telling the
+#                    author to "re-read each sentence against the new calendar and edit it by hand"
+#                    about a string the script had just rewritten correctly. Measured on a shift of
+#                    a plan whose sidecar was `2026-09-28-chengdu-imagery.json`: one entry at
+#                    `imagery_sidecar` carrying both the false prose demand and the real
+#                    photograph one. A demand the author checks and finds already correct is how a
+#                    must_reverify list stops being read.
+#   imagery        - the pre-split inline payload. Its leaves are a label, a licence, an artist and
+#                    a `data_uri`, and base64 is not prose: it has no weekday in it that means a
+#                    weekday. Measured on the one plan in the real workspace that still carries the
+#                    photographs inline (2,132,252 bytes, 7 slots), shifting it +5 days produced an
+#                    entry at `imagery` naming five base64 blobs as "field(s) here [that] name a
+#                    weekday", because a run of base64 lands "sun"/"mon"/"sat" between two digits
+#                    often enough to be certain. What those photographs really need re-checked is
+#                    what is IN the frame across a season, which the imagery block below says in
+#                    its own sentence.
+PROSE_SCAN_EXEMPT_ROOTS = frozenset({"ui_labels", "profile_context", "replan_context", "_contract",
+                                     "imagery_sidecar", "imagery"})
 
 # A dining card whose hours_status is one of these says a human went and looked -- on the OLD
 # dates. Same set check_plan_consistency uses to decide whether a card claims research.
@@ -889,6 +923,125 @@ def main(argv: list[str] | None = None) -> int:
         "this plan no longer has. Re-run the five-domain pass in references/verification.md and "
         "save with a fresh report."))
 
+    # The photographs travel WITH the plan, and the key naming them is rewritten to where they
+    # landed. Two different questions, and this script had been answering neither:
+    #
+    #   * What stays true. A photograph is of a place, and a date change moves no places. This
+    #     script's own retained_note says route order, stop selection and venue choices are
+    #     unchanged, so every slot in the payload still depicts the thing its caption names -- the
+    #     hero is still the destination, `anchor:2` is still the same anchor at the same index.
+    #     Dropping them would delete verified, licence-checked work that the delta did not touch,
+    #     and re-fetching costs a network the traveller may not have.
+    #   * What does not. What is IN the frame is seasonal: shift a trip from September to January
+    #     and a photograph of a beach in full sun is still honest about the place and misleading
+    #     about the visit. And slot keys are positional, so if re-verification adds, drops or
+    #     reorders an anchor, every anchor photograph after it moves to a heading it is not of.
+    #     Both go into must_reverify rather than being silently accepted or silently discarded.
+    #
+    # Measured before this existed: `replan_trip.py <plan.json> --shift-days 5 --out <other
+    # dir>/new.json` -- the flow the module docstring documents -- copied `imagery_sidecar`
+    # verbatim, so the new plan named a file that was not beside it and BOTH
+    # `render_final_trip_html.py` and `save_trip_deliverables.py` exited 2 on it. A replan that
+    # produces a plan nothing can read is not a replan.
+    #
+    # A PRE-SPLIT plan reaches all of that too, and until it did the one plan in the real workspace
+    # holding photographs was the one this block ignored. It carries them under `imagery` inline
+    # with no `imagery_sidecar` key at all, so the sidecar-only gate below used to skip it and the
+    # 2MB rode into the new plan inline: measured on a copy of
+    # `plans/2026-11-16-拉纳卡-...json` (2,132,252 bytes, 7 inline slots), `--shift-days 5 --out`
+    # produced a 2,146,960-byte new plan, no sidecar beside it, and not one imagery entry in
+    # must_reverify. Two things were wrong with that and both are fixed here:
+    #
+    #   * The bytes. `fetch_plan_imagery.py`'s own docstring measures what they cost a reader --
+    #     ~576k tokens for one read of that plan against ~42k for its siblings -- and a replan is a
+    #     WRITE, which is the moment the split is supposed to happen. resolve_plan_imagery's
+    #     docstring already says so: a read has no business rewriting the file it read, so the
+    #     inline payload is migrated "on the next write instead". This is that write. The payload
+    #     goes beside --out under the new plan's own stem, exactly where a sidecar plan's does, so
+    #     ONE code path serves both and render_final_trip_html.py and save_trip_deliverables.py
+    #     find it by the same rule they already use.
+    #   * The silence. Seasonality and positional slot keys are facts about photographs, not about
+    #     which file they sit in, so the pre-split plan needs the same must_reverify entry.
+    #
+    # Without --out there is nowhere to put a sidecar, and the two cases part company there. A
+    # plan that NAMES a sidecar still refuses -- copying a relative name into a plan going to an
+    # unknown redirect names a file that is not beside it, which both consumers must refuse. A
+    # plan carrying the payload INLINE does not refuse: the bytes are in the document itself, so
+    # whatever the redirect lands on is self-contained and readable by both consumers. Refusing it
+    # would break a flow that works today to save bytes the operator can save by passing --out,
+    # which the note printed at the end tells them.
+    inline_imagery = plan.get("imagery")
+    declared_sidecar = plan.get("imagery_sidecar")
+    names_sidecar = isinstance(declared_sidecar, str) and bool(declared_sidecar.strip())
+    # `is not None` rather than a truth test, so a plan whose `imagery` is a string, a list, or any
+    # other shape no renderer can read still reaches resolve_plan_imagery and is refused by name.
+    # Skipping it would copy the broken shape into the new plan and hand the failure to whoever
+    # opens it next.
+    payload, new_sidecar, kept_inline = None, None, False
+    if names_sidecar or inline_imagery is not None:
+        if names_sidecar and not args.out:
+            _refuse("this plan's photographs are in a sidecar, and the new plan is going to stdout.",
+                    "`imagery_sidecar` is a name relative to the plan, so a plan with no path of "
+                    "its own cannot say where its photographs are -- and a copy of the key would "
+                    "name a file that is not beside wherever you redirect this.",
+                    "Pass --out <new.json>: the payload is copied beside it under the new plan's "
+                    "own stem and the key is rewritten to match.")
+        try:
+            carried_imagery, _source = resolve_plan_imagery(plan, args.plan)
+            new_sidecar = sidecar_path_for(args.out) if args.out else None
+        except ImagerySidecarError as exc:
+            _refuse(f"this plan's photographs could not be read: {exc}",
+                    "A replan cannot carry photographs it cannot open, and writing the new plan "
+                    "with the key copied over would hand you a plan both consumers refuse.",
+                    "Rebuild them with `python scripts/fetch_plan_imagery.py <plan.json>`, or "
+                    "delete the 'imagery_sidecar' key if this plan is meant to carry none.")
+        # The photograph sentence, shared by both destinations because it is about the frames and
+        # not about the file they live in. Only the path it is filed under differs.
+        def _imagery_finding(count: int) -> str:
+            return (
+                f"{count} photograph(s) were carried onto the new dates unchanged. They are "
+                f"still OF the same places -- the delta moved no venues -- but what is IN them is "
+                f"not date-free: a frame shot in one season shows light, foliage and crowds the "
+                f"traveller will not meet in another, and the licence and author printed beside "
+                f"each one were checked against the old plan's slots. Look at every image against "
+                f"the new "
+                f"{'window ' + new_start.isoformat() + '..' + new_end.isoformat() if delta else 'plan'}"
+                f", and if re-verification adds, removes or reorders any anchor, re-run "
+                f"`python scripts/fetch_plan_imagery.py <plan.json>`: slot keys are positional, so "
+                f"a changed anchor list moves every later photograph under a heading it is not of")
+
+        if not carried_imagery:
+            # A reference to no photographs: an empty inline dict, or a sidecar file holding `{}`.
+            # Both keys are dropped rather than reproduced, because writing an empty sidecar and a
+            # key pointing at it manufactures a payload of record where there is none -- and the
+            # next tool to see that key would report a plan whose photographs went missing. Said
+            # out loud so a key disappearing is never something the operator finds later.
+            dropped_keys = [key for key in ("imagery", "imagery_sidecar") if key in plan]
+            for key in dropped_keys:
+                plan.pop(key, None)
+            if dropped_keys:
+                print(f"note: {' and '.join(dropped_keys)} named no photograph at all, so the new "
+                      f"plan carries neither key rather than a reference to an empty payload.",
+                      file=sys.stderr)
+        elif args.out:
+            # Dropped from the new plan for the same reason fetch_plan_imagery.py drops it: the
+            # bytes are in the file named on the next line, and a copy inline is the 2MB plan all
+            # over again. This is also the line that MIGRATES a pre-split plan -- `imagery` goes
+            # out, `imagery_sidecar` comes in -- so the shifted plan is the small document every
+            # gate, verifier and reader was promised.
+            payload = carried_imagery
+            plan.pop("imagery", None)
+            plan["imagery_sidecar"] = new_sidecar.name
+            findings.add("imagery_sidecar", _imagery_finding(len(payload)))
+        else:
+            # Inline, to stdout. The payload stays exactly where it already is -- resolve returns a
+            # copy, and rewriting the key with it would only churn the file -- and the entry is
+            # filed under `imagery`, the field that actually holds them in THIS output. A path in
+            # must_reverify has to resolve in the plan it ships with (see _leaves), and
+            # `imagery_sidecar` would not: this plan has no sidecar.
+            kept_inline = True
+            findings.add("imagery", _imagery_finding(len(carried_imagery)))
+
     plan["generated_at"] = today.isoformat()
 
     # A synthesised request describes the flags, not the traveller. It is a placeholder, and the
@@ -924,6 +1077,17 @@ def main(argv: list[str] | None = None) -> int:
     # --- output --------------------------------------------------------------------------------
     text = json.dumps(plan, ensure_ascii=False, indent=2) + "\n"
     if args.out:
+        # Photographs first, plan second -- fetch_plan_imagery.py's ordering and its reason: a
+        # failure here leaves an orphan sidecar that nothing points at, while the other order
+        # leaves a new plan naming a file that does not exist, which every reader must refuse.
+        if payload is not None:
+            try:
+                write_json_atomic(new_sidecar, payload)
+            except OSError as exc:
+                _refuse(f"could not write the photographs to {new_sidecar}: {exc}",
+                        "The new plan names that file, so writing the plan without it would "
+                        "produce a plan both consumers refuse to read.",
+                        "Choose a writable --out directory.")
         try:
             Path(args.out).write_text(text, encoding="utf-8")
         except OSError as exc:
@@ -934,6 +1098,13 @@ def main(argv: list[str] | None = None) -> int:
     _print_change_log(args, plan, delta, old_start, old_end, new_start, new_end, span,
                       changes, skipped, link_warnings, prose_groups, findings,
                       old_status, old_report, carried, closures)
+    # Said out loud, after the change log, because a second file was written that the operator did
+    # not name on the command line. A file that appears without being asked for is a file somebody
+    # will later find and not recognise.
+    if payload is not None:
+        print(f"\nPHOTOGRAPHS  {len(payload)} slot(s) copied to {new_sidecar}", file=sys.stderr)
+        print(f"  the new plan's imagery_sidecar now names {new_sidecar.name}; the source plan "
+              f"still points at its own payload and is untouched.", file=sys.stderr)
     return 0
 
 

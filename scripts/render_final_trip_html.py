@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
 
+from fetch_plan_imagery import ImagerySidecarError, resolve_plan_imagery
 from travel_workspace import find_sensitive_values
 
 
@@ -28,6 +29,36 @@ ROUTE_MAP_SCOPES = {"multi_stop", "primary_leg"}
 # Booking states from references/decision-and-research.md. Constrained so the page can
 # localize them; a free-form status would print an English enum on a Chinese page.
 BOOKING_STATES = ("idea", "researched", "held", "booked")
+# How much the source register says a row can be trusted. Printed as visible text beside every
+# source, and therefore a closed enum for precisely the reason SKILL.md gives for plan_status and
+# the budget categories: an arbitrary string cannot be translated, so it leaks.
+#
+# It was NOT constrained until now, and the cost was measured, not theoretical. Three DELIVERED
+# Chinese pages -- 2026-11-16-拉纳卡, 2027-01-08-拉斯帕尔马斯, 2027-02-12-阿利坎特 -- printed the
+# bare English words "high" and "medium" in an otherwise fully Chinese source register, and both
+# gates reported the pages VALID. 拉纳卡 was the only gate-stamped plan in the workspace, so the
+# best plan there shipped the defect with every light green. The renderer's own fallback was the
+# English word "researched", which is untranslatable by construction, and validate_trip_html.py
+# could not see any of it because its detector was a hand-maintained list of English strings
+# somebody had remembered to write down.
+#
+# The decision to CONSTRAIN rather than to translate-what-we-recognise is deliberate, and it has a
+# price worth stating. Delivered workspaces contain confidence values that are prose --
+# "primary source; timetable requires recheck", "climate average; forecast requires recheck",
+# and even hand-localized "高"/"中" where an author did by typing what this enum now does by
+# construction. Those plans now fail validate_plan and have to move the qualification into
+# `claim_or_decision_supported`, the field whose entire job is to say what the source proves.
+# The alternative -- render the recognised tokens and pass everything else straight through --
+# reopens the hole for every value nobody predicted, which is exactly how this defect arrived.
+# A field that renders visibly and accepts anything is not a field with a small bug in it.
+SOURCE_CONFIDENCE_LEVELS = ("high", "medium", "low", "researched", "unverified")
+# What a source row shows when the plan recorded no confidence at all. It is a MEMBER of the enum
+# above, so it localizes through the same label table as every authored value; the previous
+# default was the bare literal "researched" spliced into the markup, which no label key could
+# reach and no translator could fix. Its meaning is unchanged on purpose: this fix is about the
+# word the reader sees, and quietly re-defaulting delivered pages from "researched" to something
+# weaker would change what those pages claim about sources nobody re-examined.
+SOURCE_CONFIDENCE_DEFAULT = "researched"
 # Budget categories are an enum for the same reason, and so `included_categories` and
 # `breakdown` can be compared without string-matching two different spellings.
 BUDGET_CATEGORIES = (
@@ -488,6 +519,25 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "group_hotel": "住宿选项",
             "group_ticket": "门票选项",
             "group_car": "租车选项",
+            # Source-register confidence, one key per SOURCE_CONFIDENCE_LEVELS member. Named
+            # confidence_<value> on purpose: localize_enum_values looks the key up by value, the
+            # way state_<value> and meal_<value> already work, so adding a level to that tuple and
+            # a key here is the whole of what a new level costs. "已调研" deliberately reads the
+            # same as hours_researched -- it is the same claim about the same kind of evidence,
+            # and two spellings of it on one page would be the register contradicting itself.
+            "confidence_high": "高",
+            "confidence_medium": "中",
+            "confidence_low": "低",
+            "confidence_researched": "已调研",
+            "confidence_unverified": "未核验",
+            # ALLERGY_SEVERITIES, which validate_plan has always enforced and nothing has ever
+            # translated. `severity_none` is not rendered today -- the panel skips a "none"
+            # severity rather than printing "no allergy" as though it were a constraint -- and is
+            # written out anyway so the table matches the enum instead of matching today's caller.
+            "severity_none": "无",
+            "severity_preference": "偏好",
+            "severity_intolerance": "不耐受",
+            "severity_severe": "严重（可致命）",
         }
     if isinstance(custom_labels, dict) and all(
         isinstance(value, str) and (value.strip() or key == "day_suffix")
@@ -566,8 +616,123 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "nonstop_ground",
     "stops_suffix",
     "unit_km",
+    # Added with the source-register confidence enum, and optional on exactly the terms the two
+    # comments above spell out: every ui_labels set saved before today lacks these five keys, and
+    # making them REQUIRED would reject those sets whole, dropping a hundred correctly translated
+    # strings back to English to fix five. Missing keys fall through to the English token instead,
+    # which validate_trip_html.py's i18n gate then fails -- loud and one page at a time, which is
+    # the trade this file has already made five times.
+    "confidence_high",
+    "confidence_medium",
+    "confidence_low",
+    "confidence_researched",
+    "confidence_unverified",
+    "severity_none",
+    "severity_preference",
+    "severity_intolerance",
+    "severity_severe",
 })
 REQUIRED_UI_LABEL_KEYS = frozenset(labels_for("zh-CN")) - OPTIONAL_UI_LABEL_KEYS
+
+# Languages with a label table compiled into this file. labels_for() answers {} for anything
+# else, so this is the complete set of spellings the renderer itself has ever put on a page --
+# which is what makes it the only safe source for the alias tables below.
+BUILTIN_LABEL_LANGUAGES = ("zh-CN",)
+
+
+def localized_enum_aliases(prefix: str, values: tuple[str, ...]) -> dict[str, str]:
+    """Map every spelling this file's OWN label tables give `values` back to its machine token.
+
+    Closing sources[].confidence to an enum was right and it refused a delivered plan on the way
+    out. plans/2026-09-18-马略卡-帕尔马四日-老城-山间古董火车与索列尔港.json stores 高 six times and 中
+    twice -- an author who understood exactly what that field is (one of five graded values, not
+    prose) and localized it by hand because in that workspace nothing else would. That is not a
+    plan with a bad value in it. It is the one plan that had already solved this problem, and the
+    first thing the fix did was make it unrenderable.
+
+    This file's own precedent decides the case: intake_context_errors() is called from
+    save_trip_deliverables rather than from validate_plan precisely so a new requirement cannot
+    retroactively invalidate plans already sitting in a workspace, and its docstring says so. A
+    plan is a portable document. "Retype the English word" is not a good enough reason to refuse
+    one that is already correct.
+
+    So the known localized spellings map back, and they map back HERE, next to the table that
+    produced them -- a comprehension over labels_for(), not a second hand-written list to drift
+    from the first. Adding a level to the enum plus a `<prefix><level>` key to the table is still
+    the whole cost of a new level.
+
+    Only BUILT-IN tables are read, and the result is one table for all plans rather than one per
+    language: a plan's own `ui_labels` is author-supplied, so treating it as a value domain would
+    let any string back into the field through a label key -- which is the hole the enum was
+    closed to shut. The consequence is worth naming: an author hand-localizing into a language
+    this file does not ship (French, Japanese) still has to store the machine token, because
+    there is no spelling of it the renderer could recognise without trusting their own labels.
+    validate_plan's error names both the tokens and the spellings, so it says what it will take.
+
+    Raises on a collision rather than picking a winner: if two levels ever share a spelling, or a
+    spelling is another level's token, silently mapping one onto the other would mislabel a
+    source's evidence on the page. That is a wrong fact, so it fails at import.
+    """
+    aliases: dict[str, str] = {}
+    for language in BUILTIN_LABEL_LANGUAGES:
+        labels = labels_for(language)
+        for value in values:
+            spelling = str(labels.get(f"{prefix}{value}", "")).strip()
+            if not spelling:
+                continue
+            key = spelling.casefold()
+            if key in values and key != value:
+                raise ValueError(
+                    f"{prefix}{value} in the {language} label table is spelled {spelling!r}, "
+                    f"which is another member of the same enum. One value would be silently "
+                    f"relabelled as another on the page.")
+            if aliases.setdefault(key, value) != value:
+                raise ValueError(
+                    f"{prefix}{value} and {prefix}{aliases[key]} share the spelling {spelling!r} "
+                    f"in the {language} label table, so a plan storing it cannot be read back to "
+                    f"one token.")
+    return aliases
+
+
+# 高 -> high, 中 -> medium, and the rest. The accepted set stays CLOSED: five tokens plus the five
+# spellings this file itself wrote. What is still refused, deliberately, is prose -- other plans
+# in the same workspace store "primary source; timetable requires recheck", "official",
+# "researched; dynamic" and "medium；须由12306复核", a qualification wearing a value's clothes, and
+# those keep failing until the qualification moves into claim_or_decision_supported. Accepting a
+# translated TOKEN is not the concession that reopens the hole; accepting a sentence is.
+SOURCE_CONFIDENCE_ALIASES = localized_enum_aliases("confidence_", SOURCE_CONFIDENCE_LEVELS)
+
+
+def canonical_enum_value(value: object, values: tuple[str, ...], aliases: dict[str, str]) -> str | None:
+    """The machine token `value` names -- as a token or as a built-in localized spelling -- or None.
+
+    None means "this names no member", never "this is empty": callers distinguish an absent
+    optional field from a present wrong one themselves, because those are different errors.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text in values:
+        return text
+    return aliases.get(text.casefold())
+
+
+def source_confidence_token(value: object) -> object:
+    """Normalize a stored `sources[].confidence` to its machine token on the way into enum_cell.
+
+    This is the half that makes accepting 高 correct rather than merely permissive. The page ends
+    up with data-source-confidence="high" and "high" as the span's text, so localize_enum_values
+    translates it like every other enum -- back to 高 on a Chinese page, and to the plan's own
+    ui_labels spelling on a French one, which is more than the stored 高 could ever have done.
+    Without this the token would sit in the data attribute in Chinese, where the structural i18n
+    gate and every downstream reader of that attribute expect a machine value.
+
+    An unrecognised value is returned exactly as it came. enum_cell's docstring argues for showing
+    an odd value instead of swapping in a plausible default, and this must not quietly launder
+    one into a token it does not mean.
+    """
+    canonical = canonical_enum_value(value, SOURCE_CONFIDENCE_LEVELS, SOURCE_CONFIDENCE_ALIASES)
+    return canonical if canonical is not None else value
 
 
 def has_builtin_interface_language(language: object) -> bool:
@@ -640,6 +805,44 @@ def localize_enum_values(page: str, labels: dict[str, str]) -> str:
     page = re.sub(
         r'(<h2>Overall transport</h2><p>)(self-drive|public-transit)',
         lambda match: f"{match.group(1)}{modes[match.group(2)]}",
+        page,
+    )
+    # The SAME mode value, printed again at the head of every day's route line. It was localized
+    # in the two places above and nowhere here, so every delivered Chinese itinerary opened its
+    # 路线与交通 section with the raw word `public-transit` -- five times on the 拉纳卡 page alone --
+    # while both gates said VALID. RENDERER_ENGLISH_MARKUP had a pattern for this shape and it
+    # spelled the heading `<h2>`; the day card uses `<h3>`, so the deny-list missed it by one
+    # character. That is the argument for the structural checks in validate_trip_html.py rather
+    # than for a sixth remembered pattern: this leak was on every page the skill has ever shipped.
+    # Anchored on the marked span enum_cell() emits, so an author's free-text mode -- the field is
+    # not constrained per day -- is left exactly as written instead of being half-matched.
+    page = re.sub(
+        r'(<span class="route-mode" data-route-mode=")(' + "|".join(TRANSPORT_MODES) + r')(">)[^<]*(</span>)',
+        lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}{modes[match.group(2)]}{match.group(4)}",
+        page,
+    )
+    # Source-register confidence, localized exactly like the states, meals and arrival modes
+    # above: anchored on the markup the renderer emits, keyed by value, machine token left intact
+    # in the data attribute so every gate can still read it. `labels.get` rather than `labels[]`
+    # because the five keys are OPTIONAL -- a ui_labels set written before this enum existed has
+    # none of them, and falling through to the English token is what makes the i18n gate fail that
+    # one page loudly instead of rejecting the whole label set and printing a hundred others in
+    # English. Same trade as pill_ground and entry_not_required.
+    page = re.sub(
+        r'(<span class="source-confidence" data-source-confidence=")('
+        + "|".join(SOURCE_CONFIDENCE_LEVELS) + r')(">)[^<]*(</span>)',
+        lambda match: (f"{match.group(1)}{match.group(2)}{match.group(3)}"
+                       f"{labels.get('confidence_' + match.group(2), match.group(2))}{match.group(4)}"),
+        page,
+    )
+    # Allergy severity, on identical terms. The pill it sits in is the same pill the booking types
+    # use, which is why the deny-list pattern for pills never covered it: that pattern names the
+    # five booking types, and this is a different enum wearing the same class.
+    page = re.sub(
+        r'(<span class="pill allergy-severity" data-allergy-severity=")('
+        + "|".join(ALLERGY_SEVERITIES) + r')(">)[^<]*(</span>)',
+        lambda match: (f"{match.group(1)}{match.group(2)}{match.group(3)}"
+                       f"{labels.get('severity_' + match.group(2), match.group(2))}{match.group(4)}"),
         page,
     )
     page = re.sub(
@@ -906,8 +1109,19 @@ def _apply_replacements(page: str, replacements: dict[str, str], labels: dict[st
         # The platform name sits inside the label so a card headed "Transavia" cannot open
         # Skyscanner without saying so, the way the hotel button already names Booking.com.
         # It is captured rather than translated: a provider name is a proper noun.
+        #
+        # `labels.get`, and it took a KeyError to earn the four characters. `round_trip_in` is in
+        # OPTIONAL_UI_LABEL_KEYS -- so a ui_labels set authored before that key existed passes
+        # validate_plan whole -- and this line subscripted it anyway, which meant that plan did
+        # not print one English button among its hundred translated strings: it raised
+        # `KeyError: 'round_trip_in'` and produced no page at all. The English fallback is the
+        # exact sentence the renderer emitted, so the substitution becomes a no-op and
+        # validate_trip_html.py's RENDERER_ENGLISH_TEXT pattern "Search round trip" then fails
+        # that one page loudly -- which is the trade every other optional key in this function
+        # already makes, and the one this line was silently opted out of.
         r'(data-booking-purpose="round-trip-search"[^>]*>)Search round trip in ([^—<]+) — ([^<]+)(</a>)',
-        lambda match: (f"{match.group(1)}{labels['round_trip_in'].replace('{provider}', match.group(2).strip())}"
+        lambda match: (f"{match.group(1)}"
+                       f"{labels.get('round_trip_in', 'Search round trip in {provider}').replace('{provider}', match.group(2).strip())}"
                        f" — {match.group(3).replace(' to ', labels['to'])}{match.group(4)}"),
         page,
     )
@@ -960,10 +1174,18 @@ def _apply_replacements(page: str, replacements: dict[str, str], labels: dict[st
     # page keeps `0 stop(s)` / `0 change(s)`, which RENDERER_ENGLISH_TEXT does catch. Elsewhere an
     # English fallback keeps an incomplete label set readable; here it would keep it silent, and
     # the whole point of the rule is that an untranslated label must be loud.
-    if labels.get("nonstop_ground"):
-        page = re.sub(r'\b0 change\(s\)', labels["nonstop_ground"], page)
-    if labels.get("nonstop"):
-        page = re.sub(r'\b0 stop\(s\)', labels["nonstop"], page)
+    #
+    # Read into a local instead of re-subscripting inside the guard. The guard already made
+    # `labels["nonstop"]` safe, so this changes no behaviour -- it removes the last two hard
+    # subscripts on OPTIONAL keys in this file, which is what lets a test state the invariant
+    # mechanically ("no labels[<optional key>] anywhere") instead of a reader having to check
+    # each one for a guard. `round_trip_in`, four rules up, is the one that had no guard.
+    nonstop_ground = labels.get("nonstop_ground")
+    if nonstop_ground:
+        page = re.sub(r'\b0 change\(s\)', nonstop_ground, page)
+    nonstop = labels.get("nonstop")
+    if nonstop:
+        page = re.sub(r'\b0 stop\(s\)', nonstop, page)
     page = re.sub(r'\b(\d+) change\(s\)',
                   lambda match: f"{match.group(1)}{labels.get('stops_suffix', ' stop(s)')}", page)
     page = re.sub(r'\b(\d+) stop\(s\)',
@@ -1126,6 +1348,45 @@ def stamp(value: object) -> str:
 
 def attr(value: object) -> str:
     return html.escape(str(value), quote=True)
+
+
+def enum_cell(css_class: str, attribute: str, value: object, fallback: str) -> str:
+    """Print a renderer-owned enum value with its machine token kept beside it.
+
+    Two things ride on this shape, and both were missing when a source's `confidence` was spliced
+    into the source register as a bare `{esc(...)}`:
+
+    1. LOCALIZATION. `localize_enum_values` anchors every substitution on the exact markup the
+       renderer emits, because the same tokens also live in URLs and data attributes that must
+       stay machine-readable. A value with no anchor around it cannot be translated without a
+       page-wide search-and-replace, and a page-wide replace is how this file once translated the
+       word "researched" inside an author's own sentence. The span IS the anchor.
+
+    2. DETECTION. validate_trip_html.py's structural i18n check compares an element's rendered
+       text against the machine token in its own `data-` attribute: still equal on a page whose
+       `<html lang>` is not English means nothing translated it. That comparison needs no list of
+       known English words -- which is the entire point, because the hand-maintained deny-list is
+       what missed `confidence` for the whole life of the feature. Any FUTURE enum printed through
+       this helper is checked the day it is added, with no edit to the validator at all.
+
+    `fallback` is deliberately required rather than defaulted: an enum cell exists to show one of
+    a known set of values, so the value shown when the plan recorded nothing is a decision the
+    caller has to make in the open. Defaulting it here is how "researched" became a hardcoded
+    English word in the first place.
+    """
+    # A value that is present but not a string is stringified rather than swapped for the
+    # fallback. Substituting the default would quietly turn a wrong value into a plausible one --
+    # a plan whose confidence field holds a number would read "researched" to the traveller and
+    # to anyone auditing the page, with nothing anywhere recording that the plan said otherwise.
+    # validate_plan rejects such a value before it ever renders; this is what the page does if it
+    # is rendered anyway, and showing the odd value is the honest half of that.
+    if isinstance(value, str):
+        token = value.strip() or fallback
+    elif value is None:
+        token = fallback
+    else:
+        token = str(value)
+    return f'<span class="{css_class}" data-{attribute}="{attr(token)}">{esc(token)}</span>'
 
 
 def is_https(value: object) -> bool:
@@ -2325,6 +2586,43 @@ def validate_plan(plan: dict) -> list[str]:
                 "all read alike tells the traveller nothing about which fact rests on which page.")
         elif not is_iso_datestamp(source["accessed_at"]):
             errors.append("Every source.accessed_at must be an ISO date or date-time.")
+        # confidence is OPTIONAL -- a source that records none falls back to
+        # SOURCE_CONFIDENCE_DEFAULT -- but a value that IS recorded has to be a member of the
+        # enum, for the same reason plan_status, dining[].meal and entry_context.status are
+        # checked here: this value is printed as visible text, and visible text has to be
+        # translatable. Checked in validate_plan rather than only in the HTML gate so the author
+        # is told at render time, in the file they can fix, instead of by a structural failure on
+        # a page they then have to trace backwards.
+        #
+        # This is the half of the fix that costs something. Delivered plans in a real workspace
+        # carry prose here -- "primary source; timetable requires recheck", "official; schedule
+        # needs recheck" -- and each of those now refuses to render until the qualification moves
+        # into claim_or_decision_supported, the field beside it whose whole job is to say what a
+        # source proves. That is a genuine cost and it was weighed against the alternative: keep
+        # accepting anything, and a Chinese reader keeps being shown English machine words in a
+        # register that is otherwise entirely Chinese, with every gate green. A field that renders
+        # visibly and accepts anything is the hole.
+        #
+        # The hand-translated "高" is the case that got this wrong, and it is not the same case.
+        # An author who wrote 高 was doing by hand what the enum now does by construction -- they
+        # named one of the five levels, in the language of the plan -- and the first draft of this
+        # rule made the one workspace plan that had already solved the problem the one plan that
+        # could not render. canonical_enum_value() maps the spellings this file itself printed
+        # back to their token; localized_enum_aliases' docstring carries the reasoning and the
+        # limit. The accepted set stays closed, and prose is still refused.
+        if isinstance(source, dict) and source.get("confidence") is not None:
+            confidence = str(source["confidence"]).strip()
+            if confidence and canonical_enum_value(
+                    confidence, SOURCE_CONFIDENCE_LEVELS, SOURCE_CONFIDENCE_ALIASES) is None:
+                errors.append(
+                    f"source confidence {confidence!r} is not one of: "
+                    + ", ".join(SOURCE_CONFIDENCE_LEVELS)
+                    + " (or one of this renderer's own spellings of them: "
+                    + ", ".join(sorted(SOURCE_CONFIDENCE_ALIASES))
+                    + "). This value is printed next to the source on the page, so it has to be a "
+                    "closed enum the renderer can translate -- an arbitrary string cannot be, and "
+                    "on a non-English page it ships as English nobody can read. Put any "
+                    "qualification ('fare requires recheck') into claim_or_decision_supported.")
     options = plan.get("booking_options") if isinstance(plan.get("booking_options"), dict) else {}
     required = {"flights": "flight", "ground_transport": "ground", "accommodations": "hotel",
                 "attraction_tickets": "ticket", "rental_cars": "car"}
@@ -2771,8 +3069,22 @@ def render_unlocalized(plan: dict) -> str:
         ticket_panel = "".join(day_tickets) or (
             "" if day_has_ticket_note else '<p>No verified ticket is required for the listed activities.</p>'
         )
-        transport_bits = [as_text(route.get("mode")), minutes(route.get("duration_minutes")), money(route.get("cost_low"), route.get("cost_high"), route.get("currency", trip["currency"])), as_text(route.get("fare_basis_or_fuel_toll_parking_note"), "")]
+        # The day's ground mode is the same closed enum as transport_preference.mode and it opens
+        # every day's route line, so it is emitted as a marked cell instead of being escaped into
+        # the joined sentence. Before this it went through esc() as a bare token and every Chinese
+        # itinerary this skill has delivered opened its 路线与交通 section with the English words
+        # `public-transit` -- five times on the 拉纳卡 page, which both gates called VALID.
+        # It stays OUT of transport_bits deliberately: those are joined and escaped as one string,
+        # and escaping the span would print its markup at the reader instead of rendering it.
+        # A day that records no mode keeps the exact "Not supplied" the old as_text produced, and
+        # a day whose mode is free text keeps that text -- enum_cell marks it either way, which is
+        # what lets the validator say which of the two it is looking at.
+        mode = route.get("mode")
+        mode_cell = (enum_cell("route-mode", "route-mode", mode, "")
+                     if isinstance(mode, str) and mode.strip() else esc(None))
+        transport_bits = [minutes(route.get("duration_minutes")), money(route.get("cost_low"), route.get("cost_high"), route.get("currency", trip["currency"])), as_text(route.get("fare_basis_or_fuel_toll_parking_note"), "")]
         transport_line = " · ".join(bit for bit in transport_bits if bit)
+        transport_html = mode_cell + (f" · {esc(transport_line)}" if transport_line else "")
         segment_links = route_segment_links(route, trip["currency"])
         dining = dining_cards(day.get("dining"))
         route_scope = route.get("route_map_scope")
@@ -2808,9 +3120,9 @@ def render_unlocalized(plan: dict) -> str:
         stay_line = "Checkout / no overnight stay" if day.get("day_type") == "departure" else "Arranged independently"
         if stay:
             stay_line = f"{as_text(stay.get('property_name'))} · {as_text(stay.get('stay_location'))} · {as_text(stay.get('room_basis'))}"
-        day_cards.append(f'''<article class="day-card" id="day-{attr(day["number"])}" data-day="{attr(day["number"])}"><div class="day-top"><div><p class="eyebrow">Day {esc(day.get("number"))} · {esc(day.get("date"))}</p><h2>{esc(day.get("title"))}</h2><p>{esc(day.get("focus"))}</p></div><div class="day-number" aria-label="Day {attr(day["number"])}">{esc(day.get("number"))}</div></div><section class="day-accommodation"><h3>Stay</h3><p><strong>{esc(stay_line)}</strong></p></section><section class="day-activities"><h3>Plan</h3>{day_timeline_figure}<ol class="timeline">{"".join(activities) or '<li><time>Flexible</time><div><strong>Free time</strong></div></li>'}</ol></section><section class="day-dining"><h3>Dining suggestions</h3>{dining}</section><section class="day-route"><h3>Route and mobility</h3><p>{esc(transport_line)}</p><p class="meta">{esc(route.get("route_logic"))}</p><figure class="route-map">{day_map_figure}{route_diagram(route.get("stops_in_order", []))}<figcaption>Schematic — not for navigation. Stops are shown in visit order; use the live map for directions.</figcaption></figure><a class="map-link" data-map-scope="{attr(route_scope)}" data-verified-at="{attr(route["map_checked_at"])}" href="{attr(route["verified_map_url"])}" target="_blank" rel="noopener noreferrer">{route_map_label}</a><h4>Route by segment</h4>{segment_links}{walking_line}{fallback_line}<p class="meta">{esc(route.get("service_or_driving_caveat"), "Recheck operating conditions before departure.")}</p></section><section class="day-bookings"><h3>Tickets and recheck</h3>{ticket_panel}<p class="warning">{esc(day.get("contingency"), "Keep a flexible alternative for disruptions.")}</p></section></article>''')
+        day_cards.append(f'''<article class="day-card" id="day-{attr(day["number"])}" data-day="{attr(day["number"])}"><div class="day-top"><div><p class="eyebrow">Day {esc(day.get("number"))} · {esc(day.get("date"))}</p><h2>{esc(day.get("title"))}</h2><p>{esc(day.get("focus"))}</p></div><div class="day-number" aria-label="Day {attr(day["number"])}">{esc(day.get("number"))}</div></div><section class="day-accommodation"><h3>Stay</h3><p><strong>{esc(stay_line)}</strong></p></section><section class="day-activities"><h3>Plan</h3>{day_timeline_figure}<ol class="timeline">{"".join(activities) or '<li><time>Flexible</time><div><strong>Free time</strong></div></li>'}</ol></section><section class="day-dining"><h3>Dining suggestions</h3>{dining}</section><section class="day-route"><h3>Route and mobility</h3><p>{transport_html}</p><p class="meta">{esc(route.get("route_logic"))}</p><figure class="route-map">{day_map_figure}{route_diagram(route.get("stops_in_order", []))}<figcaption>Schematic — not for navigation. Stops are shown in visit order; use the live map for directions.</figcaption></figure><a class="map-link" data-map-scope="{attr(route_scope)}" data-verified-at="{attr(route["map_checked_at"])}" href="{attr(route["verified_map_url"])}" target="_blank" rel="noopener noreferrer">{route_map_label}</a><h4>Route by segment</h4>{segment_links}{walking_line}{fallback_line}<p class="meta">{esc(route.get("service_or_driving_caveat"), "Recheck operating conditions before departure.")}</p></section><section class="day-bookings"><h3>Tickets and recheck</h3>{ticket_panel}<p class="warning">{esc(day.get("contingency"), "Keep a flexible alternative for disruptions.")}</p></section></article>''')
     overview = plan["transport_overview"]
-    source_rows = "".join(f'<li class="source-item" data-source-type="{attr(source["source_type"])}" data-accessed-at="{attr(source["accessed_at"])}" data-source-url="{attr(source["url"])}"><a class="source-link" href="{attr(source["url"])}" target="_blank" rel="noopener noreferrer">{esc(source["name"])}</a> — {esc(source.get("claim_or_decision_supported"), "Plan evidence")} · {esc(source.get("confidence"), "researched")}</li>' for source in sources)
+    source_rows = "".join(f'<li class="source-item" data-source-type="{attr(source["source_type"])}" data-accessed-at="{attr(source["accessed_at"])}" data-source-url="{attr(source["url"])}"><a class="source-link" href="{attr(source["url"])}" target="_blank" rel="noopener noreferrer">{esc(source["name"])}</a> — {esc(source.get("claim_or_decision_supported"), "Plan evidence")} · {enum_cell("source-confidence", "source-confidence", source_confidence_token(source.get("confidence")), SOURCE_CONFIDENCE_DEFAULT)}</li>' for source in sources)
     total = money(budget.get("estimated_per_person_low"), budget.get("estimated_per_person_high"), trip["currency"])
     # The traveller's own stated ceiling belongs next to the number it constrains. It reached
     # check_plan_consistency and stopped there, so a page could show a per-person total well
@@ -2973,8 +3285,19 @@ def render_unlocalized(plan: dict) -> str:
     constraint_rows = []
     severity = str(constraints.get("allergy_severity") or "").strip()
     if severity and severity != "none":
+        # Emitted through enum_cell for the same reason as the source confidence: ALLERGY_SEVERITIES
+        # is a closed enum that validate_plan already enforces, and it was printed here as a bare
+        # `{esc(severity)}` inside a pill -- so a Chinese page told a Chinese reader that their
+        # allergy was "severe", in English, in the one panel written to be read out loud at a
+        # restaurant table. Nothing caught it: RENDERER_ENGLISH_MARKUP's pill pattern lists the
+        # five booking types and had never heard of the severities, and no delivered plan in the
+        # workspace happens to set the field, so no artifact ever showed the defect either. That
+        # combination -- a closed enum, rendered visibly, with no label key anywhere -- is exactly
+        # what the structural gate in validate_trip_html.py exists to find without being told.
         constraint_rows.append(
-            f'<p><strong>Allergy severity: </strong><span class="pill">{esc(severity)}</span></p>')
+            '<p><strong>Allergy severity: </strong>'
+            + enum_cell("pill allergy-severity", "allergy-severity", severity, severity)
+            + '</p>')
     for field, label in (("dietary_or_religious_needs", "Dietary needs"),
                          ("mobility_notes", "Mobility")):
         values = [v for v in constraints.get(field, []) if isinstance(v, str) and v.strip()]
@@ -3087,6 +3410,22 @@ def main() -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: Could not read plan JSON: {exc}", file=sys.stderr)
         return 2
+
+    # The photographs live beside the plan rather than inside it (fetch_plan_imagery.py explains
+    # why at length: 96% of one delivered plan was base64, and every reader of that plan paid for
+    # it). They are merged back here, in memory, for exactly as long as it takes to render -- no
+    # new argument, because a photo payload that has to be asked for is one that gets forgotten,
+    # and a forgotten one produces a page that is silently missing every image with no gate to
+    # say so. Merged into the in-memory plan and never written back: this function does not write
+    # the plan at all, and save_trip_deliverables.py keeps the two apart deliberately.
+    try:
+        imagery, _ = resolve_plan_imagery(plan, args.plan)
+    except ImagerySidecarError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if imagery:
+        plan["imagery"] = imagery
+
     errors = validate_plan(plan)
     if errors:
         print("INVALID PLAN", file=sys.stderr)

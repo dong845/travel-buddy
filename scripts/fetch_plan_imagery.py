@@ -26,8 +26,24 @@ When a slot cannot be filled to that standard it stays empty. A page with three 
 and two gaps is honest; a page with five photographs where two are wrong teaches the traveller
 that the pictures mean nothing.
 
+5. **Where the bytes land.** Base64 of a photograph is not a field; it is a file that happens to
+   be spelled in JSON, and this script used to write it *into* the plan. Measured on a delivered
+   plan: 2,047,677 of its 2,132,252 bytes were `plan["imagery"]` -- 96% of a document whose every
+   sibling in the same workspace is 30-130KB. The cost is not disk. SKILL.md runs this during the
+   verification stage, references/verification.md hands seven parallel agents that same plan
+   path, and the gate loop after it sends the reader back to the plan after every finding: one
+   read of that plan costs ~576k tokens instead of ~42k, which on a 128k-context reader is not a
+   cost but an unrecoverable overflow. Nothing that reads a plan *as a document* -- no gate, no
+   verifier, no human -- ever needs those bytes. So they go beside it, in a sidecar, and the plan
+   keeps one small key naming it. See IMAGERY_SIDECAR_SUFFIX below for why that name is relative
+   and why there is no flag to switch this on.
+
 Usage:
     python fetch_plan_imagery.py <plan.json> [--out PATH] [--max-images N] [--dry-run]
+
+    Photographs are written to <plan-stem>-imagery.json beside the plan; the plan itself gains
+    only an `imagery_sidecar` key. render_final_trip_html.py and save_trip_deliverables.py find
+    that sidecar on their own, so no other command needs a new argument.
 """
 
 from __future__ import annotations
@@ -37,6 +53,7 @@ import base64
 import concurrent.futures
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -64,6 +81,30 @@ HERO_THUMB_WIDTH = 1600
 MAX_IMAGE_BYTES = 400_000
 HERO_MAX_BYTES = 900_000
 DEFAULT_MAX_IMAGES = 6
+# Every cap above is PER IMAGE, and until this line nothing looked at the total: `--max-images 40`
+# was a 20MB payload that no check refused, and the delivered 2MB plan that forced this rewrite
+# passed each per-image cap individually on its way to 96% of the file. Derived rather than
+# picked: the largest legitimate default run is one hero at HERO_MAX_BYTES plus
+# DEFAULT_MAX_IMAGES-1 anchors at MAX_IMAGE_BYTES = 2.9MB of downloaded bytes, which base64
+# inflates by 4/3 to ~3.9MB of payload. 4MB is that worst case with room for the metadata, and it
+# is also roughly the point where a self-contained HTML file stops being something you open on a
+# hotel wifi. Over it this refuses and prints the measured figure instead of trimming: which of
+# seven verified photographs to drop is not a decision a size check is entitled to make.
+MAX_IMAGERY_TOTAL_BYTES = 4_000_000
+# The sidecar's name is derived from the plan's, and the key inside the plan is RELATIVE to the
+# plan, both on purpose:
+#
+# - *Derived*, so a consumer can find the payload even when the key is gone -- a plan copied by
+#   hand, or rewritten by a tool that did not know about the key, still has its photographs found
+#   by name. There is deliberately no --sidecar flag on the readers either: a flag is a thing to
+#   forget, and the thing a forgotten flag ships here is a silently photo-less page.
+# - *Relative*, because this repo treats a plan as a portable document -- re-rendered, replanned
+#   weeks later, audited from a moved workspace, restored from a backup. render_final_trip_html.py
+#   gives the same reasoning for refusing to require intake_file to resolve on disk. An absolute
+#   path would pin the photographs to this machine's home directory and break the first time the
+#   workspace moved.
+IMAGERY_SIDECAR_SUFFIX = "-imagery.json"
+
 # A matched article must sit within this of the place it is supposed to depict. Generous because
 # an article's coordinate is its centroid, not the venue door; the title rule below is what makes
 # the match specific.
@@ -83,6 +124,364 @@ FACILITY_WORDS = {"airport", "aeropuerto", "aeroport", "aeroporto", "flughafen",
                   "university", "mall", "hotel", "museum", "cathedral", "catedral", "mosque",
                   "church", "iglesia", "castle", "castillo", "fort", "fortress", "monument",
                   "statue", "interior", "runway", "platform"}
+
+
+class ImagerySidecarError(RuntimeError):
+    """A plan points at a photo payload that cannot be honoured.
+
+    Its own type because every consumer has to turn it into a non-zero exit naming the path,
+    never into an empty imagery dict. The tempting shortcut -- "if the sidecar is missing, render
+    without photographs; it will be obvious" -- is false here, and checkably so: `imagery` appears
+    zero times in check_plan_consistency.py and validate_trip_html.py, nothing counts <img> tags,
+    and the page is valid with none. A traveller would open a page that simply had no pictures and
+    have no way to know that seven verified ones existed. Splitting the bytes out of the plan is
+    only safe if losing them is loud.
+    """
+
+
+def sidecar_path_for(plan_path: str | Path) -> Path:
+    """Where a plan's photo payload lives: <plan-stem>-imagery.json, beside the plan.
+
+    Callers must not pass "-": a plan read from standard input has no directory to sit beside,
+    and Path("-").stem would quietly produce "--imagery.json" in the current working directory.
+    """
+    path = Path(plan_path)
+    if path.name in ("", "-"):
+        raise ImagerySidecarError(
+            "a plan read from standard input has no directory for its imagery sidecar; "
+            "give the plan a real path, or pass --out to name where it should be written.")
+    return path.with_name(path.stem + IMAGERY_SIDECAR_SUFFIX)
+
+
+def imagery_payload_bytes(imagery: object) -> int:
+    """The payload's size as it is actually written, so a refusal quotes the real figure.
+
+    Serialized exactly the way write_json_atomic writes it -- a figure measured on a different
+    encoding than the one that lands on disk is a figure the reader cannot check against `ls`.
+    """
+    return len(json.dumps(imagery, ensure_ascii=False, indent=2).encode("utf-8"))
+
+
+FETCH_REMEDY = (f"Re-run `python scripts/fetch_plan_imagery.py <plan.json> --max-images N` with an "
+                f"N below the default {DEFAULT_MAX_IMAGES}, or remove slots from the sidecar by "
+                f"hand; nothing here will silently decide which verified photograph to drop.")
+
+
+def aggregate_refusal(measured: int, subject: str, remedy: str = FETCH_REMEDY) -> str | None:
+    """The message for a payload over MAX_IMAGERY_TOTAL_BYTES, or None when it is within it.
+
+    Deliberately applied to the imagery payload alone -- as built here, or as read from a sidecar
+    file -- and never to a merged in-memory plan. Measuring the merged plan would put a single
+    legitimate hero at HERO_MAX_BYTES on the same scale as the itinerary around it, so the check
+    would fire on the size of the trip rather than on the size of the pictures.
+
+    `remedy` exists because this message is printed by three scripts and only one of them owns the
+    flag it used to name. Measured on the delivery path: save_trip_deliverables.py printed "Lower
+    --max-images (default 6) and re-run" for a 4.9MB payload, and `save_trip_deliverables.py
+    --max-images 3` is `error: unrecognized arguments`. An instruction the operator cannot carry
+    out reads as the tool not knowing what it is doing, and the next thing they try is ignoring it.
+    So the default names the script that does own the flag, and a caller with a different set of
+    options passes the sentence its own operator can act on.
+    """
+    if measured <= MAX_IMAGERY_TOTAL_BYTES:
+        return None
+    return (f"{subject} is {measured:,} bytes, over the {MAX_IMAGERY_TOTAL_BYTES:,}-byte ceiling "
+            f"for one plan's photographs. {remedy}")
+
+
+def write_json_atomic(path: Path, data: object) -> None:
+    """Write JSON so a concurrent reader sees the whole old file or the whole new one.
+
+    The version this replaces was `destination.write_text(...)`, which truncates first and writes
+    after. That is a real window on this exact path and not a theoretical one: SKILL.md schedules
+    this script during the verification stage, and references/verification.md hands seven parallel
+    agents the same plan path -- so every one of them could read a prefix of a plan and report a
+    JSONDecodeError from a file that is perfectly valid a millisecond later, which is the shape of
+    a bug nobody ever reproduces. os.replace is atomic within a filesystem, and the temporary file
+    is created in the destination's own directory so it is always the same filesystem.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        # A half-written temp file left behind would be picked up by nothing, but it would sit in
+        # the traveller's workspace forever looking like a plan.
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def plan_slot_labels(plan: dict) -> dict[str, str]:
+    """{slot key: the label THIS plan gives that slot}, in the plan's own slot order.
+
+    The one piece of evidence a payload carries about which plan it belongs to. Every entry
+    fetch() writes records the `label` of the slot it filled -- the destination for the hero, the
+    anchor's name for an anchor -- so comparing a stored label against the label the plan gives
+    that same key answers "is this photograph still of the thing this heading names?" without a
+    network call, a checksum, or a new field in the file format.
+
+    Built from slots() rather than from a second walk of the plan, so the question is asked with
+    exactly the strings the answer was written with. A private copy of "how a slot is labelled"
+    would drift the first time slots() changed, and it would drift silently: the failure is a
+    photograph under the wrong heading, which renders perfectly.
+
+    A plan too malformed for slots() to walk raises ImagerySidecarError rather than an
+    AttributeError from three frames down. Every caller of this module is documented to turn that
+    one type into a non-zero exit naming the path, and a traceback instead would be a lost payload
+    reported as a crash in somebody else's code.
+    """
+    try:
+        return {slot["key"]: str(slot.get("label") or "") for slot in slots(plan)}
+    except (AttributeError, TypeError, KeyError) as exc:
+        raise ImagerySidecarError(
+            f"this plan's shape cannot be read well enough to say which photograph belongs under "
+            f"which heading ({type(exc).__name__}: {exc}). 'trip' must be an object and "
+            f"'destination_experience_anchors' a list. Attaching photographs to a plan nothing "
+            f"can walk would put them under headings decided by an accident of the shape.") from exc
+
+
+def foreign_sidecar_slots(plan: dict, payload: dict) -> list[str]:
+    """Which slots of `payload` this plan does not vouch for -- empty when it vouches for all.
+
+    Used wherever the *location* of a sidecar was guessed rather than declared. A file name is not
+    provenance: measured on this repo's own working filename, a plan for Chengdu carrying no
+    imagery key at all sat beside a leftover `trip-imagery.json` from a Larnaca trip and the
+    delivered page opened with a photograph of Larnaca, credited to that trip's photographer, under
+    the Chengdu heading. Both files were named correctly for their own plan; only the guess was
+    wrong.
+
+    A slot vouches for itself when the plan names that key AND the stored label is the label the
+    plan gives it. That is positive evidence and a bare filename match is not: the filename is
+    derived from a working file name that two unrelated trips routinely share ("trip.json"), while
+    the label was written from this plan's own destination and anchor names.
+    """
+    labels = plan_slot_labels(plan)
+    foreign: list[str] = []
+    for key, entry in payload.items():
+        expected = labels.get(key)
+        stored = entry.get("label") if isinstance(entry, dict) else None
+        if not expected:
+            foreign.append(f"{key} is labelled {stored!r}, but this plan has no such slot")
+        elif not isinstance(stored, str) or stored.strip() != expected.strip():
+            foreign.append(f"{key} is labelled {stored!r}, but this plan names that slot "
+                           f"{expected!r}")
+    return foreign
+
+
+def write_target_refusal(plan: dict, sidecar: Path, already_read: Path | None) -> str | None:
+    """Why the payload already at `sidecar` must not be overwritten -- None when it may be.
+
+    The mirror of the evidence test resolve_plan_imagery applies on the READ side, and it exists
+    because the write is the more dangerous half of the same guess. A refused read costs a page:
+    the operator sees the error, fixes the pointer, re-runs, and every photograph is still on
+    disk. A wrong write costs the file -- another trip's verified slots, with the licences and the
+    photographer credits that made them publishable, gone, and nothing left on disk to say they
+    were ever there. Measured before this gate existed, with fetch() stubbed to one Chengdu slot:
+    `fetch_plan_imagery.py chengdu.json --out dst/new.json` over a `dst/new-imagery.json` holding
+    a two-slot Larnaca payload exited 0, printed "Imagery sidecar: ... (1 image(s))", and left the
+    file at 434 bytes where 895 bytes of Larnaca had been.
+
+    The sidecar is also the one path the operator never typed. `--out` names a PLAN; the payload's
+    name is DERIVED from it (IMAGERY_SIDECAR_SUFFIX above says why), so the file this destroys is
+    one nobody looked at before running the command -- which is exactly where a silent overwrite
+    goes unnoticed longest.
+
+    A payload at the write target may be overwritten only when this run can account for it:
+
+    * it is the file this run read (`already_read`), so its slots went through the merge below and
+      nothing in it is lost -- the ordinary in-place re-run, and the case that must keep working;
+    * it holds no slots at all, so there is no photograph to lose.
+
+    Anything else is refused, INCLUDING a payload whose labels prove it is this plan's own. That
+    is not a second opinion about provenance but a fact about the merge: a payload this run never
+    read cannot have been merged with, so writing over it replaces its slots wholesale. That is
+    the "seven slots became one and the run exited 0" defect the merge in main() exists to refuse,
+    relocated to a path the merge never looked at, and it deserves the same refusal.
+    """
+    if not sidecar.exists():
+        return None
+    if already_read is not None:
+        try:
+            if sidecar.samefile(already_read):
+                return None
+        except OSError:
+            # `already_read` vanished between the read and here, or the two live on filesystems
+            # that cannot be compared. Neither proves they are the same file, so fall through to
+            # the evidence test rather than assume the safe answer.
+            pass
+    where = (f"this run read {already_read}" if already_read is not None
+             else "this run read no existing payload")
+    # The plan whose stem derives this sidecar's name -- spelled out because it is the command the
+    # operator should run instead, and `.removesuffix` rather than a slice so a sidecar whose name
+    # did not come from sidecar_path_for still produces a sentence rather than a mangled one.
+    owner = sidecar.name.removesuffix(IMAGERY_SIDECAR_SUFFIX) + ".json"
+    remedy = (f"Move or delete {sidecar.name}, or point --out at a plan whose stem does not derive "
+              f"that name. If those photographs ARE this plan's, re-run against the plan that "
+              f"names them -- `python scripts/fetch_plan_imagery.py {owner}` in {sidecar.parent} "
+              f"-- so this run's slots are MERGED into them instead of replacing them.")
+    if not sidecar.is_file():
+        return (f"{sidecar} already exists and is not a regular file, so this run cannot tell what "
+                f"writing over it would destroy ({where}). {remedy}")
+    # Same order and same reason as the read path: measured on the file as it sits on disk, before
+    # it is parsed, so an over-ceiling or concatenated payload is refused for the price of one
+    # stat() instead of being loaded into memory to be rejected.
+    oversize = aggregate_refusal(sidecar.stat().st_size, f"the payload already at {sidecar}")
+    if oversize:
+        return (f"{oversize} It is not this run's payload -- {where} -- so it cannot be read to "
+                f"say what overwriting it would destroy. {remedy}")
+    try:
+        existing = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return (f"{sidecar} already exists and could not be read ({exc}), so there is no way to "
+                f"tell what writing over it would destroy ({where}). {remedy}")
+    if not isinstance(existing, dict):
+        return (f"{sidecar} already exists and holds a {type(existing).__name__}, not an object of "
+                f"image slots, so there is no way to tell what writing over it would destroy "
+                f"({where}). {remedy}")
+    if not existing:
+        return None
+    foreign = foreign_sidecar_slots(plan, existing)
+    if foreign:
+        return (f"{sidecar} already holds {len(existing)} photograph(s) that are not this plan's, "
+                f"and nothing in this plan claims them ({where}). " + "; ".join(foreign) + ". "
+                f"Writing here would delete another trip's verified, licence-checked work; the "
+                f"read side refuses to RENDER a payload it cannot place, and destroying one is "
+                f"worse than rendering it. {remedy}")
+    return (f"{sidecar} already holds {len(existing)} photograph(s) this run never read "
+            f"({where}), so they were not merged with what this run verified and writing here "
+            f"would replace them wholesale. Their labels do match this plan, which makes this the "
+            f"dangerous case rather than the safe one: a run that reached Wikipedia for one slot "
+            f"would silently leave one photograph where several verified ones had been. " + remedy)
+
+
+def resolve_plan_imagery(plan: dict, plan_path: str | Path | None) -> tuple[dict, Path | None]:
+    """The imagery a plan means -- inline, in its sidecar, or both -- merged in memory.
+
+    Returns `(imagery, the sidecar actually read or None)`. The caller renders from the returned
+    dict; it must NOT write it back into a plan it is about to save, which is how the 2MB got
+    into the file in the first place.
+
+    Three sources, in increasing authority:
+
+    - `plan["imagery"]` inline. Plans delivered before the split carry it, and this keeps working
+      exactly as it did: the 拉纳卡 plan in a real workspace holds 2MB of verified photographs and
+      is a document a traveller may open at any time. Refusing it, or migrating it silently on
+      read, would both be worse than carrying it -- a read has no business rewriting the file it
+      was asked to read. It is migrated on the next *write* instead (fetch_plan_imagery.py moves
+      it out, save_trip_deliverables.py externalizes it into the workspace copy).
+    - A sidecar discovered by name beside the plan, even with no key naming it. This is what makes
+      the split survive a plan that was copied, renamed by hand, or rewritten by a tool that
+      dropped the key.
+    - A sidecar named by `plan["imagery_sidecar"]`. It wins per key, because it is the payload
+      written for this plan most recently and by the only script that verifies provenance.
+
+    Every failure here raises. A missing or unreadable payload is never an empty dict.
+
+    The declared key is AUTHORITATIVE, and the name-based discovery above it is now gated on
+    evidence. The original reasoning -- "a flag is a thing to forget, so derive the name" -- was
+    only half the argument, and the missing half cost a delivered page: a filename guess is a thing
+    to get WRONG. Measured on this repo's own working filename, a Chengdu plan carrying no imagery
+    key beside a leftover `trip-imagery.json` from a Larnaca trip rendered with Larnaca's hero
+    photograph, credited to Larnaca's photographer, under Chengdu's heading -- and
+    save_trip_deliverables.py then stamped `imagery_sidecar` into the saved plan, making the wrong
+    file this trip's payload of record. So a guessed sidecar must prove it belongs to this plan by
+    naming the same slots with the same labels (foreign_sidecar_slots above), and a guess that
+    cannot prove it raises rather than being quietly used or quietly ignored. When the key IS
+    declared, no proof is asked for: the plan said which file, and a plan saying so is exactly the
+    provenance a filename lacks.
+    """
+    inline = plan.get("imagery")
+    if inline is None:
+        inline = {}
+    elif not isinstance(inline, dict):
+        # Not "ignore it and render without photographs": the renderer already tolerates a
+        # non-dict by drawing nothing, which is precisely how a broken writer upstream would stay
+        # invisible for as long as nobody compared the page against the plan.
+        raise ImagerySidecarError(
+            f"plan['imagery'] is a {type(inline).__name__}, not an object of image slots keyed "
+            f"'hero' and 'anchor:N'. Something wrote a shape no renderer can read.")
+
+    has_path = plan_path is not None and str(plan_path) not in ("", "-")
+    base = Path(plan_path).parent if has_path else Path.cwd()
+    declared = plan.get("imagery_sidecar")
+    candidate: Path | None = None
+    # Whether the DIRECTORY the candidate was found in was guessed rather than given. A declared
+    # key names a file relative to the plan, so with a real plan path nothing is guessed; without
+    # one -- the `-` stdin mode below -- the name is declared but the directory is a guess, and a
+    # guess about where a payload lives is the same class of mistake as a guess about its name.
+    guessed = False
+    if declared is not None:
+        if not isinstance(declared, str) or not declared.strip():
+            raise ImagerySidecarError(
+                f"plan['imagery_sidecar'] is {declared!r}, which names no file. Write the "
+                f"sidecar's name relative to the plan, or remove the key.")
+        # `base / declared` honours an absolute value too -- pathlib returns it unchanged. Nothing
+        # in this repo writes one, but a hand-edited plan that does should work rather than be
+        # lectured at.
+        candidate = base / declared.strip()
+        # A plan on standard input has no directory of its own, so `base` is whatever directory the
+        # command happened to run from. Measured, both halves of that: `cat plan.json | python
+        # scripts/save_trip_deliverables.py -` exited 2 for EVERY photographed plan when run from
+        # an ordinary cwd, and delivered a DIFFERENT trip's photograph, credited to a different
+        # photographer, when the cwd happened to hold a file of that name. The absolute case is
+        # unaffected -- an absolute value names its own directory and guesses nothing.
+        guessed = not has_path and not Path(declared.strip()).is_absolute()
+    elif has_path:
+        guess = sidecar_path_for(plan_path)
+        if guess.exists():
+            candidate = guess
+            guessed = True
+
+    if candidate is None:
+        return dict(inline), None
+    if not candidate.is_file():
+        where = ("the plan arrived on standard input, so the name was resolved against the "
+                 f"current directory {base} -- pass the plan's own path instead of `-` and the "
+                 f"name resolves beside the plan, the way it was written"
+                 if not has_path else f"resolved against {base}")
+        raise ImagerySidecarError(
+            f"plan['imagery_sidecar'] names {declared!r} but {candidate} is not a file ({where}). "
+            f"Re-run `python scripts/fetch_plan_imagery.py <plan.json>` to rebuild it, move the "
+            f"sidecar back beside the plan, or delete the key if this plan is meant to carry no "
+            f"photographs. Rendering without them silently is not an option: no gate counts "
+            f"images, so nobody would notice.")
+
+    # Measured on the file as it sits on disk, before it is parsed into memory: this is the one
+    # place a hand-edited or concatenated payload can be refused while it still costs one stat().
+    refusal = aggregate_refusal(candidate.stat().st_size, f"the imagery sidecar {candidate}")
+    if refusal:
+        raise ImagerySidecarError(refusal)
+    try:
+        payload = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ImagerySidecarError(f"could not read the imagery sidecar {candidate}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ImagerySidecarError(
+            f"the imagery sidecar {candidate} holds a {type(payload).__name__}, not an object of "
+            f"image slots keyed 'hero' and 'anchor:N'.")
+    # The evidence, and only where something was guessed. An empty payload proves nothing and
+    # needs to prove nothing -- there is no photograph in it to attach to the wrong trip.
+    if guessed and payload:
+        foreign = foreign_sidecar_slots(plan, payload)
+        if foreign:
+            how = ("the plan arrived on standard input, so its name was resolved against the "
+                   f"current directory {base}" if not has_path
+                   else "no key named it, so the name was derived from the plan's own file name")
+            raise ImagerySidecarError(
+                f"{candidate} does not look like this plan's photographs, and no key in the plan "
+                f"says it is ({how}). " + "; ".join(foreign) + ". A file name is not provenance: "
+                f"two unrelated trips share a working file name every day, and the delivered page "
+                f"would carry another city's photograph under this one's heading with its licence "
+                f"and photographer printed underneath. If this file really is this plan's payload, "
+                f"say so by setting \"imagery_sidecar\": \"{candidate.name}\" in the plan -- a "
+                f"declared key is authoritative and is not asked for proof. If it is not, move or "
+                f"delete it, or re-run `python scripts/fetch_plan_imagery.py <plan.json>`.")
+    return {**inline, **payload}, candidate
 
 
 def _request(url: str, *, binary: bool = False, tries: int = 3):
@@ -521,7 +920,9 @@ def fetch(plan: dict, limit: int, dry_run: bool = False) -> tuple[dict, list[str
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("plan", help="Plan JSON path")
-    parser.add_argument("--out", default=None, help="Where to write the enriched plan (default: in place)")
+    parser.add_argument("--out", default=None,
+                        help="Where to write the enriched plan (default: in place). The "
+                             "photographs go beside it as <stem>-imagery.json either way.")
     parser.add_argument("--max-images", type=int, default=DEFAULT_MAX_IMAGES)
     parser.add_argument("--dry-run", action="store_true",
                         help="Resolve and report without downloading or writing")
@@ -544,9 +945,176 @@ def main() -> int:
         print(f"  {key}: {entry['label']} → {entry['page']} ({entry['license']}, {entry['artist']})")
     if args.dry_run:
         return 0
-    plan["imagery"] = imagery
+
+    # What the plan already carries, so this run can tell "found nothing new" from "erased what
+    # was there". The previous version could not: it assigned plan["imagery"] = imagery
+    # unconditionally, so a second run on a train with no signal replaced seven verified
+    # photographs with {} and reported success. Nothing downstream would have noticed -- no gate
+    # counts images.
+    existing_broken = False
+    try:
+        existing, existing_source = resolve_plan_imagery(plan, args.plan)
+    except ImagerySidecarError as exc:
+        print(f"note: the plan's current imagery could not be read ({exc})")
+        existing, existing_source, existing_broken = {}, None, True
+
+    if not imagery:
+        if existing or existing_broken:
+            held = ("names an imagery payload that could not be read"
+                    if existing_broken else f"carries {len(existing)} verified photograph(s)")
+            print(
+                f"ERROR: refusing to write. This run verified no photograph, and the plan already "
+                f"{held}. Replacing them with nothing is not a result -- check the network and "
+                f"re-run, or delete the 'imagery'/'imagery_sidecar' key by hand if the "
+                f"photographs are genuinely meant to go.",
+                file=sys.stderr)
+            return 1
+        print("note: no photograph met the standard, so the plan was left unchanged.")
+        if args.out:
+            # --out is a promise that a plan exists at that path afterwards -- a caller may be
+            # feeding it to the next step. An unchanged copy keeps that promise; returning early
+            # with no file would make "no photograph was good enough" look like a crash.
+            try:
+                write_json_atomic(Path(args.out), plan)
+            except OSError as exc:
+                print(f"ERROR: could not write {args.out}: {exc}", file=sys.stderr)
+                return 2
+            print(f"Plan JSON: {args.out}")
+        return 0
+
     destination = Path(args.out or args.plan)
-    destination.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        sidecar = sidecar_path_for(destination)
+    except ImagerySidecarError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    # MERGED, never replaced. The guard above only fires when a re-run verifies ZERO photographs,
+    # and zero is not the shape a bad network actually has: this module's own MAX_CONCURRENCY note
+    # records eight of eight concurrent lookups coming back HTTP 429, and one slot resolving out of
+    # seven is the ordinary result of flaky hotel wifi. Measured on a sidecar holding seven
+    # verified photographs with fetch() returning one: the file went from 7 slots to 1, the run
+    # printed "1 image(s) verified" and exited 0, and six photographs that had passed every
+    # provenance rule were gone with no note. A run may only ADD what it verified and KEEP what it
+    # did not re-verify; it may never delete a slot on the strength of having failed to reach
+    # Wikipedia.
+    #
+    # Kept only on positive evidence, which is why this is not a blind dict merge. Slot keys are
+    # positional ("anchor:2"), so if an anchor is removed from the plan every anchor after it
+    # shifts up a slot and a carried-forward photograph would land under a DIFFERENT heading --
+    # the exact accuracy failure this whole module exists to refuse. So a stored slot is carried
+    # only when the plan still names that key with the same label it was filed under.
+    #
+    # Which is also how a slot is deliberately removed: delete the anchor from the plan and re-run,
+    # and the orphaned slot is dropped here with a note naming it. To drop the photographs
+    # altogether, delete the sidecar file and the plan's `imagery_sidecar` key -- the empty-run
+    # refusal above says the same thing. To drop ONE photograph while keeping its anchor, delete
+    # that key from the sidecar by hand and do not re-run this script, which re-verifies every slot
+    # the plan names and would find it again.
+    labels = plan_slot_labels(plan)
+    carried: dict[str, dict] = {}
+    dropped: list[str] = []
+    ambiguous: list[str] = []
+    if existing_broken:
+        # Nothing to merge with, so writing is only safe where there is nothing to lose. An
+        # unreadable payload is not an absent one: the over-ceiling case is a file full of real
+        # photographs that this script simply refuses to parse, and clobbering it because it could
+        # not be read would destroy more than a partial run ever could.
+        if sidecar.exists():
+            print(f"ERROR: refusing to write. This run verified {len(imagery)} photograph(s), but "
+                  f"{sidecar} already exists and the plan's current imagery could not be read "
+                  f"(the note above says why), so there is no way to tell what overwriting it "
+                  f"would destroy. Fix or delete that file -- and the plan's 'imagery_sidecar' key "
+                  f"if it names something else -- then re-run.", file=sys.stderr)
+            return 1
+        print(f"note: the unreadable payload the plan named is left on disk; this run writes a "
+              f"fresh {sidecar.name} and points the plan at it.")
+    else:
+        for key, entry in existing.items():
+            if key in imagery:
+                continue  # re-verified by this run; the fresh entry wins
+            expected = labels.get(key)
+            stored = entry.get("label") if isinstance(entry, dict) else None
+            if not expected:
+                dropped.append(f"{key} ({stored!r}) was dropped: the plan no longer names that "
+                               f"slot")
+            elif isinstance(stored, str) and stored.strip() == expected.strip():
+                carried[key] = entry
+            else:
+                ambiguous.append(f"{key} is stored under the label {stored!r}, but the plan now "
+                                 f"names that slot {expected!r}")
+        if ambiguous:
+            # Not dropped and not kept: guessing either way puts a photograph under a heading it
+            # may not depict, or throws away one that does. The operator knows which.
+            print(f"ERROR: refusing to write. This run did not re-verify every slot, and for the "
+                  f"slot(s) below the stored photograph cannot be shown to depict what the plan "
+                  f"now names:", file=sys.stderr)
+            for line in ambiguous:
+                print(f"  - {line}", file=sys.stderr)
+            print(f"Re-run when the network is reachable so those slots are verified afresh, or "
+                  f"edit {sidecar.name} by hand. Carrying them forward would risk captioning a "
+                  f"photograph with a place it is not of; dropping them would delete verified "
+                  f"work this run never checked.", file=sys.stderr)
+            return 1
+
+    # Everything above protects the payload this run READ. This protects the payload it is about
+    # to WRITE ON, which is not always the same file: `existing` came from wherever the SOURCE
+    # plan's photographs live, while `sidecar` is derived from --out. Between them sits a file
+    # nobody named on the command line and nothing above has looked at. write_target_refusal says
+    # why destroying it is the worse half of the same mistake a refused read makes.
+    blocked = write_target_refusal(plan, sidecar, existing_source)
+    if blocked:
+        print(f"ERROR: refusing to write. {blocked}", file=sys.stderr)
+        return 1
+
+    # The plan's own slot order, so two runs of this script produce a diffable file rather than
+    # one whose key order depends on which slots happened to resolve.
+    merged = {**carried, **imagery}
+    payload = {key: merged[key] for key in labels if key in merged}
+    payload.update({key: value for key, value in merged.items() if key not in payload})
+    for line in dropped:
+        print(f"note: {line}")
+    for key in carried:
+        print(f"note: {key} ({carried[key].get('label')!r}) was not re-verified by this run and "
+              f"was carried forward unchanged.")
+
+    # Measured on what is about to land on disk, not on what this run built: a carried-forward
+    # slot costs exactly the same bytes as a fresh one, and the ceiling is about the file a
+    # traveller opens on hotel wifi.
+    refusal = aggregate_refusal(imagery_payload_bytes(payload),
+                                "the imagery this run would write")
+    if refusal:
+        print(f"ERROR: {refusal}", file=sys.stderr)
+        return 1
+    # The bytes leave the plan entirely rather than being written to both places. Keeping a copy
+    # inline would mean the sidecar bought nothing: the plan would still cost ~576k tokens to
+    # read, which is the whole defect. They are not lost -- they are in the file named on the
+    # line below, and every consumer finds it without being told.
+    plan.pop("imagery", None)
+    plan["imagery_sidecar"] = sidecar.name
+    try:
+        # Sidecar first, plan second. If the second write fails the sidecar is an orphan that the
+        # next run overwrites and that consumers find by name anyway; the other order would leave
+        # a plan pointing at a file that does not exist, which every reader is required to refuse.
+        write_json_atomic(sidecar, payload)
+        write_json_atomic(destination, plan)
+    except OSError as exc:
+        print(f"ERROR: could not write the plan or its imagery sidecar: {exc}", file=sys.stderr)
+        return 2
+    # Only when this run rewrote the plan that referenced the old sidecar. With --out the source
+    # plan is untouched and still points at its own payload, so calling that file unreferenced
+    # would send somebody to delete a photograph set that is still in use.
+    in_place = args.out is None or Path(args.out).resolve() == Path(args.plan).resolve()
+    if in_place and existing_source is not None and existing_source.resolve() != sidecar.resolve():
+        print(f"note: {existing_source} is now unreferenced; this plan points at {sidecar.name}.")
+    # The count of what LANDED, not of what this run verified. The two are the same number only
+    # when every slot resolved, and the run that erased six photographs announced itself as
+    # "1 image(s) verified" -- a true sentence about the run and a wholly misleading one about the
+    # file, which is how nobody noticed.
+    print(f"Imagery sidecar: {sidecar} ({len(payload)} image(s), "
+          f"{imagery_payload_bytes(payload) / 1024:.0f} KB"
+          + (f"; {len(imagery)} verified now, {len(carried)} carried forward" if carried else "")
+          + ")")
     print(f"Plan JSON: {destination}")
     return 0
 
