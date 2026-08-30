@@ -21,6 +21,37 @@ Use this skill for advice and planning; do not make bookings, purchases, or acco
 - Compare the direct provider with one or more suitable public search/comparison platforms when live access permits. Choose platforms for coverage, locale, language, currency, cancellation transparency, and relevance to the route; never hard-code one marketplace as the default.
 - Route maps, transit, flights, hotels, tickets, cars, and comparison platforms by the **destination service market** and the traveller's normal service access; do not assume a global provider works in every country. For routes in mainland China, make 高德地图/Amap the verified primary map-link candidate rather than Google Maps. Never recommend a VPN, proxy, account workaround, or credential sharing to make a service work.
 
+### Before you write that something cannot be researched, probe it
+
+`python scripts/probe_sources.py --market <name>` reports which evidence sources answer **this**
+machine, per class — official, operator, dining, lodging, encyclopaedia, rates. Run it once when a
+destination is settled, and again before writing any sentence of the form "this could not be
+obtained".
+
+**A 200 is a candidate, not an answer, and a listing page is not a probe.** Both halves are
+measured. In one delivered plan the author wrote that restaurant ratings and hours could not be
+obtained, having read an OpenRice *listing* page — the *detail* page carries per-weekday opening
+hours, the full address and the walk from the nearest station, which is the half that decides
+whether the traveller stands at a closed door. In the same plan the author wrote that
+accommodation prices and guest scores could not be obtained, having read Booking.com, which
+answers automated requests with a challenge page; hk.trip.com had already been probed as
+reachable in that session and was never asked for content, and its detail pages carry the guest
+score with its scale, the review count, the nightly rate with its currency, the station distance
+and the text of recent negative reviews.
+
+Both sentences reached the traveller as a fact about the environment. Neither was one. The cost is
+not embarrassment — an agent that gives up early hands over an intermediate artifact where a
+booking-ready plan was possible, and the traveller cannot tell "nobody could" from "nobody opened
+the second URL". So a class of evidence is **unavailable** only after a DETAIL page for one real
+item, on a reachable source, came back without the field — and the plan says which field and which
+page. Anything short of that is written as "not obtained in this run", which is a different claim.
+
+The probe reports reachability, never extractability, and it says so: most travel sites render
+their content with JavaScript that no fetch here executes. It also distinguishes a host that
+refused *this client* from a host that is down, because those need different next moves — and it
+began by making that mistake about itself, reporting `unreachable` for a Chinese-language URL it
+had failed to encode.
+
 ### Skill and tool boundary
 
 Use the skill for intake, constraint interpretation, candidate generation, hard filtering, scoring logic, explanations, and dependency-aware replanning. Use MCPs, APIs, or web research only to obtain current-world facts. If a required live-data capability is unavailable, leave the fact unverified and offer a range or verification step; never compensate by guessing. Retain a profile only for the active task unless the user explicitly asks to save it.
@@ -319,6 +350,31 @@ appears twice. When a slot cannot be filled to that standard it stays empty. Nev
 stock image, and never hot-link one: the page must keep working on a phone with no signal, which
 is exactly when it is needed.
 
+**An anchor's name is a lookup key too, and the same rule decides it.** `fetch_plan_imagery.py`
+searches Wikipedia by the anchor's `name`, so a name written for a human to read finds nothing:
+`长洲（渡轮往返，海滨平路）` is a caption, `長洲` is a key. Write the name the way the destination's
+own reference source titles it, and put the description in `why_it_matters` where it belongs. This
+is the same sentence as the map rule one section down — the string a lookup carries is a query, not
+a caption — and it took a delivered page with zero photographs to notice the rule had never been
+applied to this field.
+
+Two of the three causes of that page were in the script rather than the author, and both are fixed;
+they are recorded because they say what to distrust next. A token floor of three characters, tuned
+for Latin where it only rules out `the` and `and`, **erased every two-character CJK name**:
+`_tokens("香港")` and `_tokens("长洲")` both returned the empty set, so the hero lookup failed on
+香港, 北京, 上海, 东京, 台北 and every other two-character destination, on every Chinese-language
+plan, silently. And the relevance rule ran on exact title lookups, where zh.wikipedia had already
+resolved `中环街市` to `中環街市` — the two share no token across writing systems, so the correct
+article with the correct image was thrown away by the check meant to protect it. A Latin constant
+applied to a script nobody measured it on, twice.
+
+**A run that fills nothing now says so on stderr** (`NO IMAGERY: N slot(s) were offered and none
+could be filled`) and names the three causes in the order worth checking. It used to exit 0 with a
+few `note:` lines that had already scrolled past, which is how a page shipped with no photographs
+and nobody looked. A page with no photographs is a legitimate outcome — some articles genuinely
+carry no lead image, and that is a gap in the source, not something to work around. Shipping one
+without knowing which of the three it was is not.
+
 ### A map or venue URL parameter is a geocoder query, not a caption
 
 This is the highest-severity defect the skill has shipped, it is invisible to every structural
@@ -509,6 +565,7 @@ Before delivering a recommendation or plan, verify:
 - every dining card's rating is **visible on the page**, not merely present in the JSON — `validate_trip_html.py` fails a card that prints none, because a rating stored and never shown is the same defect as a rating never gathered;
 - every dining card carries a rating with its scale, count and source (or `rating_status: "none"` with a reason), names the venue as its map provider indexes it, and has verified hours for the weekday it is scheduled on — a scheduled meal is a claim the venue is open;
 - every accommodation option has a **property-scoped** booking link, and its price and availability were read off that page rather than estimated;
+- every field a search button DECLARES prefilled is actually in its URL as a discrete part — a path segment or a whole query value, never a phrase inside a free-text box. `check_plan_consistency.py` now compares the declaration against the URL for all of them, which it previously did for the dates alone: a delivered plan carried `google.com/travel/flights?q=Flights+from+AMS+to+HKG+on+2027-04-17+through+2027-04-22` while declaring origin, destination, both dates and travellers prefilled, and passed this gate with zero findings — the dates were "in the URL" as words in a sentence, and the other three were never looked for. The traveller opened the button and got an empty search box, under a declaration that this could not happen. **A field the plan declares about itself is an attestation, and an attestation records that a rule was claimed, never that it was followed** — so wherever the artifact can be asked directly, ask it instead. `kayak.com/flights/AMS-HKG/2027-04-17/2027-04-22/1adults` passes because each field is its own path segment; a provider that only takes free text cannot honestly declare prefilled fields, and should declare none;
 - every search button carries the trip's own dates, so it opens a filled-in search rather than a blank form — and where a provider cannot be deep-linked with dates at all, the dated comparison button is the first one on the card and the provider's own link says on the card that it is a channel entry;
 - hotels carry a guest rating on the same terms as restaurants, and nothing below 7.0/10 is recommended without a reason;
 - the parallel verification in [references/verification.md](references/verification.md) ran concurrently before delivery, its report covers every block the plan's tier requires — all five truth domains **and both auditors** (`consistency`, `completeness`) on the full pass, and `sights_and_hours`, `transport` plus both auditors on the light tier, as `check_plan_consistency.py` computes it from the plan rather than as anyone declares it — with every `claims_checked` a list of pointers that resolve, and every `wrong` or `misleading` finding is either fixed in the plan or explicitly accepted by the traveller — a plan saved with `--unverified` carries `verification_status: unverified` and renders a "not fact-checked" banner on the page, so never describe such a page as booking-ready;

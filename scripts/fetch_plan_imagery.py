@@ -519,7 +519,23 @@ def _tokens_raw(text: str) -> set[str]:
     stopword list, every "<City> <Type>" article collapses to the bare city name and reads as a
     fall-through to it.
     """
-    return set(re.findall(r"[^\W\d_]{3,}", str(text or "").casefold(), flags=re.UNICODE))
+    # Two length floors, because "how many characters is a word" is not one question.
+    #
+    # The single `{3,}` floor here was tuned for Latin, where three characters rules out `the`
+    # and `and` and costs nothing real. Applied to CJK it deletes whole place names: measured,
+    # `_tokens("香港")` and `_tokens("长洲")` both returned the empty set, and an empty specific
+    # set sends _relevant() into its "the query IS the place" branch, which then compares two
+    # empty sets and returns False. The consequence was silent and total -- on a Chinese-language
+    # plan, EVERY two-character destination (香港, 北京, 上海, 东京, 京都, 台北, 澳门 …) failed
+    # its hero lookup, the script reported "no article both near the trip and about it", exited 0,
+    # and the page shipped with no photographs at all. Same family as the width bug that measured
+    # CJK text with Latin metrics: a Latin constant applied to a script it was never measured on.
+    #
+    # CJK runs keep a floor of 2 because that is a complete name, and Latin keeps 3.
+    text = str(text or "").casefold()
+    latin = re.findall(r"[^\W\d_]{3,}", text, flags=re.UNICODE)
+    cjk = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{2,}", text)
+    return set(latin) | set(cjk)
 
 
 def _tokens(text: str) -> set[str]:
@@ -678,7 +694,17 @@ def resolve(query: str, near: tuple[float, float] | None, place_name: str,
             # rejected the correct hero image of a real plan while the airport four kilometres
             # away, which does carry coordinates, had already been refused on other grounds.
             continue
-        if not _relevant(query, title, place_name):
+        # An EXACT title lookup has already had this question answered, by the wiki rather than
+        # by us: `titles=X&redirects=1` returns page X or its redirect target and can return
+        # nothing else, so there is no ranking here to be sceptical of. Running the token rule on
+        # it anyway rejected correct matches across writing systems -- measured,
+        # `_relevant("中环街市", "中環街市", "香港")` is False, because zh.wikipedia had resolved
+        # the simplified query to the traditional title and the two share no token. The article
+        # was right, its image was right, and this line threw it away. The destination-fallback
+        # guard below still runs, because that is a different question (is this the city's own
+        # article standing in for an anchor) and it is the one the search path can actually get
+        # wrong.
+        if not exact and not _relevant(query, title, place_name):
             continue
         return {"query": query, "page": title, "file": filename, "lang": lang,
                 "page_url": f"https://{lang}.wikipedia.org/wiki/"
@@ -935,6 +961,7 @@ def main() -> int:
         return 2
 
     started = time.time()
+    wanted_slots = slots(plan)[:max(args.max_images, 0)]
     imagery, notes = fetch(plan, args.max_images, args.dry_run)
     for note in notes:
         print(f"note: {note}")
@@ -943,6 +970,24 @@ def main() -> int:
           + (f", {total / 1024:.0f} KB embedded" if total else ""))
     for key, entry in imagery.items():
         print(f"  {key}: {entry['label']} → {entry['page']} ({entry['license']}, {entry['artist']})")
+
+    # A run that filled nothing at all used to exit 0 with a handful of `note:` lines, which is
+    # indistinguishable from a run nobody needed. Measured: a delivered Chinese-language plan
+    # shipped with zero photographs and the only trace was five notes that had already scrolled
+    # past. Two of the three causes were ours -- a Latin token floor that erased two-character CJK
+    # names, and a relevance rule that rejected the wiki's own simplified-to-traditional
+    # resolution -- and neither would have been looked for, because nothing said the outcome was
+    # abnormal. Zero of many is a finding; it is reported as one, and named where the author can
+    # act on it.
+    if not imagery and wanted_slots:
+        print(f"NO IMAGERY: {len(wanted_slots)} slot(s) were offered and none could be filled. "
+              f"That is a result worth reading, not a quiet default. The usual causes, in the "
+              f"order they are worth checking: an anchor name written as a caption rather than as "
+              f"the article's own title ('长洲（渡轮往返，海滨平路）' is a sentence; '長洲' is a "
+              f"lookup key); a name written in a different form from the one that wiki titles in; "
+              f"or an article that genuinely carries no lead image, which is a gap in the source "
+              f"and not something to work around. A page with no photographs is a legitimate "
+              f"outcome -- shipping one without knowing why is not.", file=sys.stderr)
     if args.dry_run:
         return 0
 

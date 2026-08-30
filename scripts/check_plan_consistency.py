@@ -2249,6 +2249,101 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                            ("check-out date", option.get("check_out"))],
                           f"accommodation '{label}' comparison search")
 
+    # The other half of the same promise, and it was missing. `_dates_in_url` above checks the two
+    # DATES a search must carry; the plan also declares `round_trip_prefilled_fields` /
+    # `prefilled_fields` naming origin, destination and travellers, and nothing compared those to
+    # the URL at all -- they were an attestation, and an attestation records that a rule was
+    # claimed, never that it was followed.
+    #
+    # Measured: a delivered plan carried
+    # `https://www.google.com/travel/flights?q=Flights+from+AMS+to+HKG+on+2027-04-17+through+2027-04-22`
+    # while declaring all five fields prefilled. It passed this gate with zero findings. The dates
+    # were "in the URL" as literal text inside one free-text `q=` parameter, and origin,
+    # destination and travellers were never looked for. The traveller opened the button and got a
+    # search box, which is the exact failure the prefill rule exists to prevent, shipped under a
+    # declaration that it had been prevented.
+    #
+    # So a value only counts when it is a DISCRETE part of the URL -- a path segment, or the whole
+    # of a query value -- and never when it is buried in a value that reads as prose. That
+    # distinction is what separates KAYAK's `/flights/AMS-HKG/2027-04-17/2027-04-22/1adults`,
+    # where each field is its own segment, from a sentence typed into a search box. It is the same
+    # rule this skill already applies to map endpoints: the string a button carries is a query,
+    # not a caption.
+    def _discrete_parts(url: str) -> set[str]:
+        parsed = urllib.parse.urlparse(urllib.parse.unquote_plus(url))
+        parts = {p.casefold() for p in parsed.path.split("/") if p}
+        for values in urllib.parse.parse_qs(parsed.query).values():
+            for value in values:
+                # A value with whitespace in it is a search box someone typed a sentence into.
+                # Its contents are not prefilled fields; they are one field holding prose.
+                if value and not re.search(r"\s", value):
+                    parts.add(value.casefold())
+        return parts
+
+    def _declared_fields_in_url(url: str, declared: list, wanted: dict, where: str) -> None:
+        if not url or not declared:
+            return
+        parts = _discrete_parts(url)
+        haystack = urllib.parse.unquote_plus(url).casefold()
+        for field in [str(d) for d in declared]:
+            value = wanted.get(field)
+            if value in (None, ""):
+                continue
+            forms = [str(value).casefold()]
+            if field.endswith("_date") or field in ("check_in", "check_out"):
+                forms = [f.casefold() for f in _date_forms(str(value))] or forms
+            # Inside a discrete part, not equal to it: a provider may pack two fields into one
+            # segment (KAYAK writes the pair as `AMS-HKG`) or decorate one (`1adults`), and both
+            # are still structured. Boundaries are checked so `1` does not match the `1` inside a
+            # date, and they differ by value shape: a number may sit against a letter (`1adults`)
+            # but never against another digit, while a code like `AMS` must not run into more
+            # letters.
+            def _present(form: str) -> bool:
+                if form.isdigit():
+                    pattern = r"(?<![0-9])" + re.escape(form) + r"(?![0-9])"
+                else:
+                    pattern = r"(?<![0-9a-z])" + re.escape(form) + r"(?![0-9a-z])"
+                return any(re.search(pattern, part) for part in parts)
+            if any(_present(f) for f in forms):
+                continue
+            loose = any(f in haystack for f in forms)
+            errors.append(
+                f"{where}: it declares {field!r} prefilled, but the URL "
+                + (f"carries {value!r} only inside a free-text parameter, which is a search box "
+                   f"with a sentence in it rather than a filled-in field."
+                   if loose else
+                   f"does not carry {value!r} at all.")
+                + f" Run the search on the provider with the trip's own values and store the URL "
+                  f"it produces, or drop {field!r} from the declaration so the page does not "
+                  f"promise a button it cannot open.")
+
+    travellers = _obj(plan.get("trip")).get("traveler_count")
+    for kind in ("flights", "ground_transport"):
+        for option in [_obj(o) for o in _seq(options.get(kind))]:
+            label = str(option.get("provider") or option.get("id") or "?")
+            if _unfilled(label, option.get("round_trip_search_url")):
+                continue
+            _declared_fields_in_url(
+                str(option.get("round_trip_search_url") or ""),
+                _seq(option.get("round_trip_prefilled_fields")),
+                {"origin": option.get("origin_airport"),
+                 "destination": option.get("destination_airport"),
+                 "outbound_date": option.get("outbound_date"),
+                 "return_date": option.get("return_date"),
+                 "travellers": travellers},
+                f"{kind} '{label}' round-trip search")
+    for option in [_obj(o) for o in _seq(options.get("accommodations"))]:
+        label = str(option.get("property_name") or option.get("id") or "?")
+        if _unfilled(label, option.get("review_url")):
+            continue
+        for search in [_obj(s) for s in _seq(option.get("comparison_searches"))]:
+            _declared_fields_in_url(
+                str(search.get("search_url") or ""),
+                _seq(search.get("prefilled_fields")),
+                {"check_in": option.get("check_in"), "check_out": option.get("check_out"),
+                 "guests": option.get("guest_count"), "rooms": option.get("room_count")},
+                f"accommodation '{label}' comparison search")
+
     # Two "competing" options that open the same page are one option shown twice. The rule was
     # written for hotels and the same defect shipped on flights: both candidates in a delivered
     # plan carried an identical round-trip search URL, so the comparison compared nothing.
