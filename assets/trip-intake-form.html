@@ -98,7 +98,7 @@
         <p class="hint">国内旅行不需要填写入境信息；只有可能出境时才收集国籍、合法居留地和可接受签证方式。无论国内或海外，都会比较飞机、铁路、长途巴士、轮渡和自驾等实际可行的方式。</p>
         <div class="grid">
           <div><label for="travel-scope">这趟需要现办签证吗 <span>必填</span></label><select id="travel-scope" required><option value="">请选择</option><option value="no_new_visa_needed">不需要——想去的地方我现在就能入境（免签、已持有效签证/居留，或就在常住国内）</option><option value="any_including_visa">需要——愿意为这趟提前去办签证</option></select></div>
-          <div id="held-visa-wrap" hidden><label for="held-visas">↳ 凭什么可以入境 <span>承接上一栏，越具体越省事</span></label><input id="held-visas" placeholder="如：日本三年多次签、申根居留卡、目的地免签；国内出行填「不出境」"></div>
+          <div id="held-visa-wrap" hidden><label for="held-visas">↳ 凭什么可以入境 <span>必填，越具体越省事——这一栏决定这趟能不能成行</span></label><input id="held-visas" placeholder="如：日本三年多次签、申根居留卡、目的地免签；国内出行填「不出境」"></div>
           <div id="held-passport-wrap" hidden><label for="held-passport-validity">↳ 护照在行程结束后是否仍有效 6 个月 <span>必填，不要填号码或日期</span></label><select id="held-passport-validity"><option value="">请选择</option><option value="valid_through_trip">是，所有同行人都满足</option><option value="not_sure">不确定，需要核对</option><option value="needs_renewal">否，有人需要换发</option><option value="not_applicable_domestic">本次不出境，用不上护照</option></select></div>
           <div id="visa-effort-wrap" hidden><label for="visa-tolerance">↳ 能接受到什么程度 <span>承接上一栏</span></label><select id="visa-tolerance"><option value="evisa_acceptable">只接受电子签/落地签</option><option value="visa_process_acceptable">可以提前去办正式签证</option></select></div>
           <div><label for="travel-time">可接受的最长单程总时长 <span>必填，含候车/转机/地面接驳</span></label><select id="travel-time" required><option value="">请选择</option><option value="不超过 3 小时">不超过 3 小时</option><option value="不超过 6 小时">不超过 6 小时</option><option value="不超过 10 小时">不超过 10 小时</option><option value="不超过 15 小时">不超过 15 小时</option><option value="不超过 24 小时">不超过 24 小时</option><option value="无明确上限，以舒适为准">无明确上限，以舒适为准</option></select></div>
@@ -368,7 +368,16 @@
         const entryNeeded = requiresEntryAssessment();
         const required = [["city", "出发城市"], ["country", "出发国家/地区"], ["count", "同行人数"], ["currency", "预算币种"], ["coverage", "人均预算涵盖范围"], ["travel-scope", "本次出行范围"], ["travel-time", "最长单程总时长"], ["scope", "目的地状态"], ["direction", "景色方向"]];
         if (entryNeeded) required.push(["passport-validity", "护照有效期确认"]);
-        else if (text("travel-scope") === "no_new_visa_needed") required.push(["held-passport-validity", "护照有效期确认"]);
+        else if (text("travel-scope") === "no_new_visa_needed") {
+          // Both fields, not one. SKILL.md says this branch collects TWO things -- what the
+          // traveller enters ON, and passport validity -- and only the second was required here,
+          // so held_entry_documents came back null on a real run. The assistant then had to ask
+          // in chat, which is a round trip the form exists to remove; worse, the answer ("中国护照,
+          // 从荷兰出发") was what turned an asserted "no visa needed" into a trip-blocking finding.
+          // A field that decides whether the trip is possible is not an optional one.
+          required.push(["held-passport-validity", "护照有效期确认"]);
+          required.push(["held-visas", "你凭什么证件入境"]);
+        }
         const missing = required.filter(([id]) => !text(id));
         if (missing.length) throw fieldError(missing[0][0], `请补充：${missing.map(([, label]) => label).join("、")}`);
         if (text("currency") === "OTHER" && !/^[A-Za-z]{3}$/.test(text("custom-currency"))) throw fieldError("custom-currency", "自定义币种请填写三位字母代码，例如 CHF。");

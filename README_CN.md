@@ -120,6 +120,8 @@ start_intake_workflow.py
                                               ↓
               并行核验：5 个真实性域 + 2 个审计员   （references/verification.md）
                                               ↓
+                                check_plan_contract.py      （字段名，一次报全）
+                                              ↓
                                 check_plan_consistency.py   （方案与自身是否自洽）
                                               ↓
                                 render_final_trip_html.py   （校验方案结构）
@@ -141,6 +143,8 @@ start_intake_workflow.py
 **`validate_trip_html.py`** 检查渲染后的页面。它最锋利的一条规则是：**只要页面 `<html lang>` 不是英文，页面里残留任何渲染器自带的英文就判失败。** 这正是 `plan_status`、预算类别、餐次、交通方式、过敏严重程度、`sources[].confidence` 都被定义成封闭枚举的原因 —— 任意类别字符串无法翻译，就会以英文泄漏到中文页面上。2.2 起这条规则不再依赖一份「已知英文字符串」的手写清单：闸门直接读取渲染器自己的替换表与枚举常量，所以新增的值无需任何人记得去补清单就会被检查。清单本身就是缺陷——`sources[].confidence` 在作者工作区里**十一个**非英文页面上把 `high`、`medium` 当正文打了出来（其中九个是带日期的已交付行程，另两个是渲染预览）；泄漏出某个英文原值的共十三个页面，而工作区里唯一那份盖过闸门章的方案也在其中 —— 两道闸门却都报 VALID。它同时强制：地图按钮必须是真正的导航 URL、大陆路线必须用高德、预订与来源行必须带上可机器校验的属性。2.0 起还会拒绝任何「按钮上写的提供方 ≠ 链接实际打开的域名」的页面：曾有九个按钮写着 *在 KLM 查看选项* 却打开 Google Flights、写着 *在 Google Maps 查看餐厅* 却打开美食博客，而当时所有闸门全绿 —— HTTPS 与唯一性都说明不了链接会去哪里。 2.1 起还会拒绝任何一张不打印评分的餐饮卡：评分只存在 JSON 里、从不渲染到页面上，与压根没去查是同一种缺陷——促成这条规则的那个页面，分数只出现在作者恰好手写进理由文字的地方。
 
 **`plan_flags.py`** 把页面检查项从「让模型回答」改成「从方案推导」。`validate_trip_html.py` 过去把天数、必须出现的预订链接类型、交通方式、以及「未经事实核验」横幅当作四个可选开关，而且**默认全部关闭** —— 于是 `validate_trip_html.py page.html` 会打印 `VALID: booking-ready HTML structure passed.` 并以 0 退出，同时这四项检查一个都没跑；其中三项还依赖 SKILL.md 从未提及的 JSON 字段（`trip.arrival_transport_mode`、`booking_options.attraction_tickets`、`booking_options.ground_transport`），模型得自己想到去翻。而 `save_trip_deliverables.py` 一直都在正确地算这四个值，位置就在那份手写副本二十行之外。现在两个调用方都从这里导入同一份定义：**只要传 `--plan <plan.json>`，就没有任何东西需要回答了。** 不传 `--plan` 时这些开关从「可选」变为「必填」—— 因为退出码 0 正是助手会读到的那个信号。
+
+**`check_plan_contract.py`** 在闸门之前、一次针对整个文件，回答闸门刻意不回答的那个问题：这份方案里的每个键，`templates/final-trip-plan.json` 都认识吗？闸门按主题校验、遇到第一个不过的类别就短路——这对闸门是对的，对作者却很贵：一次实测的 Construction 运行光在字段名上就花掉**十三次串行往返**（`duration_minutes` 写成 `total_duration_minutes`、`search_url` 写成 `url`、`per_person_low` 写成 `amount_low`、该是六个字段的 `outbound_itinerary` 写成了一句话），而只要有东西一次点名这十三个，一次编辑就能全改完。它不需要网络，每个未知键旁边给出契约里最相近的那个名字，按路径去重（同一个错跨六天只报一行），契约里是空数组的字段内部一律视为作者自己的事而非拼写错误。它是一份待办清单，不是判决：它分不清拼写错误和你有意加的字段，它对方案是否属实一无所知，**它不报错不等于通过**。拿作者工作区里所有方案跑一遍，它还翻出八个渲染器和闸门都不读的字段名——契约里叫 `dietary_or_religious_needs` 却被写成 `dietary_needs`、该是列表的 `excluded_places_checked` 被写成了 `true`——它们正是因为没人读才活到了今天。
 
 **`check_plan_consistency.py`** 把「散文靠不住」的部分交给代码判定：路线合计必须由自身 segment 求和、步行数字必须从数据推导而非手写断言、每顿饭必须挂在当天路线的真实站点上且落在营业时间内、日历不得有缺口、预算合计必须等于它声称求和的那些行且声称包含的每个类别都真的有明细。
 

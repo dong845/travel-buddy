@@ -41,7 +41,7 @@
     "the rule came from -- it is the whole anti-rubber-stamp of this field, because someone who",
     "opened the official page can write it and someone who guessed 'always_available' cannot. A",
     "guessed value is a fabricated fact, which is worse than the blank this field replaces.",
-    "sources[].confidence -- OPTIONAL, and a CLOSED ENUM when present: high | medium | low |\n    researched | unverified. It is printed as visible text beside the source, so it has to be\n    translatable; it was free text until a Chinese page shipped 「… \u00b7 high」 in an otherwise\n    fully Chinese register with every gate green. Omitting it renders \"researched\" in the trip's\n    language. Any qualification -- \"fare requires recheck\", \"timetable is seasonal\" -- belongs in\n    claim_or_decision_supported beside it, which is the field for saying what a source proves.",
+    "sources[].confidence -- OPTIONAL, and a CLOSED ENUM when present: high | medium | low |\n    researched | unverified. It is printed as visible text beside the source, so it has to be\n    translatable; it was free text until a Chinese page shipped 「… · high」 in an otherwise\n    fully Chinese register with every gate green. Omitting it renders \"researched\" in the trip's\n    language. Any qualification -- \"fare requires recheck\", \"timetable is seasonal\" -- belongs in\n    claim_or_decision_supported beside it, which is the field for saying what a source proves.",
     "trip.traveler_constraints.allergy_severity is a closed enum for the same reason and always was;\n    it is now localized too, so a Chinese page no longer tells a Chinese reader their allergy is\n    \"severe\" in English.",
     "trip.traveler_constraints.untyped_constraints -- the marker that says which of these fields",
     "NOBODY HAS TYPED YET, as opposed to answered. It is empty here on purpose, and that empty",
@@ -85,7 +85,8 @@
     "destination": null,
     "destination_coords": {
       "lat": null,
-      "lon": null
+      "lon": null,
+      "label": null
     },
     "destination_type": null,
     "start_date": null,
@@ -165,7 +166,9 @@
         "checked_at": null,
         "note": null
       }
-    ]
+    ],
+    "currency": null,
+    "note": null
   },
   "transport_preference": {
     "mode": null,
@@ -421,7 +424,8 @@
     "overall_distance_km": null,
     "cost_low": null,
     "cost_high": null,
-    "notes": []
+    "notes": [],
+    "headline": null
   },
   "days": [
     {
