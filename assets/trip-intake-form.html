@@ -64,6 +64,8 @@
           <div><label for="month">还没定日期？填月份或季节 <span>与上面二选一</span></label><input id="month" placeholder="例如：2026-10 或 10 月"></div>
           <div><label for="days">预计几天 <span>未填确定日期时必填</span></label><input id="days" type="number" min="1" max="60" placeholder="例如：7"></div>
           <div><label for="flexibility">日期灵活度</label><select id="flexibility"><option value="">未指定</option><option>固定</option><option>± 1–2 天</option><option>一周内</option><option>只看季节</option></select></div>
+          <div><label for="booked-already">已经订好的部分 <span>必填——订了什么决定这趟还能改什么</span></label><select id="booked-already"><option value="">请选择</option><option value="nothing">都还没订</option><option value="transport">去程/回程交通已订</option><option value="lodging">住宿已订</option><option value="both">交通和住宿都订了</option><option value="other">其他已订（票、租车等）</option></select></div>
+          <div id="booked-detail-wrap" hidden><label for="booked-detail">↳ 订了什么，写清楚 <span>必填——航班号、酒店名、日期、能不能退改</span></label><input id="booked-detail" placeholder="如：CX270 4/17 阿姆→香港，不可退；尖沙咀某酒店 4/17–4/23 免费取消至 4/10"></div>
           <div><label for="fixed-commitments">必须迁就的固定安排 <span>可选</span></label><input id="fixed-commitments" placeholder="例如：10 月 12 日必须回来上班；朋友婚礼在 10 月 11 日"></div>
           <div><label for="airports">可接受的机场 <span>逗号分隔，可选</span></label><input id="airports" placeholder="例如：PVG, SHA"></div>
         </div>
@@ -267,6 +269,15 @@
         const heldBranch = text("travel-scope") === "no_new_visa_needed";
         $("held-visa-wrap").hidden = !heldBranch;
         $("held-passport-wrap").hidden = !heldBranch;
+        // The third disqualifier. references/research-budget.md rule 1 names three questions
+        // worth asking before any research at all -- entry permission, whether the dates can
+        // move, and whether anything is already booked -- because each "yes" deletes a whole
+        // branch. The form collected the first two and not the third, so on a measured run it was
+        // asked in chat instead: the round trip the rule exists to prevent. It asks WHAT is booked
+        // rather than whether, because "flights booked" and "hotel booked" delete different
+        // branches and a yes/no would only push the follow-up one step later.
+        const somethingBooked = text("booked-already") && text("booked-already") !== "nothing";
+        $("booked-detail-wrap").hidden = !somethingBooked;
         const anchored = ["fixed", "anchored"].includes(text("scope"));
         $("places-hint").textContent = anchored ? "必填，逗号分隔" : "逗号分隔，可选";
         refreshRanking();
@@ -367,6 +378,12 @@
         const tripScope = text("travel-scope");
         const entryNeeded = requiresEntryAssessment();
         const required = [["city", "出发城市"], ["country", "出发国家/地区"], ["count", "同行人数"], ["currency", "预算币种"], ["coverage", "人均预算涵盖范围"], ["travel-scope", "本次出行范围"], ["travel-time", "最长单程总时长"], ["scope", "目的地状态"], ["direction", "景色方向"]];
+        required.push(["booked-already", "已经订好的部分"]);
+        // Required, and the detail box required as soon as anything IS booked, because an
+        // optional field on a disqualifier comes back null and the question gets asked in chat
+        // anyway -- which is exactly what happened to held_entry_documents.
+        if (text("booked-already") && text("booked-already") !== "nothing")
+          required.push(["booked-detail", "已订部分的具体内容"]);
         if (entryNeeded) required.push(["passport-validity", "护照有效期确认"]);
         else if (text("travel-scope") === "no_new_visa_needed") {
           // Both fields, not one. SKILL.md says this branch collects TWO things -- what the
@@ -424,6 +441,7 @@
           travel_window:{ ...window_, fixed_commitments:text("fixed-commitments") || null },
           party:{ traveler_count:travelerCount, composition:text("composition") || null, relevant_ages:text("ages") ? [text("ages")] : [], mobility_or_access_needs:text("mobility") ? [text("mobility")] : [] },
           budget:{ ...budget, currency:currencyCode(), coverage:text("coverage"), included_categories:coverageCategories[text("coverage")] || [], comfort_preference:text("comfort") || null },
+          existing_bookings:{ state:text("booked-already") || null, details:text("booked-detail") || null },
           destination_scope:{ state:scopeState, named_places:namedPlaces, commitment, excluded_places:list("excluded") },
           experience:{ direction:text("direction"), natural_subtypes:checked("natural"), human_cultural_subtypes:checked("cultural"), ranked_must_haves:rankedMustHaves, intensity_or_activity_tolerance:text("intensity") || null, pace:text("pace") || null, avoid_list:list("avoid") },
           transport_preferences:{ preferred_modes:modes, priority:text("transport-priority") || null, willing_to_self_drive:modes.includes("self_drive"), luggage_or_baggage_needs:text("baggage") || null, cabin_preference:text("cabin") || null, flight_time_preference:text("flight-time") || null, rail_preference:text("rail-preference") || null, bus_comfort_tolerance:text("bus-comfort") || null, ferry_acceptable:modes.includes("ferry") },
@@ -434,7 +452,7 @@
         };
       }
 
-      const FIELD_IDS = ["city","country","start-date","end-date","month","days","flexibility","fixed-commitments","airports","scope","places","excluded","purpose","count","composition","ages","mobility","dietary","currency","custom-currency","budget-range","custom-budget","coverage","comfort","travel-scope","travel-time","transport-priority","traveler-entry","visa-tolerance","passport-validity","held-passport-validity","held-visas","climate-notes","direction","pace","intensity","rank-1","rank-2","avoid","room-count","stay-location","breakfast","cancellation","rail-preference","bus-comfort","cabin","baggage","flight-time","google-services-access","preferred-map-apps","preferred-booking-platforms","services-to-avoid","service-access-notes"];
+      const FIELD_IDS = ["city","country","start-date","end-date","month","days","flexibility","booked-already","booked-detail","fixed-commitments","airports","scope","places","excluded","purpose","count","composition","ages","mobility","dietary","currency","custom-currency","budget-range","custom-budget","coverage","comfort","travel-scope","travel-time","transport-priority","traveler-entry","visa-tolerance","passport-validity","held-passport-validity","held-visas","climate-notes","direction","pace","intensity","rank-1","rank-2","avoid","room-count","stay-location","breakfast","cancellation","rail-preference","bus-comfort","cabin","baggage","flight-time","google-services-access","preferred-map-apps","preferred-booking-platforms","services-to-avoid","service-access-notes"];
 
       let draftTimer = null;
       // `change` alone only fires on blur, so anything typed and not yet left behind
@@ -486,6 +504,7 @@
       rangeSelect.addEventListener("change", updateCustomBudget);
       $("travel-scope").addEventListener("change", updateConditionalPanels);
       $("scope").addEventListener("change", updateConditionalPanels);
+      $("booked-already").addEventListener("change", updateConditionalPanels);
       document.querySelectorAll('input[name="natural"],input[name="cultural"]').forEach((input) => input.addEventListener("change", refreshRanking));
       document.querySelectorAll("input,select,textarea").forEach((input) => {
         input.addEventListener("change", saveDraft);
@@ -538,7 +557,7 @@
       $("fill-example").addEventListener("click", () => {
         document.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
         $("city").value = "上海"; $("country").value = "中国"; $("airports").value = "PVG, SHA";
-        $("start-date").value = ""; $("end-date").value = ""; $("month").value = "2026-10"; $("days").value = "7"; $("flexibility").value = "± 1–2 天";
+        $("start-date").value = ""; $("end-date").value = ""; $("month").value = "2026-10"; $("days").value = "7"; $("flexibility").value = "± 1–2 天"; $("booked-already").value = "nothing";
         $("fixed-commitments").value = "";
         $("scope").value = "open"; $("places").value = ""; $("excluded").value = ""; $("purpose").value = "sightseeing";
         $("count").value = "2"; $("composition").value = "情侣/两人"; $("ages").value = ""; $("mobility").value = ""; $("dietary").value = "不吃辣";

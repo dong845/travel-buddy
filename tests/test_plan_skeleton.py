@@ -206,6 +206,38 @@ def main() -> int:
             template["booking_options"]["accommodations"][0],
             skeleton["booking_options"]["accommodations"][0])
 
+    # The third of the three disqualifiers references/research-budget.md rule 1 says to settle
+    # before any research at all. The intake now collects it, and an author who never opens the
+    # intake file would still ask the traveller a question they have already answered -- so the
+    # skeleton says it out loud, including when an older intake file does not carry the field.
+    import subprocess as _sp, sys as _sys, tempfile as _tf, os as _os
+    _base = json.loads((ROOT / "templates" / "trip-profile.json").read_text(encoding="utf-8"))
+    _base["origin"] = {"home_city": "阿姆斯特丹"}
+    _base["travel_window"] = {"start_date": "2027-04-17", "end_date": "2027-04-23"}
+    _base["party"] = {"traveler_count": 2}
+    _base["budget"] = {"currency": "EUR", "hard_cap_amount": 1200}
+    _base["destination_scope"] = {"state": "fixed", "named_places": ["香港"]}
+    with _tf.TemporaryDirectory() as _raw:
+        for _label, _bk, _want in (
+                ("something booked", {"state": "transport", "details": "CX270 不可退"}, "CX270"),
+                ("nothing booked", {"state": "nothing", "details": None}, "still open"),
+                ("an intake predating the field", None, "does not say")):
+            _body = dict(_base)
+            if _bk is None:
+                _body.pop("existing_bookings", None)
+            else:
+                _body["existing_bookings"] = _bk
+            _path = _os.path.join(_raw, "intake.json")
+            Path(_path).write_text(json.dumps(_body, ensure_ascii=False), encoding="utf-8")
+            _proc = _sp.run([_sys.executable, str(ROOT / "scripts" / "new_plan_skeleton.py"),
+                             "--from-intake", _path, "--destination", "香港", "--language", "zh",
+                             "--mode", "public-transit", "--stops-per-day", "3"],
+                            capture_output=True, text=True)
+            if "ALREADY BOOKED" not in _proc.stderr:
+                failures.append(f"booking state: nothing printed for {_label}")
+            elif _want not in _proc.stderr:
+                failures.append(f"booking state: {_label} did not say {_want!r}")
+
     if failures:
         print("FAIL")
         for failure in failures:

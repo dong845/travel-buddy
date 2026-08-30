@@ -514,6 +514,26 @@ def main() -> int:
         for line in report or ["  nothing copied: the intake carried none of the mapped keys."]:
             print(line, file=sys.stderr)
 
+        # Not copied into the plan -- there is no field for it -- but printed, because it is one of
+        # the three questions references/research-budget.md rule 1 says to settle before any
+        # research at all, and each answer deletes a whole branch. It used to be asked in chat even
+        # though the intake now carries it, so an author who never opens the intake file would ask
+        # the traveller a question they have already answered. A booked flight also fixes dates and
+        # origin airport that the design stage would otherwise treat as open.
+        booked = intake.get("existing_bookings") if isinstance(intake, dict) else None
+        if isinstance(booked, dict) and booked.get("state"):
+            state = booked.get("state")
+            if state == "nothing":
+                print("  ALREADY BOOKED: nothing. Dates and transport are still open.",
+                      file=sys.stderr)
+            else:
+                print(f"  ALREADY BOOKED: {state} — {booked.get('details') or 'no detail given'}. "
+                      f"Treat these as fixed and do not research alternatives for them; "
+                      f"do not ask the traveller again.", file=sys.stderr)
+        else:
+            print("  ALREADY BOOKED: the intake does not say. Ask ONCE, with the other "
+                  "checkpoint questions, before any research — not after.", file=sys.stderr)
+
     missing = [flag for flag, value in (("--start", start_text), ("--end", end_text),
                                         ("--origin", origin), ("--destination", destination))
                if not value]

@@ -20,6 +20,10 @@
     "date_flexibility": null,
     "fixed_commitments": null
   },
+  "existing_bookings": {
+    "state": null,
+    "details": null
+  },
   "trip_geography": {
     "scope": null,
     "entry_assessment_required": null
