@@ -7,14 +7,14 @@
   },
   "metadata": {
     "description": "travel-buddy skill — destination discovery, fact-checked booking-ready itinerary generation for Claude Code and Codex",
-    "version": "2.4.0"
+    "version": "2.5.0"
   },
   "plugins": [
     {
       "name": "travel-buddy",
       "source": "./",
-      "description": "Decide where to go before building the itinerary: hard-filter destinations before scoring them, verify every fare, timetable and entry rule against a live source through a five-domain parallel check, and ship a self-contained booking-ready HTML plan gated on its own internal consistency, on every outbound button naming the provider it actually opens, on every map link carrying coordinates that land where the label says, on every venue and property carrying the rating that says somebody actually opened its page, on a score having evidence under it, on a stated walking cap being answered rather than passed by silence, on every scheduled ticket saying when it goes on sale and the plan not putting the traveller in transit at that hour, and on the plan saying how the traveller's requirements were collected. The saved page carries the stamp of the gates it passed, so a hand-written one is tellable apart. Runs under any assistant, not only the two it can name.",
-      "version": "2.4.0",
+      "description": "Decide where to go before building the itinerary: hard-filter destinations before scoring them, verify every fare, timetable and entry rule against a live source through a five-domain parallel check, and ship a self-contained booking-ready HTML plan gated on its own internal consistency, on every outbound button naming the provider it actually opens, on every map link carrying coordinates that land where the label says, on every venue and property carrying the rating that says somebody actually opened its page, on a score having evidence under it, on a stated walking cap being answered rather than passed by silence, on every scheduled ticket saying when it goes on sale and the plan not putting the traveller in transit at that hour, and on the plan saying how the traveller's requirements were collected. The saved page carries the stamp of the gates it passed, so a hand-written one is tellable apart. Discovery ships through a door of its own rather than a paragraph, a source is only called unreachable after this machine has actually asked it, and every key in a plan is checked against the contract in one pass before the gates run. Runs under any assistant, not only the two it can name.",
+      "version": "2.5.0",
       "author": {
         "name": "Leo-Lyu",
         "url": "https://github.com/dong845"
