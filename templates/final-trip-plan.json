@@ -125,7 +125,18 @@
     "summary": null,
     "traveler_basis": null,
     "source_url": null,
-    "checked_at": null
+    "checked_at": null,
+    "per_jurisdiction": [
+      {
+        "_note": "One record per jurisdiction the trip ENTERS, for a trip that enters more than one. The flat fields above stay the single-jurisdiction form and are unchanged. A trip whose stops declare two jurisdictions and carries one entry answer is confidently wrong about the second, and an entry answer is what decides whether the traveller boards.",
+        "jurisdiction": null,
+        "status": null,
+        "summary": null,
+        "traveler_basis": null,
+        "source_url": null,
+        "checked_at": null
+      }
+    ]
   },
   "regional_service_context": {
     "destination_service_market": null,
@@ -292,6 +303,7 @@
       {
         "id": null,
         "stay_group_id": null,
+        "jurisdiction": null,
         "stay_location": null,
         "neighborhood": null,
         "address_or_location_reference": null,

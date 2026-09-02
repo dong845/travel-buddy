@@ -21,7 +21,7 @@ from urllib.parse import parse_qsl, urlparse
 # The gate settings this script used to make the caller type. Kept in its own module because
 # save_trip_deliverables.py imports validate() from this file, so a deriver living in either one
 # of them and imported by the other is a cycle. See scripts/plan_flags.py.
-from plan_flags import PlanFlagsError, load_html_flags
+from plan_flags import PlanFlagsError, is_mainland_market, load_html_flags
 
 
 ALLOWED_BOOKING_TYPES = {"flight", "hotel", "ticket", "car", "ground"}
@@ -1108,7 +1108,14 @@ class TripHTMLParser(HTMLParser):
             # is missing sections" is decided once the whole card has been seen -- can still be
             # placed on the page instead of leaving the author to scroll for day 3.
             record = {"number": number, "classes": set(), "map_links": 0, "route_segments": [],
-                      "segment_map_links": [], "position": self.getpos()}
+                      "segment_map_links": [], "position": self.getpos(),
+                      # Which market's rules this day answers to. The mainland-China map rule was
+                      # page-wide, which is right for a trip that stays in one market and wrong for
+                      # every trip that does not -- a Shenzhen+Hong Kong plan was told its Hong Kong
+                      # days must use Amap, and the traveller's only ways out were wrong links for
+                      # half the trip or no page at all.
+                      "service_market": attrs.get("data-service-market", ""),
+                      "map_link_attrs": []}
             self.days.append(record)
             self.active_days.append(record)
         if self.active_days:
@@ -1142,6 +1149,8 @@ class TripHTMLParser(HTMLParser):
                 self.booking_access_source_links.append(attrs)
             if "map-link" in class_set:
                 self.map_links.append(attrs)
+                if self.days:
+                    self.days[-1]["map_link_attrs"].append(attrs)
                 if not is_safe_https(href):
                     self.errors.append(cite("map.link_attributes", "Map links must use a safe HTTPS browse-only URL."))
                 if attrs.get("target") != "_blank":
@@ -1394,12 +1403,50 @@ def validate(
         market = parser.trip_plan_attrs.get("data-service-market", "").casefold()
         google_access = parser.trip_plan_attrs.get("data-google-services-access", "")
         primary_maps = [link for link in parser.map_links if link.get("data-map-role") == "primary"]
+        # Per DAY, not per page. Each day card carries the market of the stay it sleeps at, so a
+        # trip that crosses a market boundary -- Shenzhen then Hong Kong, Harbin then Tokyo -- gets
+        # Amap held over the mainland days and Google left alone everywhere else. Before this the
+        # rule read one page-wide flag and produced eighteen findings telling a Hong Kong day to
+        # use Amap, which is not the tool for Hong Kong transit.
+        mainland_days = [d for d in parser.days if is_mainland_market(d.get("service_market"))]
+        exception = parser.trip_plan_attrs.get("data-primary-map-exception", "")
+        for day in mainland_days:
+            links = day.get("map_link_attrs") or []
+            primaries = [x for x in links if x.get("data-map-role") == "primary"]
+            if not primaries or (not exception and any(
+                    not is_amap_link(x.get("data-map-provider", ""), x.get("href", ""))
+                    for x in primaries)):
+                errors.append(cite("market.provider_routing",
+                    f"Day {day.get('number') or '?'} is in mainland China, so its primary map "
+                    f"links must use Amap/高德地图."))
+            if any(is_google_map_link(x.get("data-map-provider", ""), x.get("href", ""))
+                   for x in links):
+                errors.append(cite("market.provider_routing",
+                    f"Day {day.get('number') or '?'} is in mainland China and must not link "
+                    f"Google Maps, which does not work there."))
+        # Page-wide links that belong to no day -- the overall-route button -- keep the old rule,
+        # judged on the trip's own market.
         if market == "mainland_china":
-            exception = parser.trip_plan_attrs.get("data-primary-map-exception", "")
-            if not primary_maps or (not exception and any(not is_amap_link(link.get("data-map-provider", ""), link.get("href", "")) for link in primary_maps)):
-                errors.append(cite("market.provider_routing", "Mainland-China primary map links must use Amap/高德地图."))
-            if any(is_google_map_link(link.get("data-map-provider", ""), link.get("href", "")) for link in parser.map_links):
+            day_links = {id(x) for d in parser.days for x in (d.get("map_link_attrs") or [])}
+            loose = [x for x in parser.map_links if id(x) not in day_links]
+            if any(is_google_map_link(x.get("data-map-provider", ""), x.get("href", "")) for x in loose):
                 errors.append(cite("market.provider_routing", "Mainland-China HTML must not include Google Maps links."))
+            if not parser.days and (not primary_maps or (not exception and any(
+                    not is_amap_link(x.get("data-map-provider", ""), x.get("href", ""))
+                    for x in primary_maps))):
+                errors.append(cite("market.provider_routing", "Mainland-China primary map links must use Amap/高德地图."))
+            # A relaxation nobody can see is the same defect as no rule. Any day this trip excused
+            # is named, because "中国" is not a spelling this gate recognises as the mainland and an
+            # author who wrote it would otherwise get Google links that fail on arrival.
+            relaxed = [d.get("number") for d in parser.days
+                       if not is_mainland_market(d.get("service_market"))]
+            if relaxed:
+                notes.append(
+                    f"note: this is a mainland-China trip, and day(s) {', '.join(relaxed)} were "
+                    f"NOT held to the Amap rule because they declare a different jurisdiction. "
+                    f"That is correct for a Hong Kong, Macau or overseas leg. If any of those days "
+                    f"is actually in the mainland, its links will not work there -- spell its "
+                    f"jurisdiction mainland_china.")
         if google_access == "unavailable" and any(is_google_map_link(link.get("data-map-provider", ""), link.get("href", "")) for link in parser.map_links):
             errors.append(cite("market.provider_routing", "HTML marked Google-unavailable must not include Google Maps links."))
     booking_types = {link.get("data-booking-type", "") for link in parser.booking_links}

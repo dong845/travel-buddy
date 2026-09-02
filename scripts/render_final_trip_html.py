@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
 
-from plan_flags import stay_sequence
+from plan_flags import is_mainland_market, stay_sequence
 from fetch_plan_imagery import ImagerySidecarError, resolve_plan_imagery
 from travel_workspace import find_sensitive_values
 
@@ -1757,6 +1757,24 @@ def read_json(path: str) -> dict:
     return data
 
 
+def day_service_market(day: dict, stays_by_id: dict[str, dict], trip_market: object) -> str:
+    """Which service market's rules apply to THIS day.
+
+    The mainland-China map rule was page-wide, which is correct for a trip that stays in one market
+    and wrong for every trip that does not. Measured on a real plan: turn the last two days of a
+    Shenzhen trip into a Hong Kong leg with Google Maps links -- the correct provider there, since
+    Amap is not the tool for Hong Kong transit -- and the gate produced eighteen findings telling
+    the author that those Hong Kong days must use Amap. The traveller's only ways out were wrong
+    links for half the trip or no delivered page at all.
+
+    A day takes the jurisdiction of the accommodation it sleeps at, and falls back to the trip's
+    own market. The fallback is what keeps every single-market plan byte-identical.
+    """
+    stay = stays_by_id.get(str(day.get("accommodation_option_id") or ""))
+    declared = str((stay or {}).get("jurisdiction") or "").strip()
+    return declared or str(trip_market or "").strip()
+
+
 def _leg_groups(items: list[dict]) -> dict[str, list[dict]]:
     """Booking options grouped by the journey they are alternatives for.
 
@@ -2575,6 +2593,32 @@ def validate_plan(plan: dict) -> list[str]:
     if not days:
         errors.append("At least one day is required.")
     day_dates: dict[int, date] = {}
+    # Per-day market, for the same reason the page gate now does it per day: a trip that crosses a
+    # market boundary had one flag for all of it, so a Shenzhen+Hong Kong plan was told that its
+    # Hong Kong days must use Amap -- not the tool for Hong Kong transit -- and the traveller's only
+    # ways out were wrong links for half the trip or no page at all. A day with no jurisdiction of
+    # its own inherits the trip's, which is what keeps every single-market plan unchanged.
+    _stays = {str(a.get("id")): a for a in
+              (plan.get("booking_options") or {}).get("accommodations", []) if isinstance(a, dict)}
+
+    def _day_context(day: dict) -> tuple[dict, str]:
+        stay = _stays.get(str(day.get("accommodation_option_id") or ""))
+        declared = str((stay or {}).get("jurisdiction") or "").strip()
+        if not declared:
+            return regional_context, market
+        context = {**regional_context, "destination_service_market": declared}
+        # `google_services_access` is one value for the whole trip, and its meaning is "can the
+        # traveller reach Google where they are" -- which is exactly the thing that differs on a
+        # trip that crosses this boundary. A Shenzhen+Hong Kong plan sets it `unavailable` because
+        # of the Shenzhen half, and that then blocked the Hong Kong half from using the only map
+        # provider that works there. Relaxed for a day that declares a non-mainland jurisdiction
+        # ONLY when the trip's own market is the mainland, so a plan marked unavailable for some
+        # other reason -- a country this repo has never modelled -- is not quietly excused.
+        if is_mainland_market(market) and not is_mainland_market(declared) \
+                and context.get("google_services_access") == "unavailable":
+            context["google_services_access"] = "available"
+        return context, declared.casefold()
+
     for expected, day in enumerate(days, 1):
         if not isinstance(day, dict) or day.get("number") != expected:
             errors.append("days must be objects numbered consecutively from 1.")
@@ -2638,9 +2682,10 @@ def validate_plan(plan: dict) -> list[str]:
             errors.append(cite("map.link_contract", f"day {expected} route.verified_map_url must be HTTPS."))
         elif route.get("verified_map_url") and route.get("map_provider") and not is_directions_url(route["map_provider"], route["verified_map_url"]):
             errors.append(cite("map.link_contract", f"day {expected} route.verified_map_url must be an actual directions URL, not a place/POI page."))
-        if route.get("map_provider") and route.get("verified_map_url") and not map_link_allowed(route["map_provider"], route["verified_map_url"], regional_context):
+        day_context, day_market = _day_context(day)
+        if route.get("map_provider") and route.get("verified_map_url") and not map_link_allowed(route["map_provider"], route["verified_map_url"], day_context):
             errors.append(cite("market.provider_routing", f"day {expected} route uses Google Maps despite the regional-access rule."))
-        if market == "mainland_china" and not mainland_primary_exception and route.get("map_provider") and route.get("verified_map_url") and not is_amap(route["map_provider"], route["verified_map_url"]):
+        if is_mainland_market(day_market) and not mainland_primary_exception and route.get("map_provider") and route.get("verified_map_url") and not is_amap(route["map_provider"], route["verified_map_url"]):
             errors.append(cite("market.provider_routing", f"day {expected} mainland-China primary route must use Amap/高德地图."))
         validate_alternative_map_links(route.get("alternative_map_links"), f"day {expected} route", regional_context, errors)
         segments = route.get("segments")
@@ -2677,9 +2722,9 @@ def validate_plan(plan: dict) -> list[str]:
                     errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number} map URL must be HTTPS."))
                 elif not is_directions_url(segment["map_provider"], segment["verified_map_url"]):
                     errors.append(cite("map.link_contract", f"day {expected} route segment {segment_number} map URL must be a directions URL, not a place/POI page."))
-                if not map_link_allowed(segment["map_provider"], segment["verified_map_url"], regional_context):
+                if not map_link_allowed(segment["map_provider"], segment["verified_map_url"], day_context):
                     errors.append(cite("market.provider_routing", f"day {expected} route segment {segment_number} uses Google Maps despite the regional-access rule."))
-                if market == "mainland_china" and not mainland_primary_exception and not is_amap(segment["map_provider"], segment["verified_map_url"]):
+                if is_mainland_market(day_market) and not mainland_primary_exception and not is_amap(segment["map_provider"], segment["verified_map_url"]):
                     errors.append(cite("market.provider_routing", f"day {expected} mainland-China route segment {segment_number} must use Amap/高德地图."))
                 validate_alternative_map_links(segment.get("alternative_map_links"), f"day {expected} route segment {segment_number}", regional_context, errors)
         if mode == "public-transit" and route.get("cost_low") is None and route.get("cost_high") is None:
@@ -3222,6 +3267,12 @@ def render_unlocalized(plan: dict) -> str:
         groups.append(f'<section class="option-group" data-option-group="{attr(kind)}"><h3>{heading}</h3><div class="grid">{rendered}</div></section>')
     cards = groups or ['<p class="meta">No purchase options were requested for this plan.</p>']
     day_cards = []
+    # Looked up once at function level: every day card asks which market its own stay is in, and
+    # a per-day rebuild of this map would be the same dict rebuilt once per day.
+    _regional = plan.get("regional_service_context") if isinstance(plan.get("regional_service_context"), dict) else {}
+    _stays_by_id = {str(item.get("id")): item
+                    for item in (plan.get("booking_options") or {}).get("accommodations", [])
+                    if isinstance(item, dict)}
     for day in plan["days"]:
         route = day["route"]
         stay = accommodations.get(day.get("accommodation_option_id"))
@@ -3312,7 +3363,10 @@ def render_unlocalized(plan: dict) -> str:
         stay_line = "Checkout / no overnight stay" if day.get("day_type") == "departure" else "Arranged independently"
         if stay:
             stay_line = f"{as_text(stay.get('property_name'))} · {as_text(stay.get('stay_location'))} · {as_text(stay.get('room_basis'))}"
-        day_cards.append(f'''<article class="day-card" id="day-{attr(day["number"])}" data-day="{attr(day["number"])}"><div class="day-top"><div><p class="eyebrow">Day {esc(day.get("number"))} · {esc(day.get("date"))}</p><h2>{esc(day.get("title"))}</h2><p>{esc(day.get("focus"))}</p></div><div class="day-number" aria-label="Day {attr(day["number"])}">{esc(day.get("number"))}</div></div><section class="day-accommodation"><h3>Stay</h3><p><strong>{esc(stay_line)}</strong></p></section><section class="day-activities"><h3>Plan</h3>{day_timeline_figure}<ol class="timeline">{"".join(activities) or '<li><time>Flexible</time><div><strong>Free time</strong></div></li>'}</ol></section><section class="day-dining"><h3>Dining suggestions</h3>{dining}</section><section class="day-route"><h3>Route and mobility</h3><p>{transport_html}</p><p class="meta">{esc(route.get("route_logic"))}</p><figure class="route-map">{day_map_figure}{route_diagram(route.get("stops_in_order", []))}<figcaption>Schematic — not for navigation. Stops are shown in visit order; use the live map for directions.</figcaption></figure><a class="map-link" data-map-scope="{attr(route_scope)}" data-verified-at="{attr(route["map_checked_at"])}" href="{attr(route["verified_map_url"])}" target="_blank" rel="noopener noreferrer">{route_map_label}</a><h4>Route by segment</h4>{segment_links}{walking_line}{fallback_line}<p class="meta">{esc(route.get("service_or_driving_caveat"), "Recheck operating conditions before departure.")}</p></section><section class="day-bookings"><h3>Tickets and recheck</h3>{ticket_panel}<p class="warning">{esc(day.get("contingency"), "Keep a flexible alternative for disruptions.")}</p></section></article>''')
+        # Stamped per day so the page gate can hold a mainland-China day to Amap without holding
+        # a Hong Kong day to it as well. Derived from the day's own stay, never authored twice.
+        day_market = day_service_market(day, _stays_by_id, _regional.get("destination_service_market"))
+        day_cards.append(f'''<article class="day-card" id="day-{attr(day["number"])}" data-day="{attr(day["number"])}" data-service-market="{attr(day_market)}"><div class="day-top"><div><p class="eyebrow">Day {esc(day.get("number"))} · {esc(day.get("date"))}</p><h2>{esc(day.get("title"))}</h2><p>{esc(day.get("focus"))}</p></div><div class="day-number" aria-label="Day {attr(day["number"])}">{esc(day.get("number"))}</div></div><section class="day-accommodation"><h3>Stay</h3><p><strong>{esc(stay_line)}</strong></p></section><section class="day-activities"><h3>Plan</h3>{day_timeline_figure}<ol class="timeline">{"".join(activities) or '<li><time>Flexible</time><div><strong>Free time</strong></div></li>'}</ol></section><section class="day-dining"><h3>Dining suggestions</h3>{dining}</section><section class="day-route"><h3>Route and mobility</h3><p>{transport_html}</p><p class="meta">{esc(route.get("route_logic"))}</p><figure class="route-map">{day_map_figure}{route_diagram(route.get("stops_in_order", []))}<figcaption>Schematic — not for navigation. Stops are shown in visit order; use the live map for directions.</figcaption></figure><a class="map-link" data-map-scope="{attr(route_scope)}" data-verified-at="{attr(route["map_checked_at"])}" href="{attr(route["verified_map_url"])}" target="_blank" rel="noopener noreferrer">{route_map_label}</a><h4>Route by segment</h4>{segment_links}{walking_line}{fallback_line}<p class="meta">{esc(route.get("service_or_driving_caveat"), "Recheck operating conditions before departure.")}</p></section><section class="day-bookings"><h3>Tickets and recheck</h3>{ticket_panel}<p class="warning">{esc(day.get("contingency"), "Keep a flexible alternative for disruptions.")}</p></section></article>''')
     overview = plan["transport_overview"]
     source_rows = "".join(f'<li class="source-item" data-source-type="{attr(source["source_type"])}" data-accessed-at="{attr(source["accessed_at"])}" data-source-url="{attr(source["url"])}"><a class="source-link" href="{attr(source["url"])}" target="_blank" rel="noopener noreferrer">{esc(source["name"])}</a> — {esc(source.get("claim_or_decision_supported"), "Plan evidence")} · {enum_cell("source-confidence", "source-confidence", source_confidence_token(source.get("confidence")), SOURCE_CONFIDENCE_DEFAULT)}</li>' for source in sources)
     total = money(budget.get("estimated_per_person_low"), budget.get("estimated_per_person_high"), trip["currency"])

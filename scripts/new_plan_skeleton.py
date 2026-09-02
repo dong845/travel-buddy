@@ -800,7 +800,12 @@ def main() -> int:
                 for n in (1, 2)
             ],
             "accommodations": [
-                {"id": f"acc-{n}", "stay_group_id": "stay-1", "stay_location": f"{TODO}stay area",
+                {"id": f"acc-{n}", "stay_group_id": "stay-1",
+                 # Which entry rules and local services apply to THIS stop. One stay group per
+                 # stop on a multi-stop trip, and one jurisdiction each: a trip that enters two
+                 # places needs two entry answers, and an answer for one country is wrong about
+                 # the other.
+                 "jurisdiction": f"{TODO}jurisdiction (e.g. 日本 / 中国大陆 / 香港 / 申根区)", "stay_location": f"{TODO}stay area",
                  "neighborhood": f"{TODO}neighbourhood", "address_or_location_reference": f"{TODO}location reference",
                  "property_name": f"{TODO}property {n}", "provider": f"{TODO}provider (must own review_url)",
                  "comparison_platform": f"{TODO}comparison platform", "comparison_checked_at": DATE,

@@ -451,6 +451,7 @@ CHECK_REFERENCES: dict[str, str] = {
     # duration, fare -- which is stated once, in the route-burden section.
     # A multi-stop trip is a sequence of stays, and the one arithmetic mistake it makes that
     # every per-day check passes is paying for two hotels on one night.
+    "check_entry_covers_every_jurisdiction": "booking-html-output.md#multi-stop-trips",
     "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
     "check_routes": "booking-html-output.md#day-route-burden",
     "check_implied_speed": "booking-html-output.md#day-route-burden",
@@ -1189,6 +1190,75 @@ def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
             problem = _english_weekday_claim(day, date, blob)
         if problem:
             errors.append(problem)
+
+
+@cites
+def check_entry_covers_every_jurisdiction(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A trip that enters two places needs two entry answers, and used to need one.
+
+    `entry_context` is a single object -- one status, one summary, one source_url, one checked_at --
+    and every gate was satisfied by it. So a Bangkok/Hanoi/Phnom Penh trip could carry Thailand's
+    answer alone, cite an official Thai source, pass, and print "visa-free" on a page that is wrong
+    for two of the three countries. A wrong entry answer is not a disappointment like a closed
+    restaurant; it is a denial of boarding, and it is the one finding on this page the traveller
+    cannot recover from at the airport.
+
+    Multi-stop trips only. A single-stay trip keeps the flat form exactly as it was, so nothing
+    that already ships changes shape.
+
+    `jurisdiction` and not `country`, because the distinction that matters here is not political:
+    Hong Kong and the mainland are one country and two entry regimes, and a mainland passport needs
+    a permit to cross between them. It is free text on purpose -- the gate checks COVERAGE, never
+    identity, so an author who writes 「申根区」 for Paris and Berlin gets one record and an author
+    who writes 「法国」/「德国」 gets two, and both are defensible readings of the same trip.
+    """
+    stays = [_obj(a) for a in _seq(_obj(plan.get("booking_options")).get("accommodations"))]
+    groups: dict[str, set[str]] = {}
+    for stay in stays:
+        group = str(stay.get("stay_group_id") or "").strip()
+        if not group:
+            continue
+        groups.setdefault(group, set()).add(str(stay.get("jurisdiction") or "").strip())
+    if len(groups) < 2:
+        return
+
+    unnamed = sorted(g for g, values in groups.items() if not any(values - {""}))
+    if unnamed:
+        errors.append(
+            f"this trip sleeps in {len(groups)} places and {len(unnamed)} of them do not say which "
+            f"entry jurisdiction they are in ({', '.join(unnamed)}). Set `jurisdiction` on each "
+            f"accommodation -- 「日本」, 「中国大陆」, 「香港」, 「申根区」 -- because without it "
+            f"nothing can tell whether this trip needs one entry answer or three, and one answer "
+            f"covering three countries is wrong about two of them.")
+        return
+
+    needed = {v for values in groups.values() for v in values if v}
+    if len(needed) < 2:
+        return
+
+    context = _obj(plan.get("entry_context"))
+    records = [_obj(r) for r in _seq(context.get("per_jurisdiction"))]
+    covered = {str(r.get("jurisdiction") or "").strip() for r in records} - {""}
+    missing = sorted(needed - covered)
+    if missing:
+        errors.append(
+            f"this trip enters {len(needed)} jurisdictions ({', '.join(sorted(needed))}) and "
+            f"entry_context answers for {len(covered) or 'none'} of them. Missing: "
+            f"{', '.join(missing)}. Add one entry_context.per_jurisdiction record per jurisdiction, "
+            f"each with its own status, summary, traveler_basis, source_url and checked_at -- a "
+            f"second country's rules are not a footnote to the first country's, and the flat "
+            f"entry_context fields describe one place only.")
+        return
+
+    incomplete = [str(r.get("jurisdiction")) for r in records
+                  if not all(r.get(f) for f in
+                             ("status", "summary", "traveler_basis", "source_url", "checked_at"))]
+    if incomplete:
+        errors.append(
+            f"entry_context.per_jurisdiction names {', '.join(incomplete)} without the evidence "
+            f"the single-jurisdiction form has always required (status, summary, traveler_basis, "
+            f"source_url, checked_at). A record that names a country and cites nothing reads on "
+            f"the page as an answer that was checked.")
 
 
 @cites
@@ -4274,6 +4344,7 @@ def check_dates_agree_with_the_gates_that_ran(plan: dict, errors: list[str],
 
 
 PLAN_CHECKS = (
+    check_entry_covers_every_jurisdiction,
     check_stay_groups_do_not_overlap,
     check_verification_tier_is_stated,
     check_dates_agree_with_the_gates_that_ran,

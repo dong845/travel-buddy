@@ -317,3 +317,15 @@ def stay_sequence(plan: object) -> list[dict]:
         entry["label"] = min(entry["labels"], key=len) if entry["labels"] else entry["group_id"]
         entry["nights"] = (entry["check_out"] - entry["check_in"]).days
     return spine
+
+
+# The spellings that mean "the map rule for mainland China applies here". Explicit, and short on
+# purpose: `destination_service_market` is free text and fifteen saved plans spell it nine ways, so
+# a fuzzy match would be guessing about the one market whose links break when guessed wrong. A day
+# whose jurisdiction is not in this set and not recognisably elsewhere keeps the trip-wide rule --
+# see day_service_market, which fails strict rather than open.
+MAINLAND_CHINA_MARKETS = frozenset({"mainland_china", "中国大陆", "中国内地", "mainland china"})
+
+
+def is_mainland_market(value: object) -> bool:
+    return str(value or "").strip().casefold() in MAINLAND_CHINA_MARKETS

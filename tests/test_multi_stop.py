@@ -194,6 +194,71 @@ def main() -> int:
     check("a single-leg trip needs no leg_group_id", not ground_findings(single),
           f"{ground_findings(single)}")
 
+    # 4b. A trip that enters two places needs two entry answers. entry_context is ONE object --
+    #     one status, one summary, one source_url -- and every gate was satisfied by it, so a
+    #     Bangkok/Hanoi/Phnom Penh trip could carry Thailand's answer alone, cite an official Thai
+    #     source, pass, and print "visa-free" on a page wrong for two of three countries. A wrong
+    #     entry answer is the one finding here the traveller cannot recover from at the airport.
+    from check_plan_consistency import check_entry_covers_every_jurisdiction as entry_gate
+
+    def stay(group: str, where: str) -> dict:
+        return {"stay_group_id": group, "jurisdiction": where,
+                "check_in": "2027-03-01", "check_out": "2027-03-04"}
+
+    def entry_findings(stays: list[dict], context: dict) -> list[str]:
+        found: list[str] = []
+        entry_gate({"booking_options": {"accommodations": stays},
+                    "entry_context": context}, found, [])
+        return found
+
+    complete = {"status": "visa_free", "summary": "s", "traveler_basis": "b",
+                "source_url": "https://example.invalid", "checked_at": "2027-01-01"}
+    # One jurisdiction keeps the flat form exactly as it was; nothing that ships changes shape.
+    check("a single-jurisdiction trip is untouched",
+          not entry_findings([stay("s1", "日本"), stay("s1", "日本")], complete))
+
+    # Two stops that do not say where they are cannot be checked at all, and silence is the state
+    # every plan in the workspace was already in -- so it has to be said, not assumed benign.
+    found = entry_findings([stay("s1", ""), stay("s2", "")], complete)
+    check("two stops with no jurisdiction are refused", found, "accepted")
+    if found:
+        check("the refusal says what to write", "jurisdiction" in found[0], found[0][:120])
+
+    three = [stay("s1", "泰国"), stay("s2", "越南"), stay("s3", "柬埔寨")]
+    found = entry_findings(three, complete)
+    check("three countries answered once is refused", found, "accepted -- wrong about two of three")
+    if found:
+        for country in ("泰国", "越南", "柬埔寨"):
+            check(f"the refusal names {country}", country in found[0], found[0][:160])
+
+    partial = dict(complete, per_jurisdiction=[
+        dict(complete, jurisdiction="泰国"), dict(complete, jurisdiction="越南")])
+    check("answering two of three is still refused", entry_findings(three, partial), "accepted")
+
+    full = dict(complete, per_jurisdiction=[
+        dict(complete, jurisdiction=c) for c in ("泰国", "越南", "柬埔寨")])
+    check("three answered is accepted", not entry_findings(three, full),
+          f"{entry_findings(three, full)}")
+
+    # A record that names a country and cites nothing reads on the page as an answer somebody
+    # checked, which is the failure mode the flat form has always been held to.
+    thin = dict(complete, per_jurisdiction=[
+        dict(complete, jurisdiction="泰国"), dict(complete, jurisdiction="越南"),
+        {"jurisdiction": "柬埔寨", "status": "visa_on_arrival"}])
+    found = entry_findings(three, thin)
+    check("a record with no source is refused", found, "accepted")
+    if found:
+        check("and it names which one", "柬埔寨" in found[0], found[0][:120])
+
+    # 4c. The service market is per DAY, not per page. The rule read one page-wide flag, so a
+    #     Shenzhen+Hong Kong plan was told its Hong Kong days must use Amap -- not the tool for
+    #     Hong Kong transit -- and the only ways out were wrong links for half the trip or no page.
+    from plan_flags import is_mainland_market
+    for value, expected in (("mainland_china", True), ("中国大陆", True), ("MAINLAND_CHINA", True),
+                            ("香港", False), ("japan", False), ("", False), (None, False)):
+        check(f"is_mainland_market({value!r}) is {expected}",
+              is_mainland_market(value) is expected)
+
     # 5. The page. A rendered spine is the whole point: the derivation existing and never reaching
     #    the HTML is the same defect as a rating stored and never printed.
     root = real_workspace()

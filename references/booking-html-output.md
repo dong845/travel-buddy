@@ -79,6 +79,26 @@ working the moment there are two stops:
   *pair* that is wrong, and until a trip has two stay groups there is no pair to look at. Checkout
   day is not a night, so a group starting the day the previous one ends is the correct shape, not a
   collision.
+- **A trip that enters two places needs two entry answers.** `entry_context` is one object -- one
+  status, one summary, one source_url -- and every gate was satisfied by it, so a
+  Bangkok/Hanoi/Phnom Penh plan could carry Thailand's answer alone, cite an official Thai source,
+  pass everything, and print "visa-free" on a page that is wrong for two of the three countries. A
+  wrong entry answer is not a disappointment like a closed restaurant; it is a denial of boarding.
+  Give each stop a `jurisdiction` and each jurisdiction its own `entry_context.per_jurisdiction`
+  record with its own evidence. `jurisdiction` and not `country`, because the distinction that
+  matters is not political: Hong Kong and the mainland are one country and two entry regimes. It is
+  free text, and the gate checks coverage rather than identity, so 「申根区」 for Paris and Berlin
+  gives one record and 「法国」/「德国」 gives two -- both defensible readings of the same trip.
+- **The service market is per stop, so the map rule is per day.** It used to be one page-wide flag.
+  Measured: turn the last two days of a Shenzhen trip into a Hong Kong leg with Google Maps links --
+  the correct provider there, since Amap is not the tool for Hong Kong transit -- and the gate
+  produced eighteen findings telling those Hong Kong days to use Amap. The traveller's only ways
+  out were wrong links for half the trip or no delivered page at all. A day now takes the
+  jurisdiction of the stay it sleeps at and falls back to the trip's own market, which is what
+  keeps every single-market plan unchanged. `google_services_access` is relaxed for a non-mainland
+  day only when the trip's own market is the mainland, so a plan marked unavailable for some other
+  reason is never quietly excused, and any day excused is named in a note -- a relaxation nobody
+  can see is the same defect as no rule.
 - **The page must say where the traveller sleeps and when that changes.** All of it is derivable
   from the stay groups and their dates, so nothing new is asked of the author; what was missing was
   only that none of it was rendered. Do not use `base_location` for this -- it is free text and has
