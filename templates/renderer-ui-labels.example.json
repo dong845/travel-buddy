@@ -222,5 +222,9 @@
   "severity_none": "none",
   "severity_preference": "preference",
   "severity_intolerance": "intolerance",
-  "severity_severe": "severe (can be life-threatening)"
+  "severity_severe": "severe (can be life-threatening)",
+  "spine_heading": "Where you sleep",
+  "spine_nights": "night(s)",
+  "spine_move": "Move day",
+  "spine_note": "Each move is a day with a change of accommodation; the day cards below say which."
 }

@@ -29,7 +29,7 @@ function fresh() {
     "coverage": "transport_and_stay", "travel-time": "不超过 15 小时", "scope": "open",
     "direction": "balance", "month": "2027-04", "days": "6",
     "budget-range": "300|500", "travel-scope": "no_new_visa_needed", "held-passport-validity": "valid_through_trip",
-    "held-visas": "申根居留卡 + 香港免签", "booked-already": "nothing",
+    "held-visas": "申根居留卡 + 香港免签", "booked-already": "nothing", "trip-shape": "single_base",
   };
   for (const [id, v] of Object.entries(base)) { if (f.store[id]) f.set(id, v); }
   f.tick("transport-mode", "direct_flight", "high_speed_rail");
@@ -92,6 +92,65 @@ function submits(f) {
   }
 }
 
+// 3b. Trip shape. "One country" is equally true of one base and of five stops, so the shape
+//     cannot be derived from the destination scope and is asked once, on the form, rather than
+//     discovered halfway through design. Both bounds are required for the two failure modes this
+//     shape has: no maximum turns "you decide" into an unbounded plan, and no minimum is how a
+//     multi-city trip becomes a different hotel every night.
+{
+  const f = fresh();
+  f.set("trip-shape", "");
+  check("a submission that will not say the trip's shape is refused", !submits(f).ok, "accepted");
+}
+{
+  const f = fresh();
+  f.set("trip-shape", "multi_city");
+  // Each bound is dropped ALONE, with the other two filled. Blanking all three also gets refused
+  // -- by whichever one is still required -- so a test written that way passes while any single
+  // rule is deleted. That is the same "the filter is wider than its subject" mistake this suite
+  // caught once already; here it let two mutations through before the cases were split.
+  const bounds = { "max-stops": "3", "min-nights-per-stop": "2", "return-to-first": "yes" };
+  for (const dropped of Object.keys(bounds)) {
+    for (const [id, v] of Object.entries(bounds)) f.set(id, id === dropped ? "" : v);
+    check(`multi-city without ${dropped} alone is refused`, !submits(f).ok,
+          "accepted, so that bound is not actually required");
+  }
+  for (const [id, v] of Object.entries(bounds)) f.set(id, v);
+  let r = submits(f);
+  check("multi-city with its bounds goes through", r.ok, r.message);
+  if (r.ok) {
+    const shape = (r.payload.destination_scope || {}).trip_shape || {};
+    check("the payload carries the shape", shape.state === "multi_city", JSON.stringify(shape));
+    check("max_stops is a number, not a string", shape.max_stops === 3, JSON.stringify(shape));
+    check("min_nights_per_stop is a number", shape.min_nights_per_stop === 2, JSON.stringify(shape));
+    check("the return question is carried", shape.return_to_first_stop === "yes", JSON.stringify(shape));
+  }
+}
+{
+  // A single stop is not a multi-city trip, and a non-numeric bound must not reach the JSON as
+  // NaN: it would look like an answer while being one nothing downstream can act on.
+  const f = fresh();
+  f.set("trip-shape", "planner_decides");
+  f.set("min-nights-per-stop", "2"); f.set("return-to-first", "either");
+  f.set("max-stops", "1");
+  check("a maximum of one stop is refused", !submits(f).ok, "accepted");
+  f.set("max-stops", "两");
+  const r = submits(f);
+  check("a non-numeric stop count is refused", !r.ok, "accepted");
+  if (!r.ok) check("and refused without NaN reaching the payload", !/NaN/.test(r.message), r.message);
+}
+{
+  const f = fresh();
+  f.api.updateConditionalPanels();
+  check("the multi-stop bounds hide for a single base", f.store["multi-stop-wrap"].hidden === true);
+  for (const shape of ["multi_city", "planner_decides"]) {
+    f.set("trip-shape", shape);
+    f.api.updateConditionalPanels();
+    check(`the bounds appear for ${shape}`, f.store["multi-stop-wrap"].hidden === false,
+          "the toggle never ran");
+  }
+}
+
 // 4. THE BUG THIS SHIM FOUND, and the reason a structural test would not have been enough: the
 //    toggle was syntactically perfect and in the wrong scope. Asserting the panel actually moves
 //    is what catches a listener that never runs.
@@ -149,7 +208,8 @@ function submits(f) {
     const listed = m[1].split(",").map((s) => s.trim().replace(/^"|"$/g, ""));
     const gone = listed.filter((id) => !f.store[id] && !/^rank-/.test(id));
     check("every drafted field exists", gone.length === 0, gone.join(", "));
-    for (const id of ["booked-already", "booked-detail", "held-visas"]) {
+    for (const id of ["booked-already", "booked-detail", "held-visas",
+                      "trip-shape", "max-stops", "min-nights-per-stop", "return-to-first"]) {
       check(`${id} survives a refresh`, listed.includes(id),
             "it is not in FIELD_IDS, so a reload loses it");
     }

@@ -51,6 +51,40 @@ Compare identical inputs before drawing a conclusion:
 
 Record the comparison platform, fulfilment/booking provider, access time, and material difference in the plan/source register. A platform result is a current shopping lead, not a reservation or a guarantee. Prefer a provider search or result URL over a cart, login, checkout, or payment URL. If a platform is unavailable, use another suitable source or disclose the gap; do not fabricate a comparison.
 
+<a id="multi-stop-trips"></a>
+### Multi-stop trips: one stay group per stop, one leg group per journey
+
+A trip that spends nights in more than one place is a *sequence*, and the plan expresses that
+sequence through the fields it already has rather than through a declaration about itself: one
+`stay_group_id` per stop, one `leg_group_id` per intercity journey, and each day's route carrying
+the physical move. Ask the traveller the shape once, on the intake form -- "one country" is equally
+true of one base and of five stops, so it cannot be derived -- along with the two bounds that shape
+needs: how many stops at most, and how many nights at least in each. Without a maximum, "you decide"
+is unbounded; without a minimum, a multi-city trip becomes a different hotel every night.
+
+Three rules follow, and each one exists because the single-destination version of it silently stops
+working the moment there are two stops:
+
+- **Comparable options are compared within a journey, never across journeys.** "Provide two
+  candidates" read the whole category, so a Beijing→Shanghai item and a Shanghai→Beijing item
+  counted as two options for one leg: the count passed, the review_urls differed, and *neither leg
+  had been compared against anything*. The more legs a trip has, the more confidently the gate
+  reports a comparison nobody made. Group with an explicit `leg_group_id`, for the same reason
+  accommodations use `stay_group_id` -- two genuine alternatives for one journey may leave from
+  different stations, so grouping on the endpoints would split a real comparison in half. It is
+  required only once the options' own dates and endpoints show more than one journey, so a
+  single-leg trip needs no new field.
+- **Two stay groups may not claim the same night.** Every per-day check passes here: each day
+  points at one accommodation and that accommodation's window really does cover the day. It is the
+  *pair* that is wrong, and until a trip has two stay groups there is no pair to look at. Checkout
+  day is not a night, so a group starting the day the previous one ends is the correct shape, not a
+  collision.
+- **The page must say where the traveller sleeps and when that changes.** All of it is derivable
+  from the stay groups and their dates, so nothing new is asked of the author; what was missing was
+  only that none of it was rendered. Do not use `base_location` for this -- it is free text and has
+  been found meaning "where today's activities are" on one plan and "where I sleep" on another,
+  with four different spellings for a single base.
+
 <a id="booking-links"></a>
 ## Booking links: browse, compare, never transact
 

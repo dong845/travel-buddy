@@ -520,6 +520,33 @@ def main() -> int:
         # though the intake now carries it, so an author who never opens the intake file would ask
         # the traveller a question they have already answered. A booked flight also fixes dates and
         # origin airport that the design stage would otherwise treat as open.
+        # The trip's SHAPE, which decides how many stay groups the plan has, whether there is a
+        # ticketed intercity leg to compare, and where the return leg starts. Nothing derives it --
+        # "one country" is equally true of one base and of five stops -- and it is not copied into
+        # the plan either, because the plan expresses shape through stay groups rather than a
+        # declaration about itself. So it is printed, the way bookings are.
+        scope = intake.get("destination_scope") if isinstance(intake, dict) else None
+        shape = (scope or {}).get("trip_shape") if isinstance(scope, dict) else None
+        if isinstance(shape, dict) and shape.get("state"):
+            state = shape.get("state")
+            if state == "single_base":
+                print("  TRIP SHAPE: one base, day trips out. One stay group; no intercity leg to "
+                      "compare.", file=sys.stderr)
+            else:
+                stops, nights = shape.get("max_stops"), shape.get("min_nights_per_stop")
+                back = {"yes": "returns to the first stop to leave",
+                        "no": "leaves from the last stop",
+                        "either": "return airport is yours to choose on price and time"
+                        }.get(shape.get("return_to_first_stop"), "return leg unstated")
+                print(f"  TRIP SHAPE: {state}, at most {stops} stops, at least {nights} night(s) "
+                      f"each, {back}. Give each stop its OWN stay_group_id and its own compared "
+                      f"accommodation options, and give every intercity leg its own leg_group_id "
+                      f"with two compared options or a researched single_option_reason.",
+                      file=sys.stderr)
+        else:
+            print("  TRIP SHAPE: the intake does not say whether this is one base or several "
+                  "stops. Ask ONCE, with the other checkpoint questions.", file=sys.stderr)
+
         booked = intake.get("existing_bookings") if isinstance(intake, dict) else None
         if isinstance(booked, dict) and booked.get("state"):
             state = booked.get("state")
@@ -740,7 +767,12 @@ def main() -> int:
         "booking_options": {
             # Two candidates, and their review_urls must differ.
             "flights": [
-                {"id": f"fl-{n}", "provider": f"{TODO}provider {n} (must own review_url)",
+                # leg_group_id names the JOURNEY these options are alternatives FOR, so the
+                # "two comparable candidates" rule counts within a leg instead of across legs. A
+                # single-leg trip needs only this one value; a multi-stop trip gives each journey
+                # its own, exactly as accommodations give each stop its own stay_group_id.
+                {"id": f"fl-{n}", "leg_group_id": "leg-1",
+                 "provider": f"{TODO}provider {n} (must own review_url)",
                  "comparison_platform": f"{TODO}comparison platform {n}",
                  "comparison_checked_at": DATE,
                  "direct_provider": None, "direct_review_url": None,

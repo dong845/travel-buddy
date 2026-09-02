@@ -75,6 +75,12 @@
         <div class="grid">
           <div><label for="scope">目的地状态 <span>必填</span></label><select id="scope" required><option value="">请选择</option><option value="fixed">已固定城市/国家</option><option value="anchored">偏好某个国家/区域，但可比较</option><option value="continent">只限定大洲/大区域</option><option value="open">完全开放，帮我推荐</option></select></div>
           <div><label for="places">具体是哪里 <span id="places-hint">逗号分隔</span></label><input id="places" placeholder="例如：意大利, 日本关西"></div>
+          <div><label for="trip-shape">这趟想怎么走 <span>必填——决定整份行程的结构</span></label><select id="trip-shape" required><option value="">请选择</option><option value="single_base">住一个地方，当天来回玩周边</option><option value="multi_city">分几站走，每站住几晚</option><option value="planner_decides">我只给范围，你来决定分几站</option></select></div>
+          <div id="multi-stop-wrap" hidden>
+            <div><label for="max-stops">↳ 最多分几站 <span>必填，含第一站</span></label><input id="max-stops" type="number" min="2" max="8" placeholder="例如：3"></div>
+            <div><label for="min-nights-per-stop">↳ 每站至少住几晚 <span>必填——填 1 会得到一份天天换酒店的行程</span></label><input id="min-nights-per-stop" type="number" min="1" max="14" placeholder="例如：2"></div>
+            <div><label for="return-to-first">↳ 最后要回到第一站离境吗 <span>必填——决定要不要留出回程那一段</span></label><select id="return-to-first"><option value="">请选择</option><option value="yes">要，从第一站回程</option><option value="no">不用，从最后一站直接走</option><option value="either">都行，你按票价和时间定</option></select></div>
+          </div>
           <div><label for="excluded">本次不想去的地方 <span>逗号分隔，可选</span></label><input id="excluded" placeholder="例如：海岛, 某国家"></div>
           <div><label for="purpose">这趟旅行的主要目的</label><select id="purpose"><option value="">未指定</option><option value="leisure">纯度假放松</option><option value="sightseeing">观光探索</option><option value="food">吃喝为主</option><option value="outdoor">户外/运动</option><option value="family">带家人/亲子</option><option value="visiting">探亲访友</option><option value="celebration">纪念日/蜜月/庆祝</option><option value="work_adjacent">出差顺带</option><option value="other">其他</option></select></div>
         </div>
@@ -276,6 +282,13 @@
         // asked in chat instead: the round trip the rule exists to prevent. It asks WHAT is booked
         // rather than whether, because "flights booked" and "hotel booked" delete different
         // branches and a yes/no would only push the follow-up one step later.
+        // Multi-stop is a shape question, not a preference: it decides whether the plan has one
+        // stay group or several, whether there is a ticketed intercity leg to compare, and whether
+        // the return leg starts where the outbound landed. None of that is derivable from a
+        // destination scope -- "一个国家" is equally true of one base and of five stops -- so it is
+        // asked once, here, rather than discovered halfway through design.
+        const multiStop = ["multi_city", "planner_decides"].includes(text("trip-shape"));
+        $("multi-stop-wrap").hidden = !multiStop;
         const somethingBooked = text("booked-already") && text("booked-already") !== "nothing";
         $("booked-detail-wrap").hidden = !somethingBooked;
         const anchored = ["fixed", "anchored"].includes(text("scope"));
@@ -378,6 +391,15 @@
         const tripScope = text("travel-scope");
         const entryNeeded = requiresEntryAssessment();
         const required = [["city", "出发城市"], ["country", "出发国家/地区"], ["count", "同行人数"], ["currency", "预算币种"], ["coverage", "人均预算涵盖范围"], ["travel-scope", "本次出行范围"], ["travel-time", "最长单程总时长"], ["scope", "目的地状态"], ["direction", "景色方向"]];
+        required.push(["trip-shape", "这趟想怎么走"]);
+        // Both bounds are required rather than defaulted. A missing max turns "you decide" into an
+        // unbounded plan, and a missing minimum is how a multi-city trip becomes a different hotel
+        // every night -- the two failure modes this shape has, neither of them recoverable later.
+        if (["multi_city", "planner_decides"].includes(text("trip-shape"))) {
+          required.push(["max-stops", "最多分几站"]);
+          required.push(["min-nights-per-stop", "每站至少住几晚"]);
+          required.push(["return-to-first", "是否回到第一站离境"]);
+        }
         required.push(["booked-already", "已经订好的部分"]);
         // Required, and the detail box required as soon as anything IS booked, because an
         // optional field on a disqualifier comes back null and the question gets asked in chat
@@ -396,6 +418,18 @@
           required.push(["held-visas", "你凭什么证件入境"]);
         }
         const missing = required.filter(([id]) => !text(id));
+        // Parsed and checked the way traveler_count is, rather than coerced: Number("两") is NaN,
+        // and a NaN that reaches the JSON is a bound nothing downstream can act on while looking
+        // like an answer. Only read once the required check above has confirmed they are present.
+        let maxStops = null, minNights = null;
+        if (["multi_city", "planner_decides"].includes(text("trip-shape")) && !required.filter(([id]) => !text(id)).length) {
+          maxStops = Number(text("max-stops"));
+          minNights = Number(text("min-nights-per-stop"));
+          if (!Number.isInteger(maxStops) || maxStops < 2)
+            throw fieldError("max-stops", "最多分几站必须是不小于 2 的整数；只有一站请改选「住一个地方」。");
+          if (!Number.isInteger(minNights) || minNights < 1)
+            throw fieldError("min-nights-per-stop", "每站至少住几晚必须是大于 0 的整数。");
+        }
         if (missing.length) throw fieldError(missing[0][0], `请补充：${missing.map(([, label]) => label).join("、")}`);
         if (text("currency") === "OTHER" && !/^[A-Za-z]{3}$/.test(text("custom-currency"))) throw fieldError("custom-currency", "自定义币种请填写三位字母代码，例如 CHF。");
 
@@ -442,7 +476,10 @@
           party:{ traveler_count:travelerCount, composition:text("composition") || null, relevant_ages:text("ages") ? [text("ages")] : [], mobility_or_access_needs:text("mobility") ? [text("mobility")] : [] },
           budget:{ ...budget, currency:currencyCode(), coverage:text("coverage"), included_categories:coverageCategories[text("coverage")] || [], comfort_preference:text("comfort") || null },
           existing_bookings:{ state:text("booked-already") || null, details:text("booked-detail") || null },
-          destination_scope:{ state:scopeState, named_places:namedPlaces, commitment, excluded_places:list("excluded") },
+          destination_scope:{ state:scopeState, named_places:namedPlaces, commitment,
+            trip_shape:{ state:text("trip-shape") || null, max_stops:maxStops,
+                         min_nights_per_stop:minNights,
+                         return_to_first_stop:text("return-to-first") || null }, excluded_places:list("excluded") },
           experience:{ direction:text("direction"), natural_subtypes:checked("natural"), human_cultural_subtypes:checked("cultural"), ranked_must_haves:rankedMustHaves, intensity_or_activity_tolerance:text("intensity") || null, pace:text("pace") || null, avoid_list:list("avoid") },
           transport_preferences:{ preferred_modes:modes, priority:text("transport-priority") || null, willing_to_self_drive:modes.includes("self_drive"), luggage_or_baggage_needs:text("baggage") || null, cabin_preference:text("cabin") || null, flight_time_preference:text("flight-time") || null, rail_preference:text("rail-preference") || null, bus_comfort_tolerance:text("bus-comfort") || null, ferry_acceptable:modes.includes("ferry") },
           regional_service_access:{ selection_preference:"auto_by_destination", preferred_map_apps:list("preferred-map-apps"), preferred_booking_platforms:list("preferred-booking-platforms"), services_to_avoid:list("services-to-avoid"), google_services_access:text("google-services-access") || "unknown", notes:text("service-access-notes") || null },
@@ -452,7 +489,7 @@
         };
       }
 
-      const FIELD_IDS = ["city","country","start-date","end-date","month","days","flexibility","booked-already","booked-detail","fixed-commitments","airports","scope","places","excluded","purpose","count","composition","ages","mobility","dietary","currency","custom-currency","budget-range","custom-budget","coverage","comfort","travel-scope","travel-time","transport-priority","traveler-entry","visa-tolerance","passport-validity","held-passport-validity","held-visas","climate-notes","direction","pace","intensity","rank-1","rank-2","avoid","room-count","stay-location","breakfast","cancellation","rail-preference","bus-comfort","cabin","baggage","flight-time","google-services-access","preferred-map-apps","preferred-booking-platforms","services-to-avoid","service-access-notes"];
+      const FIELD_IDS = ["city","country","start-date","end-date","month","days","flexibility","booked-already","booked-detail","trip-shape","max-stops","min-nights-per-stop","return-to-first","fixed-commitments","airports","scope","places","excluded","purpose","count","composition","ages","mobility","dietary","currency","custom-currency","budget-range","custom-budget","coverage","comfort","travel-scope","travel-time","transport-priority","traveler-entry","visa-tolerance","passport-validity","held-passport-validity","held-visas","climate-notes","direction","pace","intensity","rank-1","rank-2","avoid","room-count","stay-location","breakfast","cancellation","rail-preference","bus-comfort","cabin","baggage","flight-time","google-services-access","preferred-map-apps","preferred-booking-platforms","services-to-avoid","service-access-notes"];
 
       let draftTimer = null;
       // `change` alone only fires on blur, so anything typed and not yet left behind
@@ -557,7 +594,7 @@
       $("fill-example").addEventListener("click", () => {
         document.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
         $("city").value = "上海"; $("country").value = "中国"; $("airports").value = "PVG, SHA";
-        $("start-date").value = ""; $("end-date").value = ""; $("month").value = "2026-10"; $("days").value = "7"; $("flexibility").value = "± 1–2 天"; $("booked-already").value = "nothing";
+        $("start-date").value = ""; $("end-date").value = ""; $("month").value = "2026-10"; $("days").value = "7"; $("flexibility").value = "± 1–2 天"; $("booked-already").value = "nothing"; $("trip-shape").value = "single_base";
         $("fixed-commitments").value = "";
         $("scope").value = "open"; $("places").value = ""; $("excluded").value = ""; $("purpose").value = "sightseeing";
         $("count").value = "2"; $("composition").value = "情侣/两人"; $("ages").value = ""; $("mobility").value = ""; $("dietary").value = "不吃辣";

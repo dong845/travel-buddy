@@ -179,6 +179,7 @@
     "flights": [
       {
         "id": null,
+        "leg_group_id": null,
         "provider": null,
         "comparison_platform": null,
         "comparison_checked_at": null,
@@ -236,6 +237,7 @@
       {
         "_note": "Rail, coach and ferry. Same evidence as a flight, because the traveller asks the same questions -- which service, when, how long, how many changes, what the fare allows -- and on a rail trip this is the largest and most time-sensitive purchase on the page. Omit the array entirely when the trip has no ticketed intercity leg. Every value below is null on purpose: the block once shipped '0' durations, a '0-0' fare and 1970-01-01 stamps as placeholders, and each of those is a value the validator accepts, so an author who missed one shipped a card advertising a 0-minute journey at EUR 0 priced in 1970 with every gate green. Fields to fill: provider (must own review_url); origin_station / destination_station; outbound_date / return_date (ISO, inside the trip window); both itineraries (service identifier, local times, positive duration_minutes, changes, interchange note); material_conditions -- refundable? changeable? is a seat reservation compulsory or extra?; availability_status (available|limited|unknown); fare_low/fare_high/fare_currency; price_status; station_transfer_note -- how they get from the arrival station into town, the ground analogue of an airport transfer, so a cheap fare cannot hide an impractical arrival; and the dated round-trip search URL with its provider and check stamp. travel_class, seat_reservation and single_option_reason are optional display fields -- nothing validates them, but travel_class and seat_reservation are what the card prints beside the dates, and single_option_reason is required in practice whenever this is the only candidate.",
         "id": "ground-1",
+        "leg_group_id": null,
         "provider": null,
         "comparison_platform": null,
         "comparison_checked_at": null,

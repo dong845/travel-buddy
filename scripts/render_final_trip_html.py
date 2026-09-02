@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
 
+from plan_flags import stay_sequence
 from fetch_plan_imagery import ImagerySidecarError, resolve_plan_imagery
 from travel_workspace import find_sensitive_values
 
@@ -422,6 +423,10 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "day": "第",
             "day_suffix": "天",
             "stay": "住宿",
+            "spine_heading": "住宿主线",
+            "spine_nights": "晚",
+            "spine_move": "转场日",
+            "spine_note": "每一次转场都是一个更换住宿的日子；下面的每日卡片会说明是哪一天。",
             "plan": "行程",
             "dining": "用餐建议",
             "dining_map": "在 {provider} 中查看餐厅",
@@ -581,6 +586,14 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     # existed, and a rejected set drops the entire page back to English -- trading one
     # untranslated prefix for a hundred translated ones.
     "ticket_note_label",
+    # Added with the multi-stop spine, optional for the reason stated directly above and for a
+    # third demonstration of it: a plan that sleeps in one place renders no spine at all, so
+    # demanding four labels for it would reject every single-base label set ever written in order
+    # to translate a section those pages do not contain.
+    "spine_heading",
+    "spine_nights",
+    "spine_move",
+    "spine_note",
     # Added with the rail/coach/ferry category, the traveller-constraints panel, the provider
     # rationale and the ten formerly-hardcoded Chinese strings. Optional for the reason stated
     # above and demonstrated by this exact slip: requiring them hard-failed every French,
@@ -917,6 +930,11 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
         "Not supplied": labels["not_supplied"],
         ">Review option<": f">{labels['review_option']}<",
         ">Open this segment in maps<": f">{labels['segment_map']}<",
+        " night(s) · ": f" {labels.get('spine_nights', 'night(s)')} · ",
+        ">Where you sleep<": f">{labels.get('spine_heading', 'Where you sleep')}<",
+        ">Move day<": f">{labels.get('spine_move', 'Move day')}<",
+        ">Each move is a day with a change of accommodation; the day cards below say which.<":
+            f">{labels.get('spine_note', 'Each move is a day with a change of accommodation; the day cards below say which.')}<",
         ">Budget at a glance<": f">{labels['budget']}<",
         ">Comparable cost per person<": f">{labels['total']}<",
         ">Cap per person<": f">{labels.get('budget_cap', 'Cap per person')}<",
@@ -1737,6 +1755,33 @@ def read_json(path: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError("The plan must be a JSON object.")
     return data
+
+
+def _leg_groups(items: list[dict]) -> dict[str, list[dict]]:
+    """Booking options grouped by the journey they are alternatives for.
+
+    An item with no `leg_group_id` falls into the unnamed group, which is what every single-leg
+    plan is and why the field is not required until the items themselves show more than one
+    journey.
+    """
+    groups: dict[str, list[dict]] = {}
+    for item in items:
+        groups.setdefault(str(item.get("leg_group_id") or "").strip(), []).append(item)
+    return groups
+
+
+def _looks_like_several_legs(items: list[dict]) -> bool:
+    """Do these options describe more than one journey, by their own dates and endpoints?
+
+    Used only to decide whether `leg_group_id` is demanded -- never to group, because two genuine
+    alternatives for one journey may leave from different stations, and grouping on the endpoints
+    would then split a real comparison into two unexplained singles.
+    """
+    dates = {str(item.get("outbound_date") or "").strip() for item in items} - {""}
+    pairs = {(str(item.get("origin_airport") or item.get("origin_station") or "").strip(),
+              str(item.get("destination_airport") or item.get("destination_station") or "").strip())
+             for item in items} - {("", "")}
+    return len(dates) > 1 or len(pairs) > 1
 
 
 def booking_title(kind: str, item: dict) -> str:
@@ -2997,18 +3042,38 @@ def validate_plan(plan: dict) -> list[str]:
     # pointing at one review_url, which looks like a comparison and is not.
     for items, noun, label in ((flight_items, "flight", "Flight"),
                                (ground_items, "rail/coach/ferry", "Rail/coach/ferry")):
-        if len(items) == 1 and not items[0].get("single_option_reason"):
-            errors.append(cite("booking.comparison", f"Provide at least two comparable {noun} candidates, or record a researched single_option_reason for the only feasible option."))
+        # "Two comparable candidates" means two candidates FOR THE SAME JOURNEY, and this rule read
+        # the whole category. On a multi-city trip that is silently wrong: Beijing->Shanghai and
+        # Shanghai->Beijing are two items, so the count passed, the review_urls differed so the
+        # uniqueness check passed, and NEITHER leg had ever been compared against anything. The
+        # more legs the trip has, the more thoroughly the gate reports a comparison that does not
+        # exist. Accommodations solved this years earlier with stay_group_id, for the same reason
+        # written one screen down -- comparable options must not be split, or joined, by a label --
+        # so legs group the same way rather than by a cleverer derivation: two options for one
+        # journey may legitimately use different stations, and grouping on the station pair would
+        # split them.
+        legs = _leg_groups(items)
+        if len(legs) > 1 or any(not str(item.get("leg_group_id") or "").strip() for item in items):
+            # Only demanded once the items themselves say they are more than one journey, so a
+            # trip with a single compared leg -- every plan in the author's workspace -- needs no
+            # new field. The signal is the items' own dates and endpoints.
+            if _looks_like_several_legs(items) and len(legs) < 2:
+                errors.append(cite("booking.comparison", f"These {noun} options are on different dates or between different points, so they are different journeys rather than alternatives for one. Give each journey its own leg_group_id; without it the comparison rule counts across legs and reports a comparison nobody made."))
+        for leg_id, leg_items in legs.items():
+            where = f" for leg {leg_id}" if leg_id else ""
+            if len(leg_items) == 1 and not leg_items[0].get("single_option_reason"):
+                errors.append(cite("booking.comparison", f"Provide at least two comparable {noun} candidates{where}, or record a researched single_option_reason for the only feasible option."))
+            review_urls = [item.get("review_url") for item in leg_items]
+            if len({dedupe_key(v) for v in review_urls}) != len(review_urls):
+                errors.append(cite("booking.comparison", f"{label} candidates{where} must not reuse the same review_url; provide genuinely distinct comparison paths."))
         identifiers = [item.get("id") for item in items]
         # A non-string id is not merely odd: ids are matched by equality against day assignments
         # elsewhere in the plan, so a list or a number is a value that can never match and never
-        # says why. Truthiness alone accepted `["ground-1"]`.
+        # says why. Truthiness alone accepted `["ground-1"]`. Ids stay unique across the whole
+        # category, not per leg, because that is how days reference them.
         if any(not isinstance(identifier, str) or not identifier.strip() for identifier in identifiers) \
                 or len({dedupe_key(v) for v in identifiers}) != len(identifiers):
             errors.append(cite("booking.comparison", f"{label} options must use distinct, non-empty string ids so the comparison is not ambiguous."))
-        review_urls = [item.get("review_url") for item in items]
-        if len({dedupe_key(v) for v in review_urls}) != len(review_urls):
-            errors.append(cite("booking.comparison", f"{label} candidates must not reuse the same review_url; provide genuinely distinct comparison paths."))
     accommodation_ids = {item.get("id") for item in accommodation_items if item.get("id")}
     if not accommodation_ids:
         errors.append(cite("booking.comparison", "At least one accommodation option with an id is required."))
@@ -3306,6 +3371,29 @@ def render_unlocalized(plan: dict) -> str:
         walking_caption += (f" · Longest single walk: {longest_leg:.0f} / {walk_cap:.0f} min")
     walking_figure = plan_visuals.walking_bars(
         walking_rows, None, walking_caption, walking_caption, "")
+    # The trip's spine, for a plan that sleeps in more than one place. Everything here is derived
+    # from the stay groups the plan already carries, so a multi-stop trip costs the author nothing
+    # extra to express -- what was missing was only that the page never showed it. The header line
+    # reads "origin -> destination" and a single `trip.destination` string cannot say that four of
+    # the nights are somewhere else, so a reader had to infer the shape of the trip from four day
+    # cards. Rendered only when there is a sequence: a one-item spine is furniture.
+    spine = stay_sequence(plan)
+    stay_spine = ""
+    if spine:
+        legs = []
+        for index, stop in enumerate(spine):
+            legs.append(
+                f'<li class="spine-stop"><strong>{esc(stop["label"])}</strong>'
+                f'<span class="meta">{esc(stop["nights"])} night(s) · '
+                f'{esc(stop["check_in"].isoformat())} → {esc(stop["check_out"].isoformat())}</span></li>')
+            if index < len(spine) - 1:
+                legs.append('<li class="spine-move" aria-hidden="false">Move day</li>')
+        stay_spine = (
+            f'<section id="trip-spine" class="panel" data-stay-groups="{attr(len(spine))}">'
+            f'<h2>Where you sleep</h2><ol class="spine">{"".join(legs)}</ol>'
+            f'<p class="meta">Each move is a day with a change of accommodation; '
+            f'the day cards below say which.</p></section>')
+
     hero_photo = imagery_figure((plan.get("imagery") or {}).get("hero"), trip["destination"])
     if hero_photo:
         hero_photo = f'<section class="hero-photo">{hero_photo}</section>'
@@ -3516,7 +3604,7 @@ def render_unlocalized(plan: dict) -> str:
         + (f'<p class="meta">Platform selection: {esc(regional.get("booking_platform_selection_note"))}</p>'
            if regional.get("booking_platform_selection_note") else "")
     )
-    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}.anchor-photo{{margin:10px 0 0}}.anchor-photo img{{width:100%;height:auto;border-radius:10px;display:block}}.photo-credit{{color:var(--muted);font-size:.72rem;margin-top:4px}}.hero-photo{{margin:20px 0}}.hero-photo img{{width:100%;max-height:340px;object-fit:cover;border-radius:16px}}@media print{{.hero-photo img{{max-height:200px}}}}{plan_visuals.VISUAL_CSS}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{hero_photo}{unverified_banner}{constraints_panel}{preferences_panel}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div>{cap_fact}<div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div>{budget_figure}{walking_figure}</section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(overview_headline)}</p>{"".join(f"<p>{esc(note)}</p>" for note in as_list(overview.get("notes")) if note)}<a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details open><summary>Recheck before purchase</summary><p>{recheck}</p></details>{gates_line}</section></main></body></html>'''
+    return f'''<!doctype html><html lang="{attr(trip["language"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{esc(trip["title"])}</title><style>:root{{--ink:#162235;--muted:#5d6b7c;--paper:#f7f9fc;--card:#fff;--accent:#0b6e69;--soft:#e4f4f1;--line:#d9e2ec;--warn:#8a4b08;--warn-bg:#fff5df}}*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}main{{max-width:1120px;margin:auto;padding:32px 20px 56px}}h1{{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05}}h2{{font-size:1.35rem}}h3{{font-size:1.05rem}}h4{{margin:18px 0 0;font-size:1rem}}.hero,.panel,.day-card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin:20px 0;box-shadow:0 8px 24px rgb(20 40 65/.05)}}.hero{{background:linear-gradient(135deg,#fff,var(--soft))}}.grid,.dining-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:14px}}.fact,.option,.dining-stop{{border:1px solid var(--line);border-radius:12px;padding:14px}}.fact strong{{display:block}}.eyebrow,.meta{{color:var(--muted);font-size:.92rem}}.eyebrow{{color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:.08em}}.pill{{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--soft);color:#075952;font-size:.78rem;font-weight:700}}.day-top{{display:flex;justify-content:space-between;gap:16px}}.day-number{{min-width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink);color:#fff;font-weight:800}}.timeline,.segment-list,.option-details{{list-style:none;padding:0}}.timeline li{{display:grid;grid-template-columns:88px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.timeline time{{color:var(--accent);font-weight:800}}.option-details li{{margin:7px 0}}.segment-list{{margin:8px 0}}.route-segment{{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}}.route-segment p{{margin:4px 0 0}}.route-map{{padding:14px;border-radius:12px;background:#f1f7f8;margin:16px 0}}.route-map svg{{display:block;width:100%;height:auto}}.route-map figcaption{{color:var(--muted);font-size:.88rem;margin-top:8px}}a{{color:#075952;font-weight:700}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{display:inline-block;margin:8px 8px 0 0;padding:9px 12px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none}}.map-link{{background:var(--ink)}}.warning{{border-left:4px solid var(--warn);background:var(--warn-bg);padding:14px;border-radius:0 10px 10px 0}}@media(max-width:600px){{main{{padding:18px 12px 36px}}.hero,.panel,.day-card{{padding:18px}}.timeline li{{grid-template-columns:66px 1fr}}.route-segment{{align-items:flex-start;flex-direction:column}}}}.spine{{list-style:none;padding:0;margin:8px 0 0;display:flex;flex-wrap:wrap;align-items:center;gap:10px}}.spine-stop{{border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--soft)}}.spine-stop strong{{display:block}}.spine-move{{color:var(--muted);font-size:.85rem;font-weight:700;white-space:nowrap}}.spine-move::before{{content:"→ ";color:var(--accent)}}.anchor-photo{{margin:10px 0 0}}.anchor-photo img{{width:100%;height:auto;border-radius:10px;display:block}}.photo-credit{{color:var(--muted);font-size:.72rem;margin-top:4px}}.hero-photo{{margin:20px 0}}.hero-photo img{{width:100%;max-height:340px;object-fit:cover;border-radius:16px}}@media print{{.hero-photo img{{max-height:200px}}}}{plan_visuals.VISUAL_CSS}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}.hero,.panel,.day-card{{box-shadow:none;break-inside:avoid}}.booking-link,.map-link,.dining-link,.dining-reservation-link{{color:#075952;background:transparent;padding:0;text-decoration:underline}}}}</style></head><body><main id="trip-plan" data-trip-plan><header id="trip-summary" class="hero"><p class="eyebrow">Plan status · {esc(plan.get("plan_status"))}</p><h1>{esc(trip["title"])}</h1><p>{esc(trip["origin"])} → {esc(trip["destination"])} · {esc(trip["start_date"])} to {esc(trip["end_date"])} · {esc(trip["traveler_count"])} traveller(s)</p><p class="meta">Arrival: {esc(trip["arrival_transport_mode"])} · Pace: {esc(trip["pace"])} · Currency: {esc(trip["currency"])} · Research last checked: {stamp(plan.get("generated_at"))}. Prices and availability require recheck before purchase.</p></header>{stay_spine}{hero_photo}{unverified_banner}{constraints_panel}{preferences_panel}{page_nav}<section id="budget-summary" class="panel"><h2>Budget at a glance</h2><div class="grid"><div class="fact"><strong>{esc(total)}</strong><span>Comparable cost per person</span></div>{cap_fact}<div class="fact"><strong>{esc(trip["budget_basis"])}</strong><span>Included assumptions</span></div><div class="fact"><strong>{esc(plan["transport_preference"]["mode"])}</strong><span>Ground-mobility plan</span></div>{unpriced}</div>{budget_figure}{walking_figure}</section>{entry_panel}{budget_breakdown}{anchors}<section id="booking-panel" class="panel"><h2>Browse options — no purchase made</h2>{platform_note}<p class="meta">Current researched options only. Opening a link never creates a reservation.</p>{"".join(cards)}</section>{"".join(day_cards)}<section id="transport-overview" class="panel"><h2>Overall transport</h2><p>{esc(overview_headline)}</p>{"".join(f"<p>{esc(note)}</p>" for note in as_list(overview.get("notes")) if note)}<a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview["overall_map_checked_at"])}" href="{attr(overview["overall_route_map_url"])}" target="_blank" rel="noopener noreferrer">{overview_map_label}</a></section><section id="source-register" class="panel"><h2>Sources, confidence, and recheck list</h2><details open><summary>Sources used</summary><ul>{source_rows}</ul></details>{assumptions_block}<details open><summary>Recheck before purchase</summary><p>{recheck}</p></details>{gates_line}</section></main></body></html>'''
 
 
 def render(plan: dict) -> str:

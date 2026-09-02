@@ -449,6 +449,9 @@ CHECK_REFERENCES: dict[str, str] = {
     # Day route arithmetic, the walking burden, and the clock. All of it is the "keep the day's
     # actual travel burden visible" contract -- start/end, mode, distance, transfers, walking,
     # duration, fare -- which is stated once, in the route-burden section.
+    # A multi-stop trip is a sequence of stays, and the one arithmetic mistake it makes that
+    # every per-day check passes is paying for two hotels on one night.
+    "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
     "check_routes": "booking-html-output.md#day-route-burden",
     "check_implied_speed": "booking-html-output.md#day-route-burden",
     "check_clock_closure": "booking-html-output.md#day-route-burden",
@@ -1186,6 +1189,47 @@ def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
             problem = _english_weekday_claim(day, date, blob)
         if problem:
             errors.append(problem)
+
+
+@cites
+def check_stay_groups_do_not_overlap(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """Two stay groups must not claim the same night.
+
+    A multi-stop trip is a sequence of stays, and the one arithmetic mistake it makes that no
+    existing check catches is paying for two hotels on one night. Every per-day check passes:
+    each day points at one accommodation, and that accommodation's window really does cover the
+    day. It is the pair that is wrong, and nothing had ever looked at a pair, because until a trip
+    has more than one stay group there is no pair to look at.
+
+    Checkout day is not a night, so `[check_in, check_out)` is the interval and a group starting on
+    the day the previous one ends is the correct shape rather than a collision -- which is exactly
+    what the two real multi-stay plans in the author's workspace do (10-25..10-27 then
+    10-27..10-28). Dates only: no string matching against place names, which are free text and
+    were already found being written three different ways for one base.
+    """
+    windows: dict[str, list[tuple[dt.date, dt.date]]] = {}
+    for option in [_obj(a) for a in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
+        group = str(option.get("stay_group_id") or "").strip()
+        if not group:
+            continue
+        try:
+            start = dt.date.fromisoformat(str(option.get("check_in")))
+            end = dt.date.fromisoformat(str(option.get("check_out")))
+        except (TypeError, ValueError):
+            continue          # check_accommodation_coverage already reports a non-ISO window
+        windows.setdefault(group, []).append((start, end))
+
+    spans = {group: (min(w[0] for w in pairs), max(w[1] for w in pairs))
+             for group, pairs in windows.items() if pairs}
+    ordered = sorted(spans.items(), key=lambda kv: kv[1])
+    for (left, (left_in, left_out)), (right, (right_in, right_out)) in zip(ordered, ordered[1:]):
+        if right_in < left_out:
+            nights = (min(left_out, right_out) - right_in).days
+            errors.append(
+                f"stay groups '{left}' ({left_in}..{left_out}) and '{right}' "
+                f"({right_in}..{right_out}) overlap by {nights} night(s), so the traveller is "
+                f"booked into two places at once and paying for both. A checkout date may equal "
+                f"the next check-in date; it may not fall after it.")
 
 
 @cites
@@ -4199,6 +4243,7 @@ def check_dates_agree_with_the_gates_that_ran(plan: dict, errors: list[str],
 
 
 PLAN_CHECKS = (
+    check_stay_groups_do_not_overlap,
     check_verification_tier_is_stated,
     check_dates_agree_with_the_gates_that_ran,
     check_preferences_came_from_the_intake,

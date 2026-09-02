@@ -29,6 +29,7 @@ has to look different from a plan that needs no gates.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 import json
 
@@ -264,3 +265,55 @@ def load_html_flags(plan_path: str | Path) -> HtmlFlags:
     except ValueError as exc:
         raise PlanFlagsError(f"plan {path} is not valid JSON: {exc}") from exc
     return derive_html_flags(plan, plan_label=str(path))
+
+
+def stay_sequence(plan: object) -> list[dict]:
+    """The trip's spine: where the traveller sleeps, in order, with the nights in each place.
+
+    Derived, never declared. A multi-stop trip already carries everything this needs -- one
+    `stay_group_id` per stop, each option's `check_in`/`check_out`, and a `stay_location` -- so
+    asking the author to also write a summary of it would create a second copy to drift against
+    the first. That is the same reason `derive_html_flags` exists one screen up.
+
+    `base_location` is deliberately not consulted. It is free text and was found meaning "where
+    today's activities are" on one delivered plan (four spellings, one hotel) and "where I sleep"
+    on another, so a spine built from it would show four stops for a trip that never moved.
+
+    Returns [] when the plan has fewer than two stay groups: a single-base trip has no sequence to
+    show, and rendering a one-item spine would be furniture.
+    """
+    options = []
+    if isinstance(plan, dict):
+        booking = plan.get("booking_options")
+        if isinstance(booking, dict) and isinstance(booking.get("accommodations"), list):
+            options = [o for o in booking["accommodations"] if isinstance(o, dict)]
+
+    groups: dict[str, dict] = {}
+    for option in options:
+        group = str(option.get("stay_group_id") or "").strip()
+        if not group:
+            continue
+        try:
+            start = date.fromisoformat(str(option.get("check_in")))
+            end = date.fromisoformat(str(option.get("check_out")))
+        except (TypeError, ValueError):
+            continue
+        entry = groups.setdefault(group, {"group_id": group, "check_in": start, "check_out": end,
+                                          "labels": [], "option_count": 0})
+        entry["check_in"] = min(entry["check_in"], start)
+        entry["check_out"] = max(entry["check_out"], end)
+        entry["option_count"] += 1
+        label = str(option.get("stay_location") or "").strip()
+        if label and label not in entry["labels"]:
+            entry["labels"].append(label)
+
+    if len(groups) < 2:
+        return []
+    spine = sorted(groups.values(), key=lambda g: (g["check_in"], g["check_out"]))
+    for entry in spine:
+        # The shortest label among the options in a group, because two hotels in one place are
+        # routinely described at different precisions ("深圳南山区蛇口" and "蛇口海上世界"), and the
+        # shorter one is the place they share rather than one property's address.
+        entry["label"] = min(entry["labels"], key=len) if entry["labels"] else entry["group_id"]
+        entry["nights"] = (entry["check_out"] - entry["check_in"]).days
+    return spine
