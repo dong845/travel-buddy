@@ -275,6 +275,7 @@
           "stops": null,
           "connection_or_terminal_note": null
         },
+        "one_way_reason": null,
         "material_conditions": null,
         "travel_class": null,
         "seat_reservation": null,

@@ -1493,10 +1493,18 @@ def validate(
                 f"compared candidate must be bookable, or it is not a candidate."))
         for link in owned:
             fields = set(filter(None, link.get("data-prefilled-fields", "").split(",")))
-            if not REQUIRED_FLIGHT_SEARCH_FIELDS.issubset(fields):
-                errors.append(cite("booking.search_buttons", 
-                    f"{label} round-trip search buttons need origin, destination, outbound/return "
-                    f"dates, and travellers prefilled."))
+            # Ground is held to what a rail operator's URL can actually carry. SBB's documented
+            # deep link takes von / nach / datum / zeit / an / suche / vias and has no passenger
+            # parameter, and a one-way leg of a chain trip has no return date -- so demanding both
+            # of every rail card asked for fields that cannot exist. The render-side gate makes the
+            # same distinction; this is its second copy, and the two must not drift.
+            needed = REQUIRED_FLIGHT_SEARCH_FIELDS if kind == "flight" \
+                else {"origin", "destination", "outbound_date"}
+            if not needed.issubset(fields):
+                errors.append(cite("booking.search_buttons",
+                    f"{label} search buttons need origin, destination and the outbound date"
+                    + (", the return date, and travellers" if kind == "flight" else "")
+                    + " prefilled."))
     if "hotel" in booking_types:
         if not parser.hotel_comparison_links:
             errors.append(cite("booking.search_buttons", "Hotel options need a dated comparison-platform search button."))

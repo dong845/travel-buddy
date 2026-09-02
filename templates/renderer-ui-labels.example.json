@@ -226,5 +226,8 @@
   "spine_heading": "Where you sleep",
   "spine_nights": "night(s)",
   "spine_move": "Move day",
-  "spine_note": "Each move is a day with a change of accommodation; the day cards below say which."
+  "spine_note": "Each move is a day with a change of accommodation; the day cards below say which.",
+  "avail_available": "Available",
+  "avail_limited": "Limited",
+  "avail_unknown": "Not yet checked"
 }

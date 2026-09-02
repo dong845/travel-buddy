@@ -423,6 +423,9 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "day": "第",
             "day_suffix": "天",
             "stay": "住宿",
+            "avail_available": "有房/有位",
+            "avail_limited": "余量有限",
+            "avail_unknown": "尚未核实",
             "spine_heading": "住宿主线",
             "spine_nights": "晚",
             "spine_move": "转场日",
@@ -590,6 +593,9 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     # third demonstration of it: a plan that sleeps in one place renders no spine at all, so
     # demanding four labels for it would reject every single-base label set ever written in order
     # to translate a section those pages do not contain.
+    "avail_available",
+    "avail_limited",
+    "avail_unknown",
     "spine_heading",
     "spine_nights",
     "spine_move",
@@ -931,6 +937,14 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
         ">Review option<": f">{labels['review_option']}<",
         ">Open this segment in maps<": f">{labels['segment_map']}<",
         " night(s) · ": f" {labels.get('spine_nights', 'night(s)')} · ",
+        # availability_status is a CLOSED enum that nothing ever translated, so every Chinese
+        # page printed `unknown` in the middle of an otherwise Chinese booking card -- the exact
+        # leak the closed-enum rule exists to prevent, in the one enum the rule forgot. Substituted
+        # in its own printed context rather than as a bare word, because "unknown" also appears in
+        # prose the traveller wrote.
+        ">Availability: </strong>available": f">{labels['availability']}</strong>{labels.get('avail_available','available')}",
+        ">Availability: </strong>limited": f">{labels['availability']}</strong>{labels.get('avail_limited','limited')}",
+        ">Availability: </strong>unknown": f">{labels['availability']}</strong>{labels.get('avail_unknown','unknown')}",
         ">Where you sleep<": f">{labels.get('spine_heading', 'Where you sleep')}<",
         ">Move day<": f">{labels.get('spine_move', 'Move day')}<",
         ">Each move is a day with a change of accommodation; the day cards below say which.<":
@@ -2867,13 +2881,28 @@ def validate_plan(plan: dict) -> list[str]:
                 # becomes the place authors put the thing they did not research, and this is the
                 # purchase a rail traveller most needs to check: which service, when, what the fare
                 # allows, whether it is still sellable, and how they get from the station into town.
+                # A chain trip's intercity legs are ONE-WAY, and this list could not say so: it
+                # demanded a return date and a return itinerary from every card, so Montreux→Bern
+                # →Lucerne had no honest shape at all. The two ways out were both bad -- call two
+                # one-way legs a round trip, or drop the cards and leave the traveller no way to
+                # buy the largest time-sensitive purchase on a rail trip. Found by building a real
+                # three-stop Swiss plan, which is the only way this surfaces.
+                #
+                # One-way is opt-in and must say why, so it cannot become the lazy default for a
+                # return nobody researched, and the return fields must then be ABSENT, not empty.
+                one_way = bool(str(item.get("one_way_reason") or "").strip())
                 required_ground_fields = (
-                    "origin_station", "destination_station", "outbound_date", "return_date",
-                    "outbound_itinerary", "return_itinerary", "material_conditions",
+                    "origin_station", "destination_station", "outbound_date",
+                    "outbound_itinerary", "material_conditions",
                     "availability_status", "price_checked_at", "station_transfer_note",
                     "round_trip_search_url", "round_trip_search_provider",
                     "round_trip_search_checked_at", "round_trip_prefilled_fields",
-                )
+                ) + (() if one_way else ("return_date", "return_itinerary"))
+                if one_way and (item.get("return_date") or item.get("return_itinerary")):
+                    errors.append(cite("booking.option_contract",
+                        "A ground leg that declares one_way_reason must not also carry a "
+                        "return_date or return_itinerary -- a card that says it is one-way and "
+                        "then names a return service makes two claims, and the page prints both."))
                 if not all(item.get(key) for key in required_ground_fields):
                     errors.append(cite("booking.option_contract", 
                         "Every rail/coach/ferry option needs both stations, both dates, concrete "
@@ -2882,13 +2911,25 @@ def validate_plan(plan: dict) -> list[str]:
                 elif not is_https(item["round_trip_search_url"]):
                     errors.append(cite("booking.option_contract", "Every ground-transport round-trip search URL must be HTTPS."))
                 search_fields = item.get("round_trip_prefilled_fields")
-                if not has_search_fields(search_fields, REQUIRED_FLIGHT_SEARCH_FIELDS):
-                    errors.append(cite("booking.option_contract", 
-                        "Every ground-transport round-trip search must prefill origin, destination, "
-                        "outbound date, return date, and travellers."))
+                # Ground is NOT held to the flight field list, and the reason is the operator's
+                # own URL scheme rather than a lower standard. SBB's documented deep link takes
+                # von / nach / datum / zeit / an / suche / vias and has no passenger parameter at
+                # all -- so demanding a prefilled `travellers` asked the mandated operator for a
+                # field it cannot carry, and the only ways to satisfy it were to invent a
+                # parameter or to declare a field the URL does not contain. Whatever IS declared
+                # still has to appear in the URL: check_plan_consistency compares the two.
+                wanted = {"origin", "destination", "outbound_date"}
+                if not one_way:
+                    wanted = wanted | {"return_date"}
+                if not has_search_fields(search_fields, wanted):
+                    errors.append(cite("booking.option_contract",
+                        "Every ground-transport search must prefill origin, destination and the "
+                        "outbound date" + ("" if one_way else ", and the return date") + ". "
+                        "Travellers is not demanded here: rail operators' timetable deep links "
+                        "(SBB's among them) carry no passenger parameter."))
                 if not is_iso_datestamp(item.get("round_trip_search_checked_at")):
                     errors.append(cite("booking.option_contract", "ground.round_trip_search_checked_at must be an ISO date or date-time."))
-                for leg_name in ("outbound_itinerary", "return_itinerary"):
+                for leg_name in ("outbound_itinerary",) if one_way else ("outbound_itinerary", "return_itinerary"):
                     leg = item.get(leg_name)
                     if not isinstance(leg, dict) or not all(leg.get(key) is not None and leg.get(key) != "" for key in ("service_identifier", "departure_local", "arrival_local", "duration_minutes", "stops", "connection_or_terminal_note")):
                         errors.append(cite("booking.option_contract", f"ground.{leg_name} needs the service identifier, local times, duration, changes, and an interchange note."))
@@ -2919,7 +2960,11 @@ def validate_plan(plan: dict) -> list[str]:
                 # price_checked_at and round_trip_search_checked_at on the same object are already
                 # ISO-checked, so the looseness was an oversight rather than a decision.
                 outbound = parse_iso_date(item.get("outbound_date"), "ground.outbound_date", errors)
-                inbound = parse_iso_date(item.get("return_date"), "ground.return_date", errors)
+                # A one-way leg has no return date to parse, and parsing None reported it as a
+                # malformed date -- which read as "you wrote it wrong" about a field the card
+                # correctly does not have.
+                inbound = (None if one_way else
+                           parse_iso_date(item.get("return_date"), "ground.return_date", errors))
                 if outbound and inbound and inbound < outbound:
                     errors.append(cite("booking.option_contract", "ground.return_date cannot be before ground.outbound_date."))
                 # Deliberately NOT copied from the flight branch: a flight's outbound_date must equal
