@@ -24,6 +24,7 @@ Run:  python tests/test_plan_contract.py
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,30 @@ def run(plan: dict) -> tuple[int, dict]:
 
 def paths(report: dict) -> set[str]:
     return {i["path"] for i in report.get("issues", [])}
+
+
+def real_workspace() -> Path | None:
+    """The user's own Travel Buddy workspace, ONLY when they have opted in.
+
+    Running a real artifact through the checker is worth more than a fixture -- a fixture is
+    written beside the checker and agrees with it by construction, and it was the real workspace
+    that turned up eight field names nothing reads. But this suite ships with the skill, so on
+    anybody else's machine "read every plan in ~/Travel Buddy" means reading their travel history,
+    their hotel bookings and their dates, and printing filenames that carry destinations. That is
+    not a trade a test gets to make on the reader's behalf.
+
+    So it is opt-in and says so when it declines, because a silent skip is how a suite goes green
+    while testing less than the reader thinks. Set TRAVEL_BUDDY_TEST_WORKSPACE=1 to use the default
+    workspace, or to a path to use that one.
+    """
+    choice = os.environ.get("TRAVEL_BUDDY_TEST_WORKSPACE", "").strip()
+    if not choice:
+        print("note: real-workspace cases SKIPPED. They read plans under ~/Travel Buddy, which is "
+              "the reader's own travel data; set TRAVEL_BUDDY_TEST_WORKSPACE=1 (or to a path) to "
+              "run them.", file=sys.stderr)
+        return None
+    root = Path.home() / "Travel Buddy" if choice in ("1", "true", "yes") else Path(choice).expanduser()
+    return root if root.is_dir() else None
 
 
 def main() -> int:
@@ -187,9 +212,11 @@ def main() -> int:
     # script regression test into an audit of history that breaks whenever the contract grows.
     # They are still run, and what they report is printed, because that is how this test found the
     # eight silent field-name errors that motivated the note below.
-    delivered = [p for p in sorted((Path.home() / "Travel Buddy" / "plans").glob("*.json"))
-                 if not p.name.startswith(("intake-", "next-action-", "shortlist-"))
-                 and not p.name.endswith("-imagery.json")]
+    workspace = real_workspace()
+    delivered = [] if workspace is None else [
+        p for p in sorted((workspace / "plans").glob("*.json"))
+        if not p.name.startswith(("intake-", "next-action-", "shortlist-"))
+        and not p.name.endswith("-imagery.json")]
     drift: dict[str, list[str]] = {}
     for real in delivered:
         try:
@@ -200,7 +227,7 @@ def main() -> int:
             continue
         _, report = run(body)
         for issue in report.get("issues", []):
-            drift.setdefault(issue["path"], []).append(real.name)
+            drift.setdefault(issue["path"], []).append(real.name)  # counted, never printed
     if drift:
         # Every one of these is read by no renderer and no gate, which is exactly why it survived
         # delivery: `dietary_needs` where the contract says `dietary_or_religious_needs`, an
@@ -208,7 +235,7 @@ def main() -> int:
         print(f"note: {len(drift)} key(s) in already-delivered plans the contract does not "
               f"declare, none of them fatal and none of them read by anything:", file=sys.stderr)
         for path, where in sorted(drift.items()):
-            print(f"      {path}  ({len(where)} plan(s))", file=sys.stderr)
+            print(f"      {path}  ({len(where)} plan(s))", file=sys.stderr)  # path only
 
     # 10. Inputs a caller can really hand over. A traceback names a Python type where the answer
     #     should name the file that was wrong.

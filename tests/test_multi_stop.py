@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import subprocess
 import sys
@@ -55,6 +56,30 @@ def a_leg(index: int, origin: str, destination: str, date: str,
             "review_url": url or f"https://example.invalid/leg{index}",
             "origin_station": origin, "destination_station": destination,
             "outbound_date": date, "single_option_reason": None}
+
+
+def real_workspace() -> Path | None:
+    """The user's own Travel Buddy workspace, ONLY when they have opted in.
+
+    Running a real artifact through the checker is worth more than a fixture -- a fixture is
+    written beside the checker and agrees with it by construction, and it was the real workspace
+    that turned up eight field names nothing reads. But this suite ships with the skill, so on
+    anybody else's machine "read every plan in ~/Travel Buddy" means reading their travel history,
+    their hotel bookings and their dates, and printing filenames that carry destinations. That is
+    not a trade a test gets to make on the reader's behalf.
+
+    So it is opt-in and says so when it declines, because a silent skip is how a suite goes green
+    while testing less than the reader thinks. Set TRAVEL_BUDDY_TEST_WORKSPACE=1 to use the default
+    workspace, or to a path to use that one.
+    """
+    choice = os.environ.get("TRAVEL_BUDDY_TEST_WORKSPACE", "").strip()
+    if not choice:
+        print("note: real-workspace cases SKIPPED. They read plans under ~/Travel Buddy, which is "
+              "the reader's own travel data; set TRAVEL_BUDDY_TEST_WORKSPACE=1 (or to a path) to "
+              "run them.", file=sys.stderr)
+        return None
+    root = Path.home() / "Travel Buddy" if choice in ("1", "true", "yes") else Path(choice).expanduser()
+    return root if root.is_dir() else None
 
 
 def main() -> int:
@@ -171,7 +196,8 @@ def main() -> int:
 
     # 5. The page. A rendered spine is the whole point: the derivation existing and never reaching
     #    the HTML is the same defect as a rating stored and never printed.
-    workspace = Path.home() / "Travel Buddy" / "plans"
+    root = real_workspace()
+    workspace = (root / "plans") if root else Path("/nonexistent")
     multi = workspace / "2026-10-25-深圳-4-天-3-晚-街区漫步-大鹏海岸-齐齐哈尔往返.json"
     if not multi.exists():
         print(f"note: {multi.name} is not in this workspace; the rendered-page cases were skipped",
@@ -191,12 +217,15 @@ def main() -> int:
                 if block:
                     text = re.sub(r"<[^>]+>", " ", block.group(0))
                     for wanted in ("蛇口", "大鹏", "转场日", "住宿主线"):
-                        check(f"the spine says {wanted}", wanted in text, text[:160])
+                        # The detail is deliberately a length, not the text: this runs against the
+                        # reader's own plan, and a failure message that quotes the page would print
+                        # their itinerary into a terminal or a CI log.
+                        check(f"the spine says {wanted}", wanted in text,
+                              f"not found in a {len(text)}-character spine")
                     # The renderer's own English on a Chinese page is a failure the page gate
                     # names in as many words; the spine must not reintroduce it.
                     leaked = [w for w in ("night(s)", "Where you sleep", "Move day") if w in text]
-                    check("no renderer English survives on a Chinese page", not leaked,
-                          f"{leaked}")
+                    check("no renderer English survives on a Chinese page", not leaked, f"{leaked}")
 
             single_base = workspace / "2027-04-17-香港六日-尖沙咀为基地的海岸-市场与街区.json"
             if single_base.exists():

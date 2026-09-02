@@ -4116,8 +4116,39 @@ def check_preferences_came_from_the_intake(plan: dict, errors: list[str],
     path = context.get("intake_file")
     if not isinstance(path, str) or not path.strip() or _blank(path):
         return
+
+    # SECURITY. `path` is a string out of the plan, and a plan is a document this repo deliberately
+    # treats as portable -- re-rendered, replanned, audited from a moved workspace, and therefore
+    # sometimes received from somebody else. Opening whatever it names turned that into an
+    # arbitrary local file read: the note below reports the OS error verbatim, which distinguishes
+    # "no such file" from "permission denied" and makes this an existence oracle for any path, and
+    # a target that happens to parse as a JSON object with experience.ranked_must_haves gets its
+    # strings echoed into the gate's own findings.
+    #
+    # Scoped by FILENAME, not by directory. run_plan_checks takes a plan and not a path, so no
+    # absolute root is available here without changing a signature save_trip_deliverables imports
+    # -- and the directory could not be constrained anyway, because --from-intake accepts any file
+    # the operator names: the first version of this fix demanded a parent named `plans` and broke
+    # the repo's own fixtures. The filename is enough, because nothing worth stealing is called
+    # `intake*.json`. /etc/passwd, ~/.ssh/id_rsa, ~/.aws/credentials and /proc/self/environ are all
+    # refused, while every real intake -- including one in a workspace that moved, which is the
+    # case the note below exists for -- still reads. `is_file()` additionally refuses a FIFO, which
+    # would otherwise hang this gate forever.
+    candidate = Path(path).expanduser()
+    if not (candidate.name.startswith("intake") and candidate.suffix == ".json"):
+        notes.append(
+            f"note: intake_context.intake_file ({path.strip()}) was NOT opened: this gate only "
+            f"reads a file named intake*.json. A plan can be shared or hand-edited, so a path it "
+            f"names is a request rather than an instruction. The preference cross-check did not "
+            f"run; rename the intake, or point the key at the file the form actually saved.")
+        return
+    if not candidate.is_file():
+        notes.append(
+            f"note: intake_context.intake_file ({path.strip()}) is not a regular file, so the "
+            f"preference cross-check did not run.")
+        return
     try:
-        intake = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+        intake = json.loads(candidate.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         notes.append(
             f"note: intake_context.intake_file ({path.strip()}) could not be read ({exc}), so the "

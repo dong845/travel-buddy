@@ -424,6 +424,35 @@ def resolve_plan_imagery(plan: dict, plan_path: str | Path | None) -> tuple[dict
         # in this repo writes one, but a hand-edited plan that does should work rather than be
         # lectured at.
         candidate = base / declared.strip()
+        # SECURITY. `declared` is a string out of the plan, and the paragraph above deliberately
+        # honours an absolute value for hand-edited plans. Combined with `..` that made the plan
+        # able to name ANY path on the machine, and this one matters more than the same hole in
+        # the intake cross-check: what is read here is decoded and embedded into the delivered
+        # page as data: URIs, so a file that parses as image slots leaves the machine inside an
+        # artifact the traveller then shares. A plan is a portable document -- re-rendered,
+        # replanned, audited later, and therefore sometimes received from somebody else -- so a
+        # path it names is a request, not an instruction.
+        #
+        # The sidecar's whole contract is that it lives BESIDE the plan (`<plan-stem>-imagery
+        # .json`), so requiring the resolved path to stay in the plan's own directory costs no
+        # legitimate case, including the absolute one: an absolute path beside the plan still
+        # resolves there. What it refuses is every path that escapes it.
+        try:
+            resolved = candidate.expanduser().resolve()
+            root = base.expanduser().resolve()
+        except OSError as exc:
+            raise ImagerySidecarError(
+                f"plan['imagery_sidecar'] is {declared!r}, which could not be resolved "
+                f"({exc}).") from exc
+        if resolved.parent != root:
+            raise ImagerySidecarError(
+                f"plan['imagery_sidecar'] is {declared!r}, which resolves to {resolved} -- "
+                f"outside the plan's own directory ({root}). The sidecar lives beside the plan by "
+                f"contract, and a plan can be shared or hand-edited, so a path it names is not a "
+                f"path to open. Move the sidecar beside the plan, or write its bare filename.")
+        # `candidate` deliberately keeps its UNRESOLVED form: resolving it here would rewrite every
+        # reported path through symlinks (/var -> /private/var on macOS), changing what callers and
+        # tests see for a check that has already passed.
         # A plan on standard input has no directory of its own, so `base` is whatever directory the
         # command happened to run from. Measured, both halves of that: `cat plan.json | python
         # scripts/save_trip_deliverables.py -` exited 2 for EVERY photographed plan when run from
