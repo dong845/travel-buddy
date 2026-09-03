@@ -644,14 +644,33 @@ FALLTHROUGH_SUBJECTS = (
     "railway station", "train station", "metro station", "bus station", "airport", "airfield",
 )
 
-
 def _is_fallthrough(description: object, query: str) -> bool:
-    """Is this article about a container or a transport facility the query never asked for?"""
-    text = str(description or "").strip().casefold()
+    """Is this article about a container or a transport facility the query never asked for?
+
+    Read from the START of the description, because that is where English puts the class noun --
+    "Town in Vaud, Switzerland". Checking the whole string over-fires: "Castle in the town of
+    Veytaux" is a castle, and a rule that saw `town` anywhere would refuse it.
+
+    LATIN SCRIPTS ONLY, and that is a finding rather than an omission. A Chinese list was written
+    first, on the reasoning that this skill is used in Chinese most and zh.wikipedia states the
+    class last (「瑞士沃州市镇」). Measured, it was worse than useless: `_tokens` treats a CJK run
+    as ONE token, so 「沃韦市集」 and 「沃韦市」 share nothing and the token check one line up
+    already refuses them. The only way a CJK description reaches this guard is when the query and
+    the title are the SAME run -- and then the article IS what was asked for, so a class guard
+    firing there would refuse the correct page. A list that cannot fire where it would help and
+    misfires where it can is coverage on paper only.
+
+    What protects CJK instead is that same whole-run tokenisation, which is strict rather than
+    loose, plus the exact-title path that resolves 简体 to 繁體 without consulting this function.
+    A Chinese plan whose anchors carry Latin names -- 「Marché de Vevey」 in a zh plan, which is the
+    trip that exposed all of this -- searches en/fr and gets an English description, so the list
+    below is the one that runs on it.
+    """
+    text = str(description or "").strip()
     if not text:
         return False          # no description is no evidence, and no evidence is not a refusal
-    lead = text.split(" in ")[0].split(",")[0]
     asked = query.casefold()
+    lead = text.casefold().split(" in ")[0].split(",")[0]
     return any(word in lead and word not in asked for word in FALLTHROUGH_SUBJECTS)
 
 
@@ -699,7 +718,13 @@ def _relevant(query: str, page_title: str, place_name: str,
     # the only thing this comparison is trying to see.
     # Only on the anchor branch. The hero slot IS the destination, and its own article is
     # legitimately "Federal city of Switzerland" -- refusing that would delete every hero.
-    if _is_fallthrough(description, query):
+    # Exempt when the anchor names ONLY places this trip already knows. An anchor called 「东京」
+    # on a 「日本」 trip is asking for that city's own article, and refusing it for being a
+    # settlement refuses the thing that was asked for. The destination hero is handled by the
+    # branch above; this covers a stop that is itself a city.
+    asks_only_for_places = bool(query_tokens) and \
+        query_tokens <= (place_tokens | set(place_vocabulary))
+    if not asks_only_for_places and _is_fallthrough(description, query):
         return False
 
     raw_title, raw_query = _tokens_raw(page_title), _tokens_raw(query)

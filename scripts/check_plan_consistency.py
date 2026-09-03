@@ -1192,6 +1192,21 @@ def check_dates(plan: dict, errors: list[str], notes: list[str]) -> None:
             errors.append(problem)
 
 
+def _jurisdiction_key(value: object) -> str:
+    """One jurisdiction, one key, however the author spelled it.
+
+    Compared raw, `Japan` and `japan ` were two jurisdictions and the traveller was told their
+    single-country trip entered both -- the same free-text trap this file warns about for
+    `base_location`, reintroduced in the field that was added to avoid it.
+
+    A full-width space needs no special handling, and an earlier version stripped one anyway with
+    a comment claiming it was necessary: `str.strip()` already removes U+3000, because Python
+    counts it as whitespace. The redundant call was harmless and the comment was not -- a false
+    reason in a comment is what the next reader builds on.
+    """
+    return str(value or "").strip().casefold()
+
+
 @cites
 def check_entry_covers_every_jurisdiction(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A trip that enters two places needs two entry answers, and used to need one.
@@ -1218,7 +1233,7 @@ def check_entry_covers_every_jurisdiction(plan: dict, errors: list[str], notes: 
         group = str(stay.get("stay_group_id") or "").strip()
         if not group:
             continue
-        groups.setdefault(group, set()).add(str(stay.get("jurisdiction") or "").strip())
+        groups.setdefault(group, set()).add(_jurisdiction_key(stay.get("jurisdiction")))
     if len(groups) < 2:
         return
 
@@ -1238,7 +1253,7 @@ def check_entry_covers_every_jurisdiction(plan: dict, errors: list[str], notes: 
 
     context = _obj(plan.get("entry_context"))
     records = [_obj(r) for r in _seq(context.get("per_jurisdiction"))]
-    covered = {str(r.get("jurisdiction") or "").strip() for r in records} - {""}
+    covered = {_jurisdiction_key(r.get("jurisdiction")) for r in records} - {""}
     missing = sorted(needed - covered)
     if missing:
         errors.append(

@@ -250,6 +250,45 @@ def main() -> int:
     if found:
         check("and it names which one", "柬埔寨" in found[0], found[0][:120])
 
+    # 4b-ii. Degenerate and adversarial inputs these two gates were NOT built on. Every one of
+    #        these was found by running them rather than by reading them.
+    #
+    #        Jurisdiction is free text, and comparing it raw made `Japan` and `japan ` two
+    #        jurisdictions -- telling a single-country traveller their trip entered both. That is
+    #        the same free-text trap this file warns about for `base_location`, reintroduced in
+    #        the field that was added to avoid it.
+    for label, first, second in (("case", "Japan", "japan "),
+                                 ("full-width space", "日本", "日本\u3000"),
+                                 ("surrounding space", " 香港", "香港 ")):
+        found = entry_findings([stay("s1", first), stay("s2", second)], complete)
+        check(f"one jurisdiction spelled two ways ({label}) is one jurisdiction", not found,
+              f"{found[:1]}")
+    check("two genuinely different jurisdictions are still two",
+          entry_findings([stay("s1", "日本"), stay("s2", "韩国")], complete), "accepted")
+
+    # A spine must never print a negative night count. The window is refused by validate_plan, so
+    # this is unreachable in a delivered plan -- but stay_sequence is a plain function and
+    # "-3 晚" is not a number any page should be able to show.
+    reversed_window = {"booking_options": {"accommodations": [
+        dict(a_stay("a", "2027-05-10", "2027-05-07", "X", 1)),
+        dict(a_stay("b", "2027-05-10", "2027-05-12", "Y", 1))]}}
+    for stop in stay_sequence(reversed_window):
+        if stop["nights"] < 0:
+            failures.append(f"a reversed window produced {stop['nights']} nights -- the spine has "
+                            f"to skip a malformed window, not print a negative number")
+
+    # Shapes that must not raise. A traceback names a Python type where the answer should name the
+    # field that was wrong.
+    for label, plan_shape in (("an empty plan", {}),
+                              ("a non-dict", "nope"),
+                              ("accommodations as a string", {"booking_options": {"accommodations": "x"}}),
+                              ("options with no dates", {"booking_options": {"accommodations": [
+                                  {"stay_group_id": "a"}, {"stay_group_id": "b"}]}})):
+        try:
+            stay_sequence(plan_shape)
+        except Exception as exc:  # noqa: BLE001 - any raise is the failure
+            failures.append(f"stay_sequence raised on {label}: {type(exc).__name__}: {exc}")
+
     # 4c. The service market is per DAY, not per page. The rule read one page-wide flag, so a
     #     Shenzhen+Hong Kong plan was told its Hong Kong days must use Amap -- not the tool for
     #     Hong Kong transit -- and the only ways out were wrong links for half the trip or no page.

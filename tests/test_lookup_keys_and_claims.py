@@ -248,7 +248,7 @@ def containing_place_cases() -> list[str]:
     """
     failures: list[str] = []
     trip_places = frozenset({"lucerne", "琉森", "montreux", "蒙特勒", "bern", "伯尔尼",
-                             "switzerland", "瑞士", "拉纳卡"})
+                             "switzerland", "瑞士", "拉纳卡", "东京"})
     cases = (
         # (query, article title, destination, expected, why)
         ("Marché de Vevey", "Vevey", "瑞士", False,
@@ -297,6 +297,20 @@ def containing_place_cases() -> list[str]:
         # itself a district may have the district's article.
         ("Bern old town district", "Bern Altstadt", "District of Bern, Switzerland", True,
          "the query asked for a district, so a district article is the right answer"),
+        # CJK is covered by a DIFFERENT mechanism, and the attempt to add a Chinese class list
+        # here is why that is now written down. `_tokens` treats a CJK run as one token, so
+        # 「沃韦市集」 and 「沃韦市」 share nothing and are refused one check earlier; the only way a
+        # Chinese description reaches the class guard is when query and title are the same run, and
+        # then the article IS what was asked for. A list that cannot fire where it would help and
+        # misfires where it can is coverage on paper. Asserted here so nobody adds it again.
+        ("沃韦市集", "沃韦市", "瑞士沃州市镇", False,
+         "refused by the token rule, not by the class guard -- CJK runs do not overlap"),
+        ("长洲", "长洲", "香港的離島", True,
+         "same run means the article IS the anchor; a class guard must not refuse it"),
+        # An anchor that IS a place name may have that place's article. The trip's own vocabulary
+        # is what makes this decidable.
+        ("东京", "东京", "日本東京都的城市", True,
+         "a stop that is itself a city, with 东京 in the trip vocabulary"),
         ("Lion Monument", "Lion Monument, Lucerne", None, True,
          "no description is no evidence, and no evidence is not a refusal"),
         # Stated rather than wished away: the two guards overlap, and an anchor that genuinely

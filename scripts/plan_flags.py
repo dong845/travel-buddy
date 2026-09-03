@@ -298,6 +298,12 @@ def stay_sequence(plan: object) -> list[dict]:
             end = date.fromisoformat(str(option.get("check_out")))
         except (TypeError, ValueError):
             continue
+        if end < start:
+            # A checkout before its check-in is a malformed window, and render_final_trip_html
+            # refuses the plan for it. Skipping here keeps the spine from printing "-3 晚", which
+            # is not a number a page should ever show; the gate that owns the field does the
+            # complaining.
+            continue
         entry = groups.setdefault(group, {"group_id": group, "check_in": start, "check_out": end,
                                           "labels": [], "option_count": 0})
         entry["check_in"] = min(entry["check_in"], start)
