@@ -5245,6 +5245,16 @@ def main() -> int:
             print(f"- {line}", file=sys.stderr)
         return status
     print("PLAN CONSISTENCY OK")
+    # Name the next command. Measured with a different assistant on a deliberately broken plan:
+    # codex ran check_plan_contract and check_plan_consistency, fixed everything both of them
+    # reported, saw two clean exits and reported the plan fixed -- while a third defect survived,
+    # because the rule that catches it lives in render_final_trip_html.validate_plan, a command it
+    # never reached. Nothing was wrong with its reasoning; the pipeline simply did not say where it
+    # continues, and an assistant that cannot hold 110KB of prose reconstructs the order from
+    # whatever the last command printed. A clean gate is the most dangerous place to stay silent.
+    print(f"NEXT: python scripts/render_final_trip_html.py {args.plan} <final.html>  "
+          f"— it runs its own contract checks (booking options, leg groups, map endpoints) that "
+          f"this gate does not, and a clean run here is not a clean plan.", file=sys.stderr)
     return status
 
 

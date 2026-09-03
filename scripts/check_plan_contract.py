@@ -185,6 +185,11 @@ def main() -> int:
     elif not issues:
         print(f"CONTRACT OK: every key in {Path(args.plan).name} is one "
               f"templates/final-trip-plan.json declares.")
+        # The next command, named rather than left to be re-derived from SKILL.md. An assistant
+        # that cannot hold 110KB of prose can still read the line the last command printed, and
+        # this pipeline is a fixed order -- there is nothing to decide here, only to remember.
+        print(f"NEXT: python scripts/check_plan_consistency.py {args.plan} --no-verification-yet",
+              file=sys.stderr)
     else:
         print(f"CONTRACT: {len(issues)} key(s) the contract does not recognise. This is a "
               f"worklist, not a verdict -- fix them together, then run the gates.")

@@ -3751,6 +3751,16 @@ def main() -> int:
         print(result)
     else:
         Path(args.output).write_text(result, encoding="utf-8")
+    # Named on BOTH branches, and to stderr so a pipe to a file is unaffected. Same reason as the
+    # line check_plan_consistency prints: the pipeline has to say where it continues, or an
+    # assistant reconstructs the order from prose and stops at the first clean exit. Measured with
+    # a different assistant, which ran two gates, fixed everything they reported, and called a
+    # plan fixed while a defect this step catches was still in it.
+    print("NEXT: python scripts/validate_trip_html.py <final.html> --plan <plan.json>, then "
+          "python scripts/check_link_targets.py <final.html>, then "
+          "python scripts/save_trip_deliverables.py <plan.json> --workspace \"<workspace>\" "
+          "--verification <report.json> (or --unverified).", file=sys.stderr)
+    return 0
     return 0
 
 

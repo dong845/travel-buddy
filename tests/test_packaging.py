@@ -124,6 +124,55 @@ def main() -> int:
         if not (ROOT / target).exists():
             failures.append(f"SKILL.md references {target}, which does not exist")
 
+    # 2a-ii. A count written into prose drifts, and nothing was watching this one: SKILL.md said
+    #        "the same 24 PLAN_CHECKS" while the tuple held 29. That is the attestation-versus-check
+    #        problem in the skill's own documentation -- the sentence claimed a number instead of
+    #        naming the thing, and a reader budgeting a run believed it. The fix was to stop writing
+    #        the number; this asserts that nobody writes one back.
+    import re as _re
+    _sys_path_added = str(ROOT / "scripts")
+    if _sys_path_added not in sys.path:
+        sys.path.insert(0, _sys_path_added)
+    from check_plan_consistency import PLAN_CHECKS as _CHECKS  # noqa: PLC0415
+    for _doc in ("SKILL.md", "README.md", "README_CN.md"):
+        _text = (ROOT / _doc).read_text(encoding="utf-8")
+        for _match in _re.finditer(r"(\d+)\s*(?:个\s*)?`?PLAN_CHECKS", _text):
+            _claimed = int(_match.group(1))
+            if _claimed != len(_CHECKS):
+                _line = _text[:_match.start()].count("\n") + 1
+                failures.append(
+                    f"{_doc}:{_line} says {_claimed} PLAN_CHECKS and the tuple holds "
+                    f"{len(_CHECKS)}. Name the tuple instead of counting it, or update the number "
+                    f"-- a stale count in prose is read as a measurement.")
+
+    # 2a-iii. Every gate that exits clean must name the next command, and the command it names
+    #         must exist. Measured with a different assistant on a deliberately broken plan: codex
+    #         ran check_plan_contract and check_plan_consistency, fixed everything both reported,
+    #         saw two clean exits and reported the plan fixed -- while a third defect survived,
+    #         because the rule that catches it lives in render_final_trip_html.validate_plan, a
+    #         command it never reached. Nothing was wrong with its reasoning. The pipeline did not
+    #         say where it continues, and an assistant that cannot hold 110KB of prose rebuilds the
+    #         order from whatever the last command printed. A clean gate is the most dangerous
+    #         place to stay silent, which is why this is asserted on the SUCCESS path.
+    _chain = {
+        "check_plan_contract.py": "check_plan_consistency.py",
+        "check_plan_consistency.py": "render_final_trip_html.py",
+        "render_final_trip_html.py": "validate_trip_html.py",
+    }
+    for _script, _next in _chain.items():
+        _source = (ROOT / "scripts" / _script).read_text(encoding="utf-8")
+        if "NEXT:" not in _source:
+            failures.append(
+                f"scripts/{_script} never prints a NEXT: line. A gate that exits clean without "
+                f"naming the next command is where an assistant stops, believing the pipeline "
+                f"finished.")
+        elif _next not in _source:
+            failures.append(
+                f"scripts/{_script} prints a NEXT: line that does not name scripts/{_next}, which "
+                f"is the step that follows it. A pointer to the wrong command is worse than none.")
+        if not (ROOT / "scripts" / _next).exists():
+            failures.append(f"scripts/{_script} points at scripts/{_next}, which does not exist.")
+
     # 2b. The other direction of check 2, and the one nothing was watching: a file deleted on
     #     purpose must stay deleted, and must stay unmentioned.
     #
