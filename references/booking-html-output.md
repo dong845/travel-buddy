@@ -51,6 +51,40 @@ Compare identical inputs before drawing a conclusion:
 
 Record the comparison platform, fulfilment/booking provider, access time, and material difference in the plan/source register. A platform result is a current shopping lead, not a reservation or a guarantee. Prefer a provider search or result URL over a cart, login, checkout, or payment URL. If a platform is unavailable, use another suitable source or disclose the gap; do not fabricate a comparison.
 
+<a id="anchor-imagery-subject"></a>
+### An anchor's photograph must be of the anchor, not of what contains it
+
+Three times now an anchor slot has been filled by an article that was genuinely near it and about
+something else: 阿利坎特-埃爾切機場 standing in for the city, *Larnaca* standing in for its municipal
+market, and — measured on a real Swiss plan — *Vevey* and then *Vevey railway station* standing in
+for the market on Vevey's lakefront. A lake photograph of the town was about to print under a
+market's heading with the town's provenance credited beneath it.
+
+Token overlap cannot decide this, and that is worth stating plainly rather than tuning around:
+"Château de Chillon"/"Chillon Castle" and "Marché de Vevey"/"Vevey railway station" have the
+identical shape — one shared token, each side carrying its own extra — and separating them needs to
+know that *château* means castle while *marché* does not mean railway station. Two guards do the
+work instead, and both fail toward an empty slot:
+
+- **The article must not be a broader subject that merely contains the thing asked for.** Compared
+  on RAW tokens, before stopwords: `castle`, `market`, `church` and `museum` are stopwords and their
+  non-English equivalents are not, so cooked, "Chillon Castle" reduces to `{chillon}` and becomes
+  indistinguishable from a town article. A plain subset rule also over-fires — *Lion Monument* is a
+  proper subset of "Lion Monument Lucerne" and is exactly right — so what decides it is whether the
+  article dropped the SUBJECT or the LOCATION, and the plan's own place names answer that without a
+  gazetteer.
+- **The subject class must not be a container or a transport facility the query never asked for.**
+  Wikipedia states it as the opening noun of its short description — "Town in Vaud, Switzerland",
+  "Railway station in Vevey, Switzerland", "Castle in Veytaux, Switzerland" — and it rides along in
+  the pageimages call, so it costs no extra request. The list is deliberately short and deliberately
+  about containers and transport, the two things an anchor keeps falling through to; a general
+  subject taxonomy would be wrong on the first trip it had not seen. It applies to anchors only: a
+  destination hero legitimately IS a settlement article.
+
+The cost is stated in the tests rather than hidden: an anchor that genuinely wants its town's own
+photograph ("Vevey old town") is refused by the first guard even though the second would clear it.
+That is the direction this file errs in on purpose.
+
 <a id="multi-stop-trips"></a>
 ### Multi-stop trips: one stay group per stop, one leg group per journey
 

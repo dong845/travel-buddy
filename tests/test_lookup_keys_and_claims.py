@@ -225,12 +225,132 @@ def declared_prefill_cases() -> list[str]:
     return failures
 
 
+def containing_place_cases() -> list[str]:
+    """An article about the TOWN must not fill a slot asked for the market inside it.
+
+    Measured on a real delivered plan: the anchor "Marché de Vevey" matched the article *Vevey* --
+    the town on Lake Geneva -- and a lake photograph was about to be printed under a market's
+    heading, with the town's provenance credited beneath it. That is the Larnaca defect this file
+    already guards against one level up, arriving through a containing SETTLEMENT rather than
+    through the destination, which is the only fall-through the old guard looked for. Sharing one
+    specific token was enough, and "Vevey" is a token of "Marché de Vevey".
+
+    Two things make this hard enough to be worth pinning rather than eyeballing:
+
+    * A plain subset rule over-fires. *Lion Monument* is a proper subset of "Lion Monument
+      Lucerne" and is exactly the right article; the difference is whether the article dropped the
+      SUBJECT or the LOCATION, and the plan's own place names answer that without a gazetteer.
+    * The comparison must run on RAW tokens. `castle`, `market`, `church` and `museum` are
+      stopwords and their non-English equivalents are not, so cooked, "Chillon Castle" reduces to
+      {chillon} -- indistinguishable from a town article -- while "Château de Chillon" keeps
+      {château, chillon}. Judged cooked, the guard refused the one correct match the measured trip
+      actually found.
+    """
+    failures: list[str] = []
+    trip_places = frozenset({"lucerne", "琉森", "montreux", "蒙特勒", "bern", "伯尔尼",
+                             "switzerland", "瑞士", "拉纳卡"})
+    cases = (
+        # (query, article title, destination, expected, why)
+        ("Marché de Vevey", "Vevey", "瑞士", False,
+         "the town standing in for the market inside it -- the measured defect"),
+        ("拉纳卡市政市场", "拉纳卡", "拉纳卡", False,
+         "the same shape in Chinese, where the destination guard already covers it"),
+        ("Luzerner Wochenmarkt", "Luzern", "瑞士", False,
+         "a market answered with its city"),
+        ("Château de Chillon", "Chillon Castle", "瑞士", True,
+         "the subject survives on both sides once stopwords are not stripped"),
+        ("Lion Monument Lucerne", "Lion Monument", "瑞士", True,
+         "the article dropped the LOCATION, not the subject"),
+        ("Kapellbrücke", "Kapellbrücke", "瑞士", True,
+         "an exact title must not be read as a proper subset of itself"),
+        ("Alicante Central Market", "Bombing of Alicante", "Alicante", False,
+         "the rule this guard sits beside still holds"),
+    )
+    for query, title, place, expected, why in cases:
+        got = IMAGERY._relevant(query, title, place, trip_places)
+        if got is not expected:
+            failures.append(
+                f"containing place: _relevant({query!r}, {title!r}) is {got}, expected {expected} "
+                f"-- {why}")
+
+    # Token overlap alone cannot finish this job, and the measured trip proved it in one step:
+    # refusing the town *Vevey* moved the search onto *Vevey railway station*, which shares the
+    # same single place token and carries its own extra ones -- structurally identical to
+    # "Château de Chillon"/"Chillon Castle", which is correct. Separating them needs the subject
+    # CLASS, which Wikipedia's own short description states as its opening noun and which rides
+    # along in the call the module already makes.
+    descriptions = (
+        ("Marché de Vevey", "Vevey", "Town in Vaud, Switzerland", False,
+         "a town article standing in for the market on its lakefront"),
+        ("Marché de Vevey", "Vevey railway station", "Railway station in Vevey, Switzerland", False,
+         "the station the search reached once the town was refused"),
+        ("Château de Chillon", "Chillon Castle", "Castle in Veytaux, Switzerland", True,
+         "a castle is not a container class and must still pass"),
+        ("Kapellbrücke", "Kapellbrücke", "Bridge across the Reuss River in Lucerne", True,
+         "nor is a bridge"),
+        # The class is the description's OPENING noun, not any word anywhere in it. A castle
+        # whose description happens to mention the town it stands in is still a castle, and
+        # reading the whole string would refuse it.
+        ("Château de Chillon", "Chillon Castle", "Castle in the town of Veytaux, Switzerland", True,
+         "a container word later in the sentence is not the subject class"),
+        # And the class only disqualifies when the query did NOT ask for it: an anchor that is
+        # itself a district may have the district's article.
+        ("Bern old town district", "Bern Altstadt", "District of Bern, Switzerland", True,
+         "the query asked for a district, so a district article is the right answer"),
+        ("Lion Monument", "Lion Monument, Lucerne", None, True,
+         "no description is no evidence, and no evidence is not a refusal"),
+        # Stated rather than wished away: the two guards overlap, and an anchor that genuinely
+        # wants the town's own photograph ("Vevey old town") is refused by the subset rule even
+        # though the description rule would clear it. That costs a legitimate image, and it is the
+        # direction this file is supposed to err in -- "when a slot cannot be filled to that
+        # standard it stays empty", never a substitute. Asserted so the cost is visible rather
+        # than discovered later as a surprise.
+        ("Vevey old town", "Vevey", "Town in Vaud, Switzerland", False,
+         "conservative: the subset rule refuses it even though the description rule would not"),
+    )
+    for query, title, description, expected, why in descriptions:
+        got = IMAGERY._relevant(query, title, "瑞士", trip_places, description)
+        if got is not expected:
+            failures.append(
+                f"subject class: _relevant({query!r}, {title!r}, description={description!r}) is "
+                f"{got}, expected {expected} -- {why}")
+
+    # The destination hero legitimately IS a settlement article, and the guard must never reach it:
+    # "Federal city of Switzerland" would otherwise delete the opening photograph of every trip.
+    for hero in ("伯尔尼", "Bern"):
+        if not IMAGERY._relevant(hero, hero, hero, trip_places, "Federal city of Switzerland"):
+            failures.append(f"subject class: the destination hero {hero!r} was refused for being a "
+                            f"settlement -- the guard belongs on anchors only")
+
+    # The vocabulary has to come from the plan's own fields, or the Lion Monument case cannot be
+    # told from the Vevey one. An empty vocabulary must still refuse the town.
+    if IMAGERY._relevant("Marché de Vevey", "Vevey", "瑞士", frozenset()):
+        failures.append("containing place: an empty place vocabulary still has to refuse the town")
+
+    # Every source contributes a name found in NO other source, or dropping one of them still
+    # passes -- which is how the first version of this case reported a green mutation: 伯尔尼 was
+    # in the destination string as well as in base_location, so deleting the base_location read
+    # was invisible.
+    plan = {"trip": {"destination": "瑞士行程",
+                     "destination_coords": [{"label": "蒙特勒"}]},
+            "booking_options": {"accommodations": [{"stay_location": "格林德瓦"}]},
+            "days": [{"base_location": "因特拉肯",
+                      "route": {"stops_in_order": ["翁根", "卡佩尔廊桥"]}}]}
+    vocabulary = IMAGERY.place_vocabulary(plan)
+    for wanted in ("蒙特勒", "格林德瓦", "因特拉肯", "翁根"):
+        if wanted not in vocabulary:
+            failures.append(f"containing place: place_vocabulary lost {wanted!r} -- it is read from "
+                            f"the plan's own destination, stays, bases and stops")
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
     failures += cjk_token_cases()
     failures += writing_variant_cases()
     failures += zero_imagery_is_loud_cases()
     failures += declared_prefill_cases()
+    failures += containing_place_cases()
     if failures:
         print(f"LOOKUP KEYS AND CLAIMS FAILED ({len(failures)}):", file=sys.stderr)
         for failure in failures:

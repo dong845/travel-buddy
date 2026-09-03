@@ -626,7 +626,38 @@ def file_names_the_subject(filename: str, subject_tokens: set[str], is_hero: boo
     return not (is_hero and set(words) & FACILITY_WORDS)
 
 
-def _relevant(query: str, page_title: str, place_name: str) -> bool:
+# The subject classes this file has now been burned by three times, each time as an article that
+# was genuinely NEAR the anchor and about something else: 阿利坎特-埃爾切機場 standing in for the
+# city, *Larnaca* standing in for its municipal market, and *Vevey* -- then *Vevey railway station*
+# -- standing in for the market on its lakefront. Token overlap cannot separate them: "Château de
+# Chillon"/"Chillon Castle" and "Marché de Vevey"/"Vevey railway station" have the identical shape
+# (one shared token, each side with its own extra), and telling them apart needs to know that
+# château means castle and marché does not mean railway station.
+#
+# Wikipedia's own short description carries the subject class as its opening noun -- "Town in Vaud,
+# Switzerland", "Railway station in Vevey, Switzerland", "Castle in Veytaux, Switzerland" -- and it
+# rides along in the pageimages call, so this costs no extra request. The list is deliberately
+# short and deliberately about CONTAINERS and TRANSPORT, the two things an anchor keeps falling
+# through to; a general subject taxonomy would be wrong on the first trip it had not seen.
+FALLTHROUGH_SUBJECTS = (
+    "town", "city", "municipality", "village", "commune", "settlement", "district", "canton",
+    "railway station", "train station", "metro station", "bus station", "airport", "airfield",
+)
+
+
+def _is_fallthrough(description: object, query: str) -> bool:
+    """Is this article about a container or a transport facility the query never asked for?"""
+    text = str(description or "").strip().casefold()
+    if not text:
+        return False          # no description is no evidence, and no evidence is not a refusal
+    lead = text.split(" in ")[0].split(",")[0]
+    asked = query.casefold()
+    return any(word in lead and word not in asked for word in FALLTHROUGH_SUBJECTS)
+
+
+def _relevant(query: str, page_title: str, place_name: str,
+              place_vocabulary: frozenset[str] = frozenset(),
+              description: object = None) -> bool:
     """Is this article about what was asked for, rather than merely near it?
 
     The specific part of the query is what must match -- the query minus the destination name.
@@ -635,7 +666,8 @@ def _relevant(query: str, page_title: str, place_name: str) -> bool:
     lead image really is the market. Its provenance would have been rendered under the photo.
     """
     place_tokens = _tokens(place_name)
-    specific = _tokens(query) - place_tokens
+    query_tokens = _tokens(query)
+    specific = query_tokens - place_tokens
     if not specific:
         # The query IS the place -- the destination hero. Then the article must be ABOUT the
         # place, not about something located in it, so its title may introduce no new subject.
@@ -644,7 +676,38 @@ def _relevant(query: str, page_title: str, place_name: str) -> bool:
         # printed as the destination's opening photograph.
         title_tokens = _tokens(page_title)
         return bool(title_tokens) and title_tokens <= place_tokens
-    return bool(specific & _tokens(page_title))
+    title_tokens = _tokens(page_title)
+    if not (specific & title_tokens):
+        return False
+
+    # The article must not be a BROADER subject that merely contains the thing asked for. Sharing
+    # one specific token was enough, so the anchor "Marché de Vevey" matched the article *Vevey* --
+    # the town -- and a lake photograph of Vevey was about to be printed under a market's heading.
+    # That is the Larnaca defect this file already guards against one level up, arriving through a
+    # containing SETTLEMENT instead of through the destination, which the existing guard is the
+    # only place that looks.
+    #
+    # A plain "title is a subset of the query" rule over-fires: the article *Lion Monument* is a
+    # proper subset of the query "Lion Monument Lucerne" and is exactly right. The difference is
+    # WHICH token the article dropped -- the subject ("marché") or the location ("lucerne") -- and
+    # the plan already knows its own place names, so no gazetteer is needed to tell them apart.
+    # Compared on RAW tokens, before stopwords are stripped, and that is not a detail. `castle`,
+    # `market`, `church` and `museum` are stopwords while their non-English equivalents are not, so
+    # the cooked form of "Chillon Castle" is {chillon} -- indistinguishable from the town article --
+    # while "Château de Chillon" keeps {château, chillon}. Judged cooked, the guard refused the one
+    # correct match this trip actually found. Raw keeps the subject word on both sides, which is
+    # the only thing this comparison is trying to see.
+    # Only on the anchor branch. The hero slot IS the destination, and its own article is
+    # legitimately "Federal city of Switzerland" -- refusing that would delete every hero.
+    if _is_fallthrough(description, query):
+        return False
+
+    raw_title, raw_query = _tokens_raw(page_title), _tokens_raw(query)
+    if raw_title and raw_title < raw_query:
+        dropped = raw_query - raw_title
+        if dropped - _tokens_raw(place_name) - set(place_vocabulary):
+            return False
+    return True
 
 
 def name_variants(raw: str) -> list[str]:
@@ -688,7 +751,8 @@ def wiki_languages(plan_language: object) -> list[str]:
 
 
 def resolve(query: str, near: tuple[float, float] | None, place_name: str,
-            lang: str = "en", exact: bool = False) -> dict | None:
+            lang: str = "en", exact: bool = False,
+            place_vocabulary: frozenset[str] = frozenset()) -> dict | None:
     """Find one article whose lead image can honestly be labelled as `query`.
 
     `exact` looks the title up directly instead of searching, and it is tried first for a reason:
@@ -702,7 +766,8 @@ def resolve(query: str, near: tuple[float, float] | None, place_name: str,
               {"action": "query", "generator": "search", "gsrsearch": query, "gsrlimit": 4})
     data = _api(WIKI_API.format(lang=lang), {
         **lookup,
-        "prop": "pageimages|coordinates", "piprop": "original|name", "pilicense": "any",
+        "prop": "pageimages|coordinates|description",
+        "piprop": "original|name", "pilicense": "any",
     })
     pages = sorted(((data or {}).get("query") or {}).get("pages", {}).values(),
                    key=lambda p: p.get("index", 99))
@@ -733,7 +798,8 @@ def resolve(query: str, near: tuple[float, float] | None, place_name: str,
         # guard below still runs, because that is a different question (is this the city's own
         # article standing in for an anchor) and it is the one the search path can actually get
         # wrong.
-        if not exact and not _relevant(query, title, place_name):
+        if not exact and not _relevant(query, title, place_name, place_vocabulary,
+                                       page.get("description")):
             continue
         return {"query": query, "page": title, "file": filename, "lang": lang,
                 "page_url": f"https://{lang}.wikipedia.org/wiki/"
@@ -861,6 +927,39 @@ def _destination_point(plan: dict) -> tuple[float, float] | None:
     return None
 
 
+def place_vocabulary(plan: dict) -> frozenset[str]:
+    """Every token this trip uses to NAME A PLACE, from the plan's own fields.
+
+    Used only to tell a dropped location apart from a dropped subject in `_relevant`: an article
+    that omits "Lucerne" from "Lion Monument Lucerne" is still the Lion Monument, while one that
+    omits "Marché" from "Marché de Vevey" is the town. No gazetteer, because the plan already
+    enumerates the places it visits and a general one would be wrong the moment a trip goes
+    somewhere it has not heard of.
+    """
+    trip = plan.get("trip") or {}
+    words: set[str] = set()
+    def add(value: object) -> None:
+        if isinstance(value, str) and value.strip():
+            words.update(_tokens(value))
+    add(trip.get("destination"))
+    coords = trip.get("destination_coords")
+    for entry in (coords if isinstance(coords, list) else [coords]):
+        if isinstance(entry, dict):
+            add(entry.get("label"))
+    for option in (plan.get("booking_options") or {}).get("accommodations") or []:
+        if isinstance(option, dict):
+            add(option.get("stay_location"))
+            add(option.get("neighborhood"))
+    for day in plan.get("days") or []:
+        if not isinstance(day, dict):
+            continue
+        add(day.get("base_location"))
+        route = day.get("route") if isinstance(day.get("route"), dict) else {}
+        for stop in route.get("stops_in_order") or []:
+            add(stop)
+    return frozenset(words)
+
+
 def slots(plan: dict) -> list[dict]:
     """What the page has room for, in priority order.
 
@@ -884,9 +983,11 @@ def slots(plan: dict) -> list[dict]:
         variants = name_variants(name) or [name]
         queries = variants + [f"{variant} {place_short}".strip() for variant in variants]
         found.append({"key": f"anchor:{index}", "queries": queries, "label": name})
+    vocabulary = place_vocabulary(plan)
     for slot in found:
         slot["near"] = point
         slot["place"] = place
+        slot["place_vocabulary"] = vocabulary
     return found
 
 
@@ -895,7 +996,8 @@ def resolve_slot(slot: dict, languages: list[str]) -> dict | None:
     for exact in (True, False):
         for language in languages:
             for query in slot["queries"]:
-                match = resolve(query, slot["near"], slot["place"], lang=language, exact=exact)
+                match = resolve(query, slot["near"], slot["place"], lang=language, exact=exact,
+                                place_vocabulary=slot.get("place_vocabulary") or frozenset())
                 if match:
                     return match
     return None
