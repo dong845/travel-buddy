@@ -20,24 +20,75 @@
   <a href="https://skillhub.cn/skills/user_f486c577/travel-buddy"><img alt="On SkillHub" src="https://img.shields.io/badge/SkillHub-travel--buddy-ff6a00"></a>
 </p>
 
+<p align="center">
+  <img src="docs/assets/hero.jpg" alt="Five candidate destinations side by side; four are greyed out and struck through after failing a hard filter, one is selected, and an arrow leads from it to a day-by-day plan page whose entries carry booking links">
+</p>
+
+<p align="center"><sub>Free and open source · runs entirely on your own machine · no account, no cloud</sub></p>
+
 > **A travel agent that refuses to invent a price, refuses to call a trip "bookable" before it has checked the last train home, and won't hand you a day-by-day plan until it has proven the destination is even reachable.**
 
 Most AI trip planners answer "I have 7 days and €1,500" with a confident day-by-day itinerary for a city you never chose. travel-buddy treats that as two different jobs. First it decides **where** — generating candidates, applying hard filters, and explaining what it threw away and why. Only once a destination is genuinely settled does it build the plan, and then it delivers a **self-contained HTML page** with real routes, real booking links, and a per-person budget where every line has a source and a check time.
 
+It is a skill for [Claude Code](https://claude.ai/code) and [Codex](https://openai.com/codex). You talk to it in your terminal; it runs a short local browser form for intake, researches the volatile facts live, and saves the result into a folder on your machine. Nothing leaves your computer except the research queries, and the page it makes contains no third-party script.
+
+<p align="center">
+  <a href="#start-here"><strong>Start here</strong></a> ·
+  <a href="#what-you-get"><strong>What you get</strong></a> ·
+  <a href="#what-makes-it-different"><strong>What's different</strong></a> ·
+  <a href="#how-it-works"><strong>How it works</strong></a> ·
+  <a href="#under-the-hood"><strong>Under the hood</strong></a> ·
+  <a href="#quick-start"><strong>Quick start</strong></a> ·
+  <a href="#troubleshooting"><strong>Troubleshooting</strong></a>
+</p>
+
 ---
 
-## Overview
+<a id="start-here"></a>
 
-travel-buddy is a skill for [Claude Code](https://claude.ai/code) and [Codex](https://openai.com/codex). You talk to it in your terminal; it runs a short local browser form for intake, researches the volatile facts live, and saves two paired artifacts to a folder on your machine:
+## Start here
+
+You do not pick a mode. Say what you already have, and the mode follows from it:
+
+| You have | Mode | What you get |
+| --- | --- | --- |
+| No destination, or just a continent | **Discovery** | 3–5 ranked candidates with trade-offs and an exclusion log |
+| A country/region but no city | **Constrained discovery** | Subregions and cities compared before any planning |
+| A destination you've decided on | **Construction** | A full day-by-day plan + the two deliverables |
+| An existing plan and a new constraint | **Incremental replanning** | Only affected elements recomputed, with a change log |
+
+Once it is [installed](#install), that looks like this:
+
+```text
+Use travel-buddy — 7 days in May, about €1,500, leaving from Amsterdam. Where should I go?
+Use travel-buddy — somewhere in Japan for 8 days in autumn; help me pick the cities first.
+Use travel-buddy — plan six days in Switzerland for two, lakes and old towns, no long walks.
+Use travel-buddy — here is my saved plan, my dates moved a week later. What changes?
+```
+
+It opens one local form for the things that decide the trip, then works. Discovery never silently collapses into Construction: a fixed scope that names no actual place is *blocked*, not guessed at.
+
+---
+
+<a id="what-you-get"></a>
+
+## What you get
+
+Plain files, saved to a folder you own — the first two are the deliverables a Construction task is not finished without, the third rides along:
 
 | Artifact | What it is |
 | --- | --- |
 | `plans/<date>-<title>.json` | The full plan as structured data — every option, price basis, source URL and assumption |
 | `html/<date>-<title>.html` | A single self-contained page: timed days, segment-by-segment maps, booking cards, budget table, source register |
+| `plans/<date>-<title>.ics` | The same trip as a calendar file, so it reaches your phone with reminders attached |
 
-Nothing leaves your machine except the research queries. There is no account, no cloud sync, and no third-party script in the generated page.
+**What is on the page.** Every day as a timeline with real times and walking minutes; each leg with a working directions link routed to the provider that actually works there; booking cards that open a search you complete yourself; a per-person budget where every row names its basis and the date it was checked; inline figures for walking load, budget composition and how spread out each day is; freely-licensed photographs of the actual places, embedded so the page works offline; a panel answering the first hour on the ground (can I pay, can I get online, who do I call, am I insured); and a source register listing what was checked, when, and what still needs a recheck before you buy.
 
-**The five ideas the whole skill is built on:**
+**What is *not* on it.** Anything nobody checked, unless it is labelled as unchecked. A plan saved without a verification pass prints a **"not fact-checked"** banner above everything else, in your own language.
+
+---
+
+## The five ideas it is built on
 
 1. **Separate stable reasoning from volatile facts.** Preferences, constraints and trade-off logic come from the model. Fares, timetables, opening hours, entry rules and weather must come from a live source with an access date — never from memory.
 2. **Hard constraints gate; preferences only rank.** A destination that fails a hard filter cannot win on charm. If nothing survives the filters, that is an *outcome* — it reports the conflict and the smallest relaxation, instead of crowning a loser.
@@ -48,6 +99,17 @@ Nothing leaves your machine except the research queries. There is no account, no
 ---
 
 ## What makes it different
+
+Plenty of tools will write you an itinerary. The difference is what happens to the claims inside it:
+
+- 🧭 **It decides *where* before it decides *what*** — candidates, hard filters, and a written record of what it threw out and why. A destination that fails a hard constraint cannot win on charm.
+- 🔎 **It checks the thing that actually breaks the trip** — the last connection home, the museum that is closed that Monday, the airport that does not fly there at all.
+- 🧾 **No price, hour or entry rule without a source and a date** — and where it could not check something, the page says so instead of sounding confident.
+- 🔗 **Browse, never transact** — every link opens a search you complete yourself. It never logs in, never touches payment, and never calls anything "booked" because a website displayed it.
+- 🚦 **Rules are gates, not good intentions** — four programs run before anything is saved, and a plan that skips the fact-checking pass prints a banner saying so on its own front page.
+- 💻 **Local, and yours** — plain files in a folder you own, no account, no cloud sync, standard library only, and a page with no third-party script in it.
+
+The rest of this section is the evidence, from real runs.
 
 **It checks the thing that actually breaks the trip.** A real run from Qiqihar to Shenzhen: the local airport's route map has eight destinations and Shenzhen is not among them, so "direct flights only" was infeasible before any itinerary existed. The return flight was then chosen by working *backwards* from the last connecting train of the day (21:35) rather than forwards from a nice departure time. The museum on the walking day was closed that Monday. None of those are things a plausible-sounding itinerary would have caught.
 
@@ -63,18 +125,7 @@ Nothing leaves your machine except the research queries. There is no account, no
 
 ## How it works
 
-### Four work modes
-
-The mode is decided by what you already know — it is not a separate question:
-
-| You have | Mode | What you get |
-| --- | --- | --- |
-| No destination, or just a continent | **Discovery** | 3–5 ranked candidates with trade-offs and an exclusion log |
-| A country/region but no city | **Constrained discovery** | Subregions and cities compared before any planning |
-| A destination you've decided on | **Construction** | A full day-by-day plan + the two deliverables |
-| An existing plan and a new constraint | **Incremental replanning** | Only affected elements recomputed, with a change log. A date change runs through `replan_trip.py`, which rewrites what a shift determines and refuses to let the rest pass as still-verified |
-
-Discovery never silently collapses into Construction. A fixed scope that names no actual place is *blocked*, not guessed at.
+The four work modes are in [Start here](#start-here). One detail belongs with the machinery rather than with the pitch: a date change runs through `replan_trip.py`, which rewrites what a shift determines and refuses to let the rest pass as still-verified.
 
 ### What it asks, in order of decision impact
 
@@ -132,6 +183,44 @@ start_intake_workflow.py
                                               ↓
                                 check_link_targets.py       (needs the network; run it yourself)
 ```
+
+---
+
+<a id="under-the-hood"></a>
+
+## Under the hood
+
+You never run these yourself — the skill does. They are listed because the guarantees above are only worth what enforces them, and each one here is a rule that used to be a paragraph and is now a program.
+
+| Script | What it decides |
+| --- | --- |
+| `start_intake_workflow.py` | Serves the profile and trip forms on loopback, then hands the saved intake path back |
+| `travel_workspace.py` | Creates the workspace, and creates a profile only after you tick the consent box |
+| `run_destination_discovery.py` | Opt-in only: starts a fresh Codex/Claude task for Discovery, and never under `auto` |
+| `new_plan_skeleton.py` | Emits a structurally valid plan to fill in, so authoring spends its effort on facts not shape |
+| `check_plan_contract.py` | Before the gates: is every key in this plan one the contract knows? A worklist, not a verdict |
+| `check_plan_consistency.py` | The plan against itself — route totals, walking, meals inside opening hours, budget arithmetic |
+| `render_final_trip_html.py` | Refuses to render a plan missing required structure; builds the page |
+| `validate_trip_html.py` | The page itself — required regions, real directions links, and no English left on a non-English page |
+| `plan_flags.py` | Derives the page checks from the plan, so none of them can be left switched off |
+| `save_trip_deliverables.py` | Runs all of it, then saves — and refuses a plan that will not say how its requirements were collected |
+| `plan_to_calendar.py` | The trip as an `.ics` file, which is the only thing here that reaches your phone |
+| `new_verification_report.py` | Starts the verification report from the plan, with every conclusion left as a `TODO:` |
+| `plan_slice.py` | Hands each verifier a projection of the plan instead of the whole file |
+| `fetch_plan_imagery.py` | Verified, freely-licensed photographs of the actual places — or nothing at all |
+| `plan_visuals.py` | Four inline SVG figures drawn from numbers the plan already carries |
+| `check_link_targets.py` | Follows every outbound button and reports where it actually lands (needs the network) |
+| `check_shortlist_consistency.py` | Discovery's gate: are these candidates actually comparable, and is the outcome honest? |
+| `save_discovery_deliverables.py` | The door that gate never had — runs it, stamps it, writes the shortlist beside your other files |
+| `replan_trip.py` | A changed date rewrites what it determines, and the rest stops counting as verified |
+| `audit_workspace.py` | Re-runs today's gates over every plan already saved, and reports without touching anything |
+| `probe_sources.py` | What this machine can actually read, before anyone writes that a fact "could not be obtained" |
+| `trip_timer.py` | Real wall-clock for a run, split into compute and the time you spent waiting |
+
+The two sections below are the long version: what each gate refuses, and the defect that put the rule there. They are folded away because almost nobody needs them on a first read.
+
+<details>
+<summary><b>The four gates, in detail</b> — what each one refuses, and why</summary>
 
 ### The four gates
 
@@ -205,6 +294,11 @@ The rules that stopped working are each one sentence and each cost something rea
 
 **`plan_slice.py`** hands each verifier a projection of the plan instead of the plan. `references/verification.md` used to say *each verifier gets the plan path*, so five truth-domain agents read one file five times — and measured across the 15 plans in one real workspace on 2026-08-30, that file runs 28,943 to 2,132,252 bytes, median 85,836, against a pass `references/research-budget.md` prices at ≈700k tokens. The obvious implementation is wrong, and the reason is worth keeping: an allow-list built from each domain's row in that table takes `days` away from `booking_and_lodging`, which needs it to answer where the traveller is standing when the seats go on sale, and takes the flight cards away from `entry`, which needs them for the transit visas of the actual connection airports. So the slice is **subtractive** — `trip`, `days` and `budget` are kept unconditionally, a block is dropped only where that domain's row cannot be answered from any field in it, and a top-level key the script has never seen is kept and reported, because an allow-list starves a domain the moment the schema grows while a deny list only gets less efficient. It slices by top-level key and nothing else, so every `claims_checked` pointer into a kept block still resolves against the real plan, which is exactly what `check_plan_consistency.py` will check. The saving is honest rather than flattering: measured over all 15 plans × 5 domains, the median plan's slices come out 3.3%–7.4% smaller, the one plan carrying an inline `imagery` block comes out ~96% smaller, and **13 of those 75 slices are larger than the plan** — all five domains on each of the two smallest plans, and single domains on two more — which the tool prints in those words, so the answer is "hand that domain the plan path" instead of a saving nobody got. `booking_options` and `sources` are kept by all five, and `booking_options` on measurement rather than theory: 3 of those 15 plans state a sunset or daylight fact inside `booking_options`, twice on a flight card as the stated reason for choosing that flight over another. The two auditors are refused by name — `consistency` and `completeness` compare two parts of the plan to each other, so a block removed from the file is indistinguishable from a block the plan never had. Slices are written to `slices/` beside the plan rather than into `plans/`, because `audit_workspace.py` recognises a plan by its *shape* — a `days` list and a `trip` key, which every slice has — over a non-recursive glob, so five slices dropped in there would become five extra "plans" in every later audit, each reported as an itinerary missing blocks it never had.
 
+</details>
+
+<details>
+<summary><b>The rest of the toolkit</b> — skeletons, link checks, imagery, figures, slicing, auditing</summary>
+
 ### Two more scripts
 
 **`new_plan_skeleton.py`** emits a structurally valid plan to fill in. The template lists every field but cannot express the rules relating them, so those used to be learned by failing: one measured run lost three edit-render round-trips and 21 structural errors to that. Unfilled values are `TODO:` markers `validate_trip_html.py` refuses to ship, so a faster start cannot become a hollow page.
@@ -252,6 +346,8 @@ python scripts/validate_trip_html.py final.html --plan plan.json
 
 python scripts/check_link_targets.py final.html
 ```
+
+</details>
 
 ---
 
