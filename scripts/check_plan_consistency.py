@@ -2605,6 +2605,39 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                 f"property's page on the platform that sells it -- one visit yields the price, "
                 f"the availability on these dates and the guest score together.")
             continue
+        # A REVIEW SCORE CANNOT BE READ OFF A PRICE SEARCH, and citing one as if it could is how
+        # a made-up number gets a source. Shipped, and caught by the traveller rather than by any
+        # gate here: both hotels on a delivered plan carried `guest_rating_source: "Booking.com"`
+        # with `guest_rating_url` set to the SAME dated Booking search the "compare prices" button
+        # used. That page shows rooms and rates; it has never shown a review score. The figures
+        # themselves were taken from a search-result summary that pooled several platforms -- a
+        # cross-platform review COUNT ("2776 reviews across platforms") ended up paired with one
+        # platform's SCORE, and the pairing was attributed to a site nobody had opened. The real
+        # figures, read off the property's own detail page, were 9.1 from 105 reviews and 8.1 from
+        # 101; the plan said 9.2 from 2776 and 7.9 from 2271.
+        #
+        # Checkable part: the citation may not be the availability search. A URL carrying check-in,
+        # check-out or occupancy parameters is a price-and-availability query by construction, and
+        # a citation byte-identical to the card's own comparison search is one nobody read a score
+        # from. What stays uncheckable is whether the number is right -- which is exactly why the
+        # link has to point somewhere a reader can go and see for themselves.
+        rating_url = str(option.get("guest_rating_url") or "")
+        if rating_url:
+            searches = {str(_obj(x).get("search_url") or "")
+                        for x in _seq(option.get("comparison_searches"))}
+            searches.discard("")
+            if rating_url in searches:
+                errors.append(
+                    f"accommodation '{name}': guest_rating_url is the same link as the price "
+                    f"comparison search. A search page shows rooms and rates, never a review "
+                    f"score, so nothing could have been read from it -- point it at the property's "
+                    f"own page on the platform the score comes from.")
+            elif re.search(r"[?&](checkin|checkout|check_in|check_out|group_adults|no_rooms|"
+                           r"adults|nights)=", rating_url):
+                errors.append(
+                    f"accommodation '{name}': guest_rating_url carries date/occupancy parameters, "
+                    f"so it is an availability search rather than the property's page. A review "
+                    f"score is not shown on one; cite the page the score was actually read from.")
         status = str(option.get("guest_rating_status") or "").lower()
         if status == "none":
             if not str(option.get("guest_rating_absence_reason") or "").strip():

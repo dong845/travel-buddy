@@ -2308,7 +2308,13 @@ def hotel_rating_line(item: dict) -> str:
     url = item.get("guest_rating_url")
     shown = f'{as_text(value)}/{as_text(scale)}'
     inner = (f'<a class="booking-link" data-booking-type="hotel" '
-             f'data-provider="{attr(item.get("comparison_platform") or source)}" '
+             # The score's source, not the booking platform. This link goes to the page the
+             # SCORE was read from, so the provider-identity check must be told that platform --
+             # with `comparison_platform` first, a rating could only ever be cited to the site
+             # you book on, and that is precisely what pushed a delivered plan into citing both
+             # hotels' Booking scores to the dated Booking price search: the one URL that both
+             # satisfied the check and cannot show a review score.
+             f'data-provider="{attr(source or item.get("comparison_platform"))}" '
              f'data-verified-at="{attr(item.get("guest_rating_checked_at"))}" href="{attr(url)}" '
              f'target="_blank" rel="noopener noreferrer">{esc(shown)}</a>') if url else esc(shown)
     reviews = f' · {as_text(count)} reviews' if count is not None else ""

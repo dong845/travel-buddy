@@ -184,8 +184,8 @@
         "guest_rating_value": 8.6,
         "guest_rating_scale": 10,
         "guest_rating_count": 740,
-        "guest_rating_source": "Booking.com",
-        "guest_rating_url": "https://www.booking.com/searchresults.html?ss=Fixture+Hotel+A&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1",
+        "guest_rating_source": "Trip.com",
+        "guest_rating_url": "https://www.trip.com/hotels/chengdu-hotel-detail-0/fixture-hotel-a/",
         "guest_rating_checked_at": "2026-07-30",
         "guest_rating_absence_reason": null
       },
@@ -243,8 +243,8 @@
         "guest_rating_value": 8.6,
         "guest_rating_scale": 10,
         "guest_rating_count": 740,
-        "guest_rating_source": "Booking.com",
-        "guest_rating_url": "https://www.booking.com/searchresults.html?ss=Fixture+Hotel+B&checkin=2026-09-28&checkout=2026-09-29&group_adults=2&no_rooms=1",
+        "guest_rating_source": "Trip.com",
+        "guest_rating_url": "https://www.trip.com/hotels/chengdu-hotel-detail-0/fixture-hotel-b/",
         "guest_rating_checked_at": "2026-07-30",
         "guest_rating_absence_reason": null
       }

@@ -2306,6 +2306,91 @@ def check_per_weekday_hours_are_used_when_present(check_dining, failures):
                         "govern, or every plan written before this field stops being checked")
 
 
+
+def check_a_review_score_is_not_cited_to_a_price_search(check_booking_identity, failures):
+    """A review score cannot be read off an availability search, so it may not be cited to one.
+
+    Shipped, and caught by the traveller rather than by anything here. Both hotels on a delivered
+    plan carried `guest_rating_source: "Booking.com"` with `guest_rating_url` set to the SAME dated
+    Booking search the compare-prices button used. That page shows rooms and rates; it has never
+    shown a review score, so nothing could have been read from it -- and nothing was. The figures
+    came from a search-result summary that pooled several platforms, which is how a CROSS-PLATFORM
+    review count ("2776 reviews across platforms") ended up paired with one platform's score and
+    attributed to a site nobody had opened. Published 9.2 from 2776 and 7.9 from 2271; the property
+    pages actually say 9.1 from 105 and 8.1 from 101.
+
+    Six more entries across two other saved trips in the same workspace carried it, so this is an
+    authoring habit rather than one slip -- which is the argument for a check rather than a note.
+
+    What is checkable is the citation, not the number. That is the point: the link has to go
+    somewhere a reader can look and disagree.
+    """
+    SEARCH = ("https://www.booking.com/searchresults.html?ss=Hotel+X"
+              "&checkin=2026-10-12&checkout=2026-10-19&group_adults=1&no_rooms=1")
+    PROPERTY = "https://www.trip.com/hotels/somewhere-hotel-detail-123/hotel-x/"
+
+    def plan(rating_url):
+        return {"booking_options": {"accommodations": [{
+            "property_name": "Hotel X", "guest_rating_status": "verified",
+            "guest_rating_value": 8.1, "guest_rating_scale": 10, "guest_rating_count": 101,
+            "guest_rating_source": "Trip.com", "guest_rating_url": rating_url,
+            "review_url": PROPERTY, "stay_group_id": "stay-1",
+            "comparison_searches": [{"platform": "Booking.com", "search_url": SEARCH,
+                                     "checked_at": "2026-09-12",
+                                     "prefilled_fields": ["destination"]}]}]}}
+
+    def run(url):
+        errs: list[str] = []
+        check_booking_identity(plan(url), errs, [])
+        return [e for e in errs if "guest_rating_url" in e]
+
+    if not run(SEARCH):
+        failures.append("rating citation: citing the score to the very same price search must be "
+                        "refused -- that page has never shown a review score")
+
+    # A comparison search with no date parameters is caught by the byte-identity rule alone --
+    # without this case, that rule could be deleted and the suite stayed green, because every
+    # other example here also carries check-in parameters.
+    bare = "https://www.booking.com/searchresults.html?ss=Hotel+X"
+    def plan_bare():
+        p = plan(bare)
+        p["booking_options"]["accommodations"][0]["comparison_searches"][0]["search_url"] = bare
+        return p
+    errs: list[str] = []
+    check_booking_identity(plan_bare(), errs, [])
+    if not [e for e in errs if "guest_rating_url" in e]:
+        failures.append("rating citation: a comparison search with no date parameters is still a "
+                        "search -- citing the score to the very same link must be refused")
+
+    other_search = SEARCH.replace("Hotel+X", "Hotel+Y")
+    if not run(other_search):
+        failures.append("rating citation: a DIFFERENT availability search is no better -- any URL "
+                        "carrying check-in/occupancy is a price query, not a property page")
+
+    if run(PROPERTY):
+        failures.append(f"rating citation: the property's own detail page must be accepted, got "
+                        f"{run(PROPERTY)[:1]}")
+
+    if run(""):
+        failures.append("rating citation: an absent URL is a different finding, owned elsewhere; "
+                        "this check must not fire on it")
+
+    # And the renderer has to make the honest form POSSIBLE. The rating link used to be labelled
+    # with `comparison_platform`, so a score could only ever be cited to the site you book on --
+    # cite it anywhere else and the provider-identity check failed the page. That is the structural
+    # reason the bad pattern was reachable at all, so it is fixed here rather than only warned
+    # about: the link goes to where the score was read, so it names that platform.
+    import render_final_trip_html as _r
+    line = _r.hotel_rating_line({"guest_rating_status": "verified", "guest_rating_value": 8.1,
+                                 "guest_rating_scale": 10, "guest_rating_count": 101,
+                                 "guest_rating_source": "Trip.com",
+                                 "guest_rating_url": PROPERTY,
+                                 "comparison_platform": "Booking.com"})
+    if 'data-provider="Trip.com"' not in line:
+        failures.append(f"rating citation: the rating link must name the platform the score came "
+                        f"from, not the booking platform, got {line[:200]!r}")
+
+
 def main() -> int:
     base = json.loads(FIXTURE.read_text(encoding="utf-8"))
     failures: list[str] = []
@@ -4289,6 +4374,8 @@ def main() -> int:
     check_a_flight_number_may_be_unresearched_but_never_invented(
         _renderer.itinerary_findings, failures)
     check_per_weekday_hours_are_used_when_present(CHECKER_MODULE.check_dining, failures)
+    check_a_review_score_is_not_cited_to_a_price_search(
+        CHECKER_MODULE.check_booking_identity, failures)
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
