@@ -12,6 +12,7 @@ import html
 import json
 import re
 import sys
+import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
@@ -1474,6 +1475,37 @@ def enum_cell(css_class: str, attribute: str, value: object, fallback: str) -> s
     return f'<span class="{css_class}" data-{attribute}="{attr(token)}">{esc(token)}</span>'
 
 
+def visible_text(value: object) -> str:
+    """What a reader can actually SEE in this value. Everything else is the empty string.
+
+    `str(value or "").strip()` is the idiom this replaces, and it answers a different question
+    than the one being asked. Two shapes get through it, both measured against the real gate:
+
+      * **A non-string.** `summary: ["x", "y"]` became the string `"['x', 'y']"`, which is not
+        empty, so the gate passed it -- and the page printed `['x', 'y']` to the traveller. The
+        contract cannot catch this either: templates/final-trip-plan.json writes free text as
+        `null` on purpose (a specimen string is a string somebody ships verbatim), so
+        check_plan_contract.py has no declared type to compare against. A list is not prose, and
+        pretending it is turned a type error into rendered output.
+      * **Invisible characters.** `str.strip()` removes whitespace, and U+200B ZERO WIDTH SPACE is
+        not whitespace to Python. A summary of one zero-width space satisfied "non-empty" and
+        rendered a card with a heading and nothing under it. Same for the BOM, soft hyphen, the
+        bidi marks, and unassigned code points -- every one of them counts as content to `strip()`
+        and as blank to a human. That is the exact failure this block exists to prevent: a gate
+        that says filled, a page that shows nothing.
+
+    So: strings only, and only their visible glyphs. Unicode categories C (control, format,
+    unassigned, private use, surrogate) and Z (every separator, not just ASCII space) are dropped
+    before the emptiness test. CJK, digits, punctuation and emoji all survive -- the test is
+    "would a reader see something", not "is this Latin", which is the mistake this file has made
+    four times in other places.
+    """
+    if not isinstance(value, str):
+        return ""
+    return "".join(ch for ch in value
+                   if not unicodedata.category(ch).startswith(("C", "Z"))).strip()
+
+
 def is_https(value: object) -> bool:
     if not isinstance(value, str):
         return False
@@ -2560,13 +2592,13 @@ def validate_plan(plan: dict) -> list[str]:
                     f"arrival_essentials.{name}.status must be one of: "
                     + ", ".join(ESSENTIAL_STATUSES) + "."))
             elif status == "not_applicable":
-                if not str(item.get("not_applicable_reason") or "").strip():
+                if not visible_text(item.get("not_applicable_reason")):
                     errors.append(cite("arrival.essentials",
                         f"arrival_essentials.{name} is not_applicable with no reason. 'The "
                         f"traveller is at home' is a reason; silence is indistinguishable from "
                         f"nobody having looked."))
             else:
-                if not str(item.get("summary") or "").strip():
+                if not visible_text(item.get("summary")):
                     errors.append(cite("arrival.essentials",
                         f"arrival_essentials.{name} needs a summary the traveller can act on."))
                 # Same evidence standard as every other researched fact here. Written from memory,
@@ -2583,7 +2615,7 @@ def validate_plan(plan: dict) -> list[str]:
                             f"date-time."))
         emergency = essentials.get("emergency")
         if isinstance(emergency, dict) and str(emergency.get("status")) == "researched" \
-                and not str(emergency.get("local_emergency_number") or "").strip():
+                and not visible_text(emergency.get("local_emergency_number")):
             errors.append(cite("arrival.essentials",
                 "arrival_essentials.emergency is researched but names no local emergency number. "
                 "That is the one field in this block somebody dials while something is going "

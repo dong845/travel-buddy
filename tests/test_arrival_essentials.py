@@ -140,6 +140,47 @@ def main() -> int:
     check("an unverified entry with no summary is refused", essentials_findings(mute),
           "a status with nothing under it tells the traveller nothing")
 
+    # 7b. "Non-empty" is not "readable", and the gate used to confuse them. Both shapes below
+    #     passed the first version of this block and reached the page: a list summary rendered as
+    #     `['x', 'y']`, and a summary of one zero-width space rendered a card with a heading and
+    #     nothing under it. Neither is catchable by the contract, which writes free text as `null`
+    #     on purpose, so the gate is the only place this can be decided.
+    for label, value in (
+            ("a number", 42),
+            ("a list", ["x", "y"]),
+            ("an object", {"a": 1}),
+            ("a zero-width space", "\u200b"),
+            ("a byte-order mark", "\ufeff"),
+            ("soft hyphens", "\u00ad\u00ad"),
+            ("bidi marks", "\u200e\u200f"),
+            ("an ideographic space", "\u3000"),
+    ):
+        blank = base_plan()
+        blank["arrival_essentials"]["payment"] = {"status": "unverified", "summary": value}
+        check(f"a summary that is {label} is refused", essentials_findings(blank),
+              "the gate says filled and the page shows nothing")
+
+    reason_blank = base_plan()
+    reason_blank["arrival_essentials"]["payment"] = {
+        "status": "not_applicable", "not_applicable_reason": "\u200b"}
+    check("a not_applicable reason of invisible characters is refused",
+          essentials_findings(reason_blank))
+
+    #     And the other half, which is what keeps the rule from being a Latin-only filter -- the
+    #     mistake this repository has made four times elsewhere. Every one of these is a real
+    #     answer and must survive.
+    for label, value in (
+            ("Chinese", "刷卡通用，山区备现金"),
+            ("digits only", "112"),
+            ("emoji and text", "\U0001f4b3 cards fine"),
+            ("Arabic", "البطاقات مقبولة"),
+            ("a zero-width joiner inside real words", "card\u200bs fine"),
+    ):
+        fine = base_plan()
+        fine["arrival_essentials"]["payment"] = {"status": "unverified", "summary": value}
+        check(f"a {label} summary is accepted", not essentials_findings(fine),
+              essentials_findings(fine))
+
     # 8. The number somebody dials while something is going wrong. A `researched` emergency entry
     #    with a paragraph and no number is the specific failure this rule exists for: it reads as
     #    complete, it passes every generic check above, and it is useless at the only moment it

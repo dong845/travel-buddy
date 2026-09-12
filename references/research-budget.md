@@ -146,6 +146,33 @@ weekday. Coordinates and ratings are not — a restaurant's score does not chang
 moved a day — but they arrive on the same page as the hours, so there is no earlier moment worth
 fetching them at either. Research the venue once, when the dates are settled.
 
+### The arrival essentials ride with the entry check — they are not a phase
+
+`arrival_essentials` adds four facts to every plan: can the traveller pay, get online, call for
+help, and are they insured. Four facts is not a research phase and must never be commissioned as
+one. **No new agent, no new round, no new checkpoint** — they go to the agent already doing the
+entry domain in feasibility, inside its existing cap, because they sit on that agent's own axis:
+every one of them is keyed to *nationality × destination*, which is the entry verdict's axis and
+nobody else's. The consulate is a fact about one passport in one country. Whether a Dutch EHIC
+works in Switzerland depends on the holder's nationality and not on the card. An agent that already
+holds those two values answers all four cheaply; any other agent has to be told them first, which
+costs more than the facts.
+
+**Budget roughly 4–6 lookups for the whole block, per *country*, not per stop.** Two of the four
+are usually one lookup each on the national tourist board (emergency numbers; plugs and voltage,
+which arrive on the same kind of page as card acceptance). The other two are the ones worth the
+searches, because they are the ones recalled wrongly: whether the traveller's own SIM and their own
+health cover reach this country. On a multi-country trip, re-ask only what actually changes —
+emergency numbers and consulates are per jurisdiction, while a roaming zone or a currency union
+often answers once for the whole trip. Say which you reused; do not silently carry one country's
+answer into another, which is the failure `entry_context.per_jurisdiction` already exists to stop.
+
+**And `unverified` is the budgeted way out.** An entry may say, in a summary the traveller can
+read, that it was not checked on this run — that is a valid status and the gate accepts it. So a
+run that is out of quota degrades to an honest "we did not check this" instead of the two bad
+options: inventing the number, or blocking delivery over four facts. What it may never do is stay
+silent, which is why the block is required and each entry must carry *something*.
+
 ## 6. Do not challenge what the traveller has already decided
 
 The adversarial pass is for claims *you* produced. A fact the traveller stated — "I have the
