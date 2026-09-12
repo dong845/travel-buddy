@@ -36,6 +36,22 @@ DEFAULT_WORKSPACE = Path.home() / "Travel Buddy"
 # Files that live in plans/ without being plans. The workspace mixes intake forms, next-action
 # handoffs, verification reports and discovery logs into the same directory as the itineraries,
 # so an audit that globbed *.json would report dozens of "broken plans" that were never plans.
+def _report_missing(plan: dict, path) -> str | None:
+    """The report path a `verified` plan names, when that path no longer resolves."""
+    if str(plan.get("verification_status") or "") != "verified":
+        return None
+    pointer = plan.get("verification_report")
+    if isinstance(pointer, dict):
+        return None                      # embedded rather than referenced: nothing to lose
+    if not isinstance(pointer, str) or not pointer.strip():
+        return "(none named)"
+    from pathlib import Path as _Path
+    candidate = _Path(pointer).expanduser()
+    if not candidate.is_absolute():
+        candidate = path.parent / pointer
+    return None if candidate.exists() else pointer
+
+
 NON_PLAN_PREFIXES = ("intake-", "next-action-", "verification-", "replan-",
                      "destination-discovery-", "intermediate-")
 
@@ -139,6 +155,13 @@ def audit_plan(path: Path) -> dict:
         "title": trip.get("title") or trip.get("destination") or path.stem,
         "start_date": trip.get("start_date"),
         "verification_status": plan.get("verification_status") or "(unset)",
+        # Does the evidence still exist? A plan claiming `verified` whose report is gone renders
+        # with no banner and reads as an authority nobody can check. Measured on the author's own
+        # workspace before save_trip_deliverables started carrying the report in: four of six
+        # `verified` plans pointed at files that no longer existed, two of them into a session
+        # scratchpad deleted when the session ended. This is the one claim on the page that cannot
+        # be re-derived from the plan, so it is the one worth chasing to disk.
+        "report_missing": _report_missing(plan, path),
         # How many checks existed when this plan was saved, against how many exist now. The gap
         # is the only honest way to read a finding count: 40 findings against 19 checks that all
         # existed at save time means the plan was wrong, while 40 against 8 means most of them
@@ -359,6 +382,10 @@ def main() -> int:
                  else "gates unrecorded (pre-stamp)")
         print(f"{mark} {result['total']:>4} finding(s)  {result['file']}"
               f"   [verification: {result['verification_status']}; {gates}]")
+        if result.get("report_missing"):
+            print(f"        ! claims verified, but its report {result['report_missing']!r} is not "
+                  f"there. The page renders with no banner, so this reads as an authority "
+                  f"nobody — including the traveller — can check.")
         if args.verbose and result["total"]:
             for error in result["structure_errors"] + result["consistency_errors"]:
                 print(f"        - {error.splitlines()[0][:160]}")

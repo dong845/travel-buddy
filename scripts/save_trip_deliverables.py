@@ -156,7 +156,18 @@ def main() -> int:
             return 2
         check_verification(report, consistency_errors, notes, plan=plan, plan_path=args.plan)
         plan["verification_status"] = "verified"
-        plan["verification_report"] = str(args.verification)
+        # The report is EVIDENCE, and evidence that lives outside the workspace is a claim with
+        # nothing behind it. Measured on the author's own workspace: of six plans claiming
+        # `verified`, four pointed at files that no longer exist -- two of them into
+        # /private/tmp/claude-501/..., a session scratchpad deleted when the session ends. Those
+        # pages still render as verified, with no banner, so a traveller reopening one a month
+        # later reads an authority claim they cannot check and neither can anyone else.
+        #
+        # That was structural rather than careless: the natural place to write a working report is
+        # a temp file, and this line stored whatever path it was handed. The imagery sidecar has
+        # been carried into the workspace for exactly this reason since it existed; the report
+        # is the more important of the two and was not.
+        plan["verification_report"] = None          # set after the copy below, beside the plan
     elif args.unverified:
         plan["verification_status"] = "unverified"
     else:
@@ -309,8 +320,18 @@ def main() -> int:
         print(f"note: removed {sidecar_path}, the previous save's photographs for this slug. This "
               f"plan carries none, and a leftover sidecar is found by name -- the delivered page "
               f"and a later re-render of the delivered plan would have disagreed about the trip.")
+    report_path = None
+    if args.verification:
+        report_path = plan_path.with_name(plan_path.stem + "-verification.json")
+        write_json_atomic(report_path, report)
+        plan["verification_report"] = report_path.name
+        # Rewritten into the plan AFTER the copy exists, and stored as a bare name relative to the
+        # plan -- the same shape as imagery_sidecar, so a workspace that moves keeps resolving.
+        write_json_atomic(plan_path, plan)
     print(f"Plan JSON: {plan_path}")
     print(f"Final HTML: {html_path}")
+    if report_path is not None:
+        print(f"Verification report: {report_path}")
     if carries_photos:
         print(f"Imagery sidecar: {sidecar_path} "
               f"({len(imagery)} image(s), {saved_bytes / 1024:.0f} KB)")

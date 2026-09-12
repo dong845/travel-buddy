@@ -2060,12 +2060,48 @@ def _hours_coverage_errors(domains: list[dict], plan: object) -> list[str]:
 
 
 @cites
+def _walk_strings(node: object, path: str = "") -> list[tuple[str, str]]:
+    """Every string in the report with the path it sits at, so a refusal can name the entry."""
+    found: list[tuple[str, str]] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            found.extend(_walk_strings(value, f"{path}.{key}" if path else str(key)))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(_walk_strings(value, f"{path}[{index}]"))
+    elif isinstance(node, str):
+        found.append((path or "report", node))
+    return found
+
+
 def check_verification(report: dict, errors: list[str], notes: list[str],
                        plan: dict | None = None, plan_path: str | None = None) -> None:
     """The report is written by the same run it vouches for, so treat it as an interested
     witness. These checks make the cheap forgeries fail; see the limitation note below for the
     one that cannot be automated."""
     report = _obj(report)
+
+    # An unfilled report is not a report, and nothing was refusing one. `new_plan_skeleton.py` has
+    # always marked what it cannot know with `TODO:` and the page gate has always refused to ship a
+    # plan still carrying one -- the verification report, which is the EVIDENCE document, had no
+    # such rule. Anyone could hand in a shell of placeholder text and this function would grade it
+    # on its dates and its pointers and pass it. That matters more here than anywhere else in the
+    # skill: a plan with a TODO in it looks unfinished, while a report with a TODO in it looks like
+    # somebody checked.
+    _placeholders = sorted({
+        f"{where}: {_short(value)}"
+        for where, value in _walk_strings(report)
+        if value.strip().upper().startswith("TODO")})
+    if _placeholders:
+        errors.append(
+            "verification report still carries placeholder text at "
+            + "; ".join(_placeholders[:4])
+            + (f" (and {len(_placeholders) - 4} more)" if len(_placeholders) > 4 else "")
+            + ". A report is the evidence for every 'verified' claim on the delivered page, so an "
+            "unfilled one is worse than none: the page renders without its banner and the "
+            "traveller reads an authority that nobody earned. Fill each entry with what was "
+            "actually checked, or delete the block and let the tier gate report the gap.")
+
     checked_at = str(report.get("checked_at") or "")
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", checked_at[:10]) or len(checked_at) < 10:
         errors.append("verification report needs an ISO checked_at date.")
