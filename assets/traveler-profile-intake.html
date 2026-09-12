@@ -70,7 +70,7 @@
       <section class="section">
         <h2>开始前</h2>
         <div class="grid">
-          <div><label for="profile-id">档案名称 <span>例如：my-travel-profile</span></label><input id="profile-id" required maxlength="80" autocomplete="off"></div>
+          <div><label for="profile-id">档案名称 <span>必填。以后用它来指定这份档案（例如有多份时），中文也可以</span></label><input id="profile-id" required maxlength="80" autocomplete="off" placeholder="例如：我的档案 或 my-travel-profile"></div>
           <div><label for="response-language">希望输出语言</label><select id="response-language"><option value="">未指定</option><option value="中文">中文</option><option value="English">English</option><option value="中文和 English">中文和 English</option><option value="其他">其他</option></select></div>
         </div>
         <label class="consent"><input id="consent" type="checkbox" required>我同意将下列旅行相关信息保存为本地 JSON，用于未来的旅行建议；我知道可以随时要求删除。</label>
@@ -83,7 +83,7 @@
           <div><label for="nationality">护照国籍</label><input id="nationality" placeholder="例如：中国"></div>
           <div><label for="residence-country">现居国家/地区 <span>你实际长期居住的国家</span></label><input id="residence-country" placeholder="例如：荷兰"></div>
           <div><label for="residence-status">在现居国的身份 <span>决定去哪些国家不用另办签证</span></label><select id="residence-status"><option value="">未指定</option><option value="eu_eea_ch_citizen">欧盟/欧洲经济区/瑞士公民</option><option value="member_state_residence_permit">第三国国籍 + 成员国居留卡（如荷兰居留卡）</option><option value="eu_long_term_resident">第三国国籍 + 欧盟长期居留</option><option value="short_stay_visa_or_visa_free">短期签证或免签停留</option><option value="other_or_unspecified">其他/不便说明</option></select></div>
-          <div><label for="residence">法定居住地 <span>可选，与现居国不同时才填</span></label><input id="residence" placeholder="例如：户籍所在地"></div>
+          <div><label for="residence">法定居住地 <span>可选。只有当它和上面的现居国不同才填，并且只写到国家 —— 判断入境规则用，不要填详细地址</span></label><input id="residence" placeholder="例如：中国"></div>
           <div><label for="languages">会使用的语言 <span>逗号分隔</span></label><input id="languages" placeholder="中文, English"></div>
           <div><label for="language-comfort">当地语言适应度</label><select id="language-comfort"><option value="">未指定</option><option>需要中文/英文支持</option><option>可用翻译工具</option><option>愿意沉浸当地语言</option></select></div>
           <div><label for="home-city">常住城市</label><input id="home-city" placeholder="例如：上海"></div>
@@ -95,10 +95,10 @@
 
       <section class="section">
         <h2>去过、想去与不推荐</h2>
-        <p class="hint">每行一条，字段用 <code>|</code> 分隔；不确定的字段可以留空。示例按钮会填入可参考的格式。</p>
-        <label for="visited">去过的地方 <span>地点 | 范围 | 时间 | 是否想重游（yes/no/maybe） | 简短备注</span></label><textarea id="visited" placeholder="东京 | city | 2024-04 | yes | 喜欢美食和步行"></textarea>
-        <label for="wishlist">想去的地方 <span>地点 | 范围 | 优先级 1–5 | 为什么</span></label><textarea id="wishlist" placeholder="冰岛 | country | 5 | 想看极光和火山"></textarea>
-        <label for="excluded">不推荐的地方 <span>地点 | 范围 | 原因（可简短） | never_recommend 或 avoid_for_now</span></label><textarea id="excluded" placeholder="某地 | country | 不想去 | never_recommend"></textarea>
+        <p class="hint" id="list-hint">每行一条，字段用 <code>|</code> 分隔；不确定的字段可以留空。范围可写 <code>城市</code>、<code>国家</code> 或 <code>区域</code>。示例按钮会填入可参考的格式。</p>
+        <label for="visited">去过的地方 <span>地点 | 范围 | 什么时候去的 | 还想再去吗（想 / 不想 / 说不好） | 简短备注</span></label><textarea id="visited" placeholder="东京 | 城市 | 2024-04 | 想 | 喜欢美食和步行"></textarea>
+        <label for="wishlist">想去的地方 <span>地点 | 范围 | 有多想去（1–5，5 最想） | 为什么</span></label><textarea id="wishlist" placeholder="冰岛 | 国家 | 5 | 想看极光和火山"></textarea>
+        <label for="excluded">不推荐的地方 <span>地点 | 范围 | 原因（可简短） | 力度（<b>永不推荐</b> / 暂时避开）</span></label><textarea id="excluded" placeholder="某地 | 国家 | 去过不喜欢 | 永不推荐"></textarea>
       </section>
 
       <section class="section">
@@ -147,9 +147,44 @@
       const text = (id) => $(id).value.trim();
       const list = (id) => text(id).split(",").map((value) => value.trim()).filter(Boolean);
       const checked = (name) => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
-      const lines = (id, mapper) => text(id).split("\n").map((line) => line.trim()).filter(Boolean).map((line) => mapper(line.split("|").map((part) => part.trim())));
+      const lines = (id, mapper) => text(id).split("\n").map((line) => line.trim()).filter(Boolean).map((line, index) => mapper(line.split("|").map((part) => part.trim()), index + 1));
+      // These three columns end up as EXACT string comparisons downstream --
+      // `exclusion_strength === "never_recommend"` decides whether a place is a hard filter at all,
+      // and `revisit_interest === "no"` decides whether it is kept off the shortlist. Passing the
+      // traveller's own words through unchanged is therefore not permissive, it is silent data
+      // loss: somebody who wrote 「绝对不去」 -- the strongest thing they can say -- got an
+      // exclusion that matched nothing and filtered nothing, with no error anywhere. So each
+      // column is normalised from what a person actually writes, and whatever is still
+      // unrecognised is REFUSED by name rather than stored as a value that quietly does nothing.
+      const pick = (raw, table, fallback, field, row) => {
+        const value = String(raw || "").trim();
+        if (!value) return fallback;
+        const key = value.toLowerCase();
+        for (const [canonical, spellings] of Object.entries(table)) {
+          if (canonical === key || spellings.includes(key)) return canonical;
+        }
+        throw new Error(`第 ${row} 行的「${field}」写的是「${value}」，这个词无法识别。可以写：`
+          + Object.values(table).map((spellings) => spellings[0]).join("、") + "。\n");
+      };
+      const SCOPE = { city_or_region: ["城市", "区域", "地区", "city", "region", "city_or_region"],
+                      country: ["国家", "country"] };
+      const REVISIT = { yes: ["想", "想再去", "是", "yes", "y"], no: ["不想", "不再去", "否", "no", "n"],
+                        maybe: ["说不好", "看情况", "也许", "maybe"], unknown: ["不确定", "unknown"] };
+      const STRENGTH = { never_recommend: ["永不推荐", "永远不去", "绝对不去", "never_recommend", "never"],
+                         avoid_for_now: ["暂时避开", "暂时不去", "这次不去", "avoid_for_now", "avoid"] };
+      // A priority the traveller typed as 「高」 used to become `null` through Number() -- the wish
+      // list silently lost its ranking. Out-of-range numbers were stored as given, so a 999 sorted
+      // above every real answer.
+      const rank = (raw, row) => {
+        const value = String(raw || "").trim();
+        if (!value) return null;
+        const number = Number(value);
+        if (!Number.isInteger(number) || number < 1 || number > 5) {
+          throw new Error(`第 ${row} 行的「有多想去」写的是「${value}」，这里要填 1 到 5 的整数（5 最想），或者留空。\n`);
+        }
+        return number;
+      };
       const today = () => new Date().toISOString().slice(0, 10);
-      const safeId = (value) => value.replace(/[^\w-]+/gu, "-").replace(/^-+|-+$/g, "") || "travel-profile";
       function buildProfile() {
         const profileId = text("profile-id");
         if (!profileId || !$("consent").checked) throw new Error("请填写档案名称并确认本地保存同意。\n");
@@ -160,9 +195,9 @@
           home_and_logistics: { home_city: text("home-city") || null, home_country: text("home-country") || null, acceptable_departure_airports: list("airports"), default_currency: text("currency") || null, typical_cabin_or_seat_preference: text("cabin") || null, self_drive_preference: text("self-drive") || null },
           digital_travel_access: { preferred_map_apps: list("map-apps"), preferred_booking_platforms: list("booking-platforms"), services_to_avoid: list("services-to-avoid"), google_services_access: text("google-access") || "unknown", booking_access_notes: text("booking-access-notes") || null, notes: text("service-notes") || null },
           travel_history: {
-            visited_places: lines("visited", ([place, scope, visit_period, revisit_interest, notes]) => ({ place: place || null, scope: scope || "city_or_region", visit_period: visit_period || null, revisit_interest: revisit_interest || "unknown", notes: notes || null })),
-            wish_list: lines("wishlist", ([place, scope, priority, why]) => ({ place: place || null, scope: scope || "city_or_region", priority: priority ? Number(priority) : null, why: why || null })),
-            excluded_places: lines("excluded", ([place, scope, reason, exclusion_strength]) => ({ place: place || null, scope: scope || "city_or_region", reason: reason || null, exclusion_strength: exclusion_strength || "never_recommend", confirmed_at: today() }))
+            visited_places: lines("visited", ([place, scope, visit_period, revisit_interest, notes], row) => ({ place: place || null, scope: pick(scope, SCOPE, "city_or_region", "范围", row), visit_period: visit_period || null, revisit_interest: pick(revisit_interest, REVISIT, "unknown", "还想再去吗", row), notes: notes || null })),
+            wish_list: lines("wishlist", ([place, scope, priority, why], row) => ({ place: place || null, scope: pick(scope, SCOPE, "city_or_region", "范围", row), priority: rank(priority, row), why: why || null })),
+            excluded_places: lines("excluded", ([place, scope, reason, exclusion_strength], row) => ({ place: place || null, scope: pick(scope, SCOPE, "city_or_region", "范围", row), reason: reason || null, exclusion_strength: pick(exclusion_strength, STRENGTH, "never_recommend", "力度", row), confirmed_at: today() }))
           },
           recurring_preferences: { experience_direction: text("direction") || null, natural_subtypes: checked("natural"), human_cultural_subtypes: checked("cultural"), pace: text("pace") || null, lodging_style: text("lodging") || null, location_priority: text("location-priority") || null, food_and_dietary_preferences: list("dietary"), accessibility_needs: list("accessibility"), comfort_and_safety_preferences: [], avoid_list: list("avoid-list") },
           data_controls: { last_reviewed_at: today(), sensitive_data_not_stored: ["passport number", "passport or visa image", "payment card or bank details", "exact home address", "account credentials"], forget_on_explicit_request: true }
@@ -230,7 +265,7 @@
       }
       loadExisting(intakeConfig.existing_profile);
 
-      $("fill-example").addEventListener("click", () => { $("profile-id").value = "example-traveler"; $("consent").checked = true; $("response-language").value = "中文"; $("nationality").value = "示例国籍"; $("residence-country").value = "示例现居国"; $("residence-status").value = "member_state_residence_permit"; $("residence").value = ""; $("languages").value = "中文, English"; $("home-city").value = "示例城市"; $("home-country").value = "示例国家"; $("airports").value = "AAA, BBB"; $("currency").value = "CNY"; $("map-apps").value = "高德地图, Google Maps"; $("booking-platforms").value = "携程, Trip.com"; $("google-access").value = "unavailable"; $("services-to-avoid").value = "需要 VPN 的服务"; $("booking-access-notes").value = "避免必须本地手机号或当地支付方式的渠道"; $("service-notes").value = "中国大陆路线优先高德地图"; $("visited").value = "东京 | city | 2024-04 | yes | 喜欢美食和步行"; $("wishlist").value = "冰岛 | country | 5 | 想看极光和火山"; $("excluded").value = "示例地点 | country | 目前不想去 | avoid_for_now"; $("direction").value = "balance"; $("pace").value = "适中"; $("lodging").value = "舒适中档"; $("location-priority").value = "景点步行范围"; $("self-drive").value = "可接受自驾"; $("cabin").value = "经济舱，可接受一次转机"; $("dietary").value = "无辣"; $("accessibility").value = "避免长距离步行"; $("avoid-list").value = "红眼航班"; document.querySelector('input[name="natural"][value="雪景/极光"]').checked = true; document.querySelector('input[name="cultural"][value="当地美食"]').checked = true; status.className = "status"; status.textContent = "已填入虚构示例；请替换为自己的信息后再生成。"; });
+      $("fill-example").addEventListener("click", () => { $("profile-id").value = "example-traveler"; $("consent").checked = true; $("response-language").value = "中文"; $("nationality").value = "示例国籍"; $("residence-country").value = "示例现居国"; $("residence-status").value = "member_state_residence_permit"; $("residence").value = ""; $("languages").value = "中文, English"; $("home-city").value = "示例城市"; $("home-country").value = "示例国家"; $("airports").value = "AAA, BBB"; $("currency").value = "CNY"; $("map-apps").value = "高德地图, Google Maps"; $("booking-platforms").value = "携程, Trip.com"; $("google-access").value = "unavailable"; $("services-to-avoid").value = "需要 VPN 的服务"; $("booking-access-notes").value = "避免必须本地手机号或当地支付方式的渠道"; $("service-notes").value = "中国大陆路线优先高德地图"; $("visited").value = "东京 | 城市 | 2024-04 | 想 | 喜欢美食和步行"; $("wishlist").value = "冰岛 | 国家 | 5 | 想看极光和火山"; $("excluded").value = "示例地点 | 国家 | 目前不想去 | 暂时避开"; $("direction").value = "balance"; $("pace").value = "适中"; $("lodging").value = "舒适中档"; $("location-priority").value = "景点步行范围"; $("self-drive").value = "可接受自驾"; $("cabin").value = "经济舱，可接受一次转机"; $("dietary").value = "无辣"; $("accessibility").value = "避免长距离步行"; $("avoid-list").value = "红眼航班"; document.querySelector('input[name="natural"][value="雪景/极光"]').checked = true; document.querySelector('input[name="cultural"][value="当地美食"]').checked = true; status.className = "status"; status.textContent = "已填入虚构示例；请替换为自己的信息后再生成。"; });
     })();
   </script>
 </body>

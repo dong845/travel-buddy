@@ -14,7 +14,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from serve_trip_intake import IntakeRequestGuard, TripIntakeServer, mint_token, profile_defaults_from_profile, request_route
+from serve_trip_intake import blocking_advice, IntakeRequestGuard, TripIntakeServer, mint_token, profile_defaults_from_profile, request_route
 from travel_workspace import DEFAULT_WORKSPACE, profile_filename, validate_profile
 
 
@@ -174,6 +174,9 @@ def main() -> int:
     host, port = server.server_address
     print(f"OPEN THIS LOCAL LINK: http://{host}:{port}/?token={server.token}", flush=True)
     print("WAITING FOR ONE PROFILE SUBMISSION. The server accepts only this computer's loopback requests, and only through the whole link above: the token in it is what proves the page is the one this terminal opened. Copy the link in full.", flush=True)
+    advice = blocking_advice()
+    if advice:
+        print(advice, flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

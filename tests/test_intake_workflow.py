@@ -832,6 +832,58 @@ def check_a_reader_can_tell_a_live_link_from_a_dead_one(module, check) -> None:
             stop_detached(watcher_pid)
 
 
+def check_a_blocking_run_tells_a_weaker_agent_what_to_do(module, check) -> None:
+    """A foreground run blocks for minutes; it now says so and names --detach.
+
+    Measured before the fix, with the server started exactly the way a Codex-style agent would:
+    the link IS flushed before `serve_forever()` blocks, so it does reach the agent -- and then
+    nothing else is ever said. A harness that cannot background a command holds its tool call open
+    until the command timeout kills the server mid-fill, taking the traveller's unsaved answers
+    with it, and no line anywhere told the agent that `--detach` was the way out. Every gate in
+    this skill already names its successor for the same reason: an assistant that cannot hold
+    SKILL.md in context rebuilds the next step from what the last command printed.
+
+    The advice must ALSO stay silent when the run is already detached, or it becomes a stale
+    instruction inside the log file an agent polls.
+    """
+    import serve_trip_intake
+
+    advice = serve_trip_intake.blocking_advice()
+    check("a foreground run is told about --detach",
+          "--detach" in advice and advice.strip(),
+          "a blocking command that does not name its escape hatch is the gap this closes")
+    check("the advice names the log file to poll instead of the pipe",
+          ".intake-" in advice and "log" in advice, advice)
+
+    # A detached server is its own session leader: that is precisely what setsid() makes it, so
+    # the check needs no plumbing between the launcher and the server.
+    real = os.getsid
+    try:
+        os.getsid = lambda _pid: os.getpid()
+        check("an already-detached run says nothing", serve_trip_intake.blocking_advice() == "",
+              "advice to detach, printed inside a detached run, is a stale instruction in the one "
+              "file an agent is polling")
+    finally:
+        os.getsid = real
+
+    # Where POSIX sessions do not exist the safe answer is to advise, not to guess silent.
+    try:
+        def explode(_pid):
+            raise OSError("no sessions here")
+        os.getsid = explode
+        check("a platform without sessions still gets the advice",
+              "--detach" in serve_trip_intake.blocking_advice(),
+              "silence costs the form; a redundant line costs nothing")
+    finally:
+        os.getsid = real
+
+    # And both servers must use the one copy, not two that drift.
+    import serve_profile_intake
+    check("the profile server shares the trip server's copy",
+          serve_profile_intake.blocking_advice is serve_trip_intake.blocking_advice,
+          "two copies of a message is how the English-guard list drifted from the renderer")
+
+
 def main() -> int:
     module = load_workflow()
     failures: list[str] = []
@@ -850,6 +902,7 @@ def main() -> int:
     check_dead_link_files_do_not_accumulate(module, check)
     check_a_link_file_does_not_outlive_its_server(module, check)
     check_a_reader_can_tell_a_live_link_from_a_dead_one(module, check)
+    check_a_blocking_run_tells_a_weaker_agent_what_to_do(module, check)
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)

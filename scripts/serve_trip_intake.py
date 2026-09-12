@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -667,6 +668,37 @@ class TripIntakeHandler(IntakeRequestGuard, BaseHTTPRequestHandler):
         threading.Thread(target=self.server.shutdown, daemon=True).start()
 
 
+def blocking_advice(command: str = "python scripts/start_intake_workflow.py") -> str:
+    """The line an agent needs when this command is about to block for minutes, and only then.
+
+    `serve_forever()` holds the terminal until a real person finishes typing into a form. Claude
+    Code can background a tool call and poll it; opencode, Cursor, Cline and Codex cannot -- the
+    call itself holds the link hostage until the harness command timeout kills the server mid-fill,
+    and the traveller's unsaved answers go with it. Measured: the link IS flushed before the block,
+    so it does reach the agent. What never reached it was the sentence saying what to do about the
+    block, and an agent that cannot hold SKILL.md in context rebuilds the next step from whatever
+    the last command printed -- the same reason every gate here names its successor.
+
+    Printed only when this process is NOT its own session leader. `--detach` starts the server with
+    setsid, so a detached run IS the session leader and stays quiet: its output goes to a log an
+    agent polls, and advice to detach inside an already-detached run is the stale kind of
+    instruction that teaches readers to stop trusting the output. Where POSIX sessions do not exist
+    (Windows), it advises rather than guessing, because a wrong silence costs the form.
+    """
+    try:
+        if os.getsid(0) == os.getpid():
+            return ""
+    except (AttributeError, OSError):
+        pass
+    return ("IF YOUR CLI CANNOT RUN A COMMAND IN THE BACKGROUND, STOP THIS AND RERUN WITH "
+            f"--detach: `{command} --detach` starts the same server in its own session, prints the "
+            "same link, and exits in a fraction of a second, so nothing holds your tool call open. "
+            "Everything the server prints afterwards goes to the .intake-<port>.log file it names; "
+            "poll that file instead of this pipe. Staying in the foreground is safe only if your "
+            "harness can background a command and keep it alive for the minutes a real person "
+            "spends filling in the form.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Open a local Travel Buddy initial trip intake page.")
     parser.add_argument("--workspace", default=str(DEFAULT_WORKSPACE), help="Workspace containing plans")
@@ -693,6 +725,9 @@ def main() -> int:
     host, port = server.server_address
     print(f"OPEN THIS LOCAL LINK: http://{host}:{port}/?token={server.token}", flush=True)
     print("WAITING FOR ONE TRIP INTAKE SUBMISSION. The server accepts only this computer's loopback requests, and only through the whole link above: the token in it is what proves the page is the one this terminal opened. Copy the link in full.", flush=True)
+    advice = blocking_advice()
+    if advice:
+        print(advice, flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
