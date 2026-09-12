@@ -58,6 +58,10 @@
       "limited",
       "unknown"
     ],
+    "booking_options.flights[].outbound_itinerary.service_identifier_status": [
+      "researched",
+      "unresearched"
+    ],
     "booking_options.flights[].price_basis": [
       "per_person_round_trip"
     ],
@@ -66,10 +70,18 @@
       "researched_current",
       "user_confirmed"
     ],
+    "booking_options.flights[].return_itinerary.service_identifier_status": [
+      "researched",
+      "unresearched"
+    ],
     "booking_options.ground_transport[].availability_status": [
       "available",
       "limited",
       "unknown"
+    ],
+    "booking_options.ground_transport[].outbound_itinerary.service_identifier_status": [
+      "researched",
+      "unresearched"
     ],
     "booking_options.ground_transport[].price_basis": [
       "per_person_round_trip"
@@ -78,6 +90,10 @@
       "estimate",
       "researched_current",
       "user_confirmed"
+    ],
+    "booking_options.ground_transport[].return_itinerary.service_identifier_status": [
+      "researched",
+      "unresearched"
     ],
     "booking_options.rental_cars[].availability_status": [
       "available",
@@ -460,7 +476,9 @@
           "arrival_local": null,
           "duration_minutes": null,
           "stops": null,
-          "connection_or_terminal_note": null
+          "connection_or_terminal_note": null,
+          "service_identifier_status": "researched",
+          "service_identifier_unresearched_reason": null
         },
         "return_itinerary": {
           "service_identifier": null,
@@ -468,7 +486,9 @@
           "arrival_local": null,
           "duration_minutes": null,
           "stops": null,
-          "connection_or_terminal_note": null
+          "connection_or_terminal_note": null,
+          "service_identifier_status": "researched",
+          "service_identifier_unresearched_reason": null
         },
         "cabin": null,
         "baggage_assumption": null,
@@ -506,7 +526,9 @@
           "arrival_local": null,
           "duration_minutes": null,
           "stops": null,
-          "connection_or_terminal_note": null
+          "connection_or_terminal_note": null,
+          "service_identifier_status": "researched",
+          "service_identifier_unresearched_reason": null
         },
         "return_itinerary": {
           "service_identifier": null,
@@ -514,7 +536,9 @@
           "arrival_local": null,
           "duration_minutes": null,
           "stops": null,
-          "connection_or_terminal_note": null
+          "connection_or_terminal_note": null,
+          "service_identifier_status": "researched",
+          "service_identifier_unresearched_reason": null
         },
         "one_way_reason": null,
         "material_conditions": null,

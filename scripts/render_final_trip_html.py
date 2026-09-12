@@ -34,6 +34,9 @@ ROUTE_MAP_SCOPES = {"multi_stop", "primary_leg"}
 # localize them; a free-form status would print an English enum on a Chinese page.
 BOOKING_STATES = ("idea", "researched", "held", "booked")
 DAY_TYPES = ("arrival", "departure", "full", "transfer")
+# A flight number is either the right string or a lie -- it cannot be estimated the way a fare
+# can. `unresearched` is the dining rating's `none` for this field: a blank that says why.
+SERVICE_IDENTIFIER_STATUSES = ("researched", "unresearched")
 # The four questions the first hour on the ground has to answer, and the three states each may
 # be in. Module-level so check_plan_contract.py can report a wrong value in its one pass rather
 # than leaving it to a second round trip through this gate.
@@ -1989,7 +1992,13 @@ def flight_leg_summary(leg: object, kind: str = "flight") -> str:
     return " · ".join(
         part
         for part in (
-            as_text(leg.get("service_identifier"), ""),
+            # An unresearched identifier prints its REASON, not a gap. A blank here reads as an
+            # oversight; the sentence reads as what it is -- a fact nobody could check yet, with
+            # the place to check it named. The gate refuses the third possibility, a number
+            # sitting under a label that says nobody looked.
+            (as_text(leg.get("service_identifier"), "")
+             if str(leg.get("service_identifier_status") or "researched") == "researched"
+             else as_text(leg.get("service_identifier_unresearched_reason"), "")),
             " → ".join(part for part in (as_text(leg.get("departure_local"), ""), as_text(leg.get("arrival_local"), "")) if part),
             minutes(leg.get("duration_minutes")),
             f"{as_text(leg.get('stops'))} {stop_noun}" if leg.get("stops") is not None else "",
@@ -2562,6 +2571,63 @@ def intake_context_errors(intake_context: object) -> list[str]:
     return errors
 
 
+def itinerary_findings(leg: object, label: str, cite_fn) -> list[str]:
+    """What a flight or ground leg owes, with one honest way out for the service identifier.
+
+    The identifier is the one field on this card that cannot be derived, estimated or bracketed:
+    a fare has a range, a duration has a typical value, but a flight number is either the right
+    string or a lie. When the author has not been able to price the actual services for the actual
+    dates -- which is the ordinary case on a route with no direct flight, where the search page is
+    the only place the answer exists -- the contract used to leave two moves: invent a plausible
+    number, or put prose in a field meant for a code. Both were taken on one real run, and the
+    first is the worse of the two by a distance: a fabricated `KL1927` reads as researched to
+    every gate and to the traveller, and this repository has already shipped exactly that.
+
+    So the identifier gets the same escape the dining rating has -- `rating_status: "none"` plus a
+    written reason -- and for the same reason: a blank that says why it is blank is information,
+    while a confident wrong value is a defect nothing downstream can see. Everything else on the
+    leg is still required, because "I could not name the flight" is not "I know nothing about the
+    journey": the duration, the stops and the interchange note all come off the route itself.
+    """
+    found: list[str] = []
+    if not isinstance(leg, dict):
+        return [cite_fn("booking.option_contract",
+                        f"{label} needs the service identifier, local times, duration, changes, "
+                        f"and an interchange note.")]
+    status = str(leg.get("service_identifier_status") or "researched")
+    if status not in SERVICE_IDENTIFIER_STATUSES:
+        return [cite_fn("booking.option_contract",
+                        f"{label}.service_identifier_status must be researched or unresearched.")]
+    required = ["departure_local", "arrival_local", "duration_minutes", "stops",
+                "connection_or_terminal_note"]
+    if status == "researched":
+        required.append("service_identifier")
+    else:
+        if not str(leg.get("service_identifier_unresearched_reason") or "").strip():
+            found.append(cite_fn("booking.option_contract",
+                f"{label} is marked unresearched with no reason. Say what could not be checked and "
+                f"where the traveller will find it -- a blank that explains itself is information, "
+                f"an invented flight number is not."))
+        if str(leg.get("service_identifier") or "").strip():
+            found.append(cite_fn("booking.option_contract",
+                f"{label} is marked unresearched but still carries a service identifier "
+                f"{leg.get('service_identifier')!r}. Clear it, or drop the unresearched mark: a "
+                f"value sitting under a label that says nobody checked it is the worst of both."))
+        # The times are what a traveller plans the day around, so an unresearched identifier does
+        # not excuse them -- but it does mean they may be the intended window rather than a
+        # booked one, which the reason above is where to say.
+    if any(leg.get(key) is None or leg.get(key) == "" for key in required):
+        found.append(cite_fn("booking.option_contract",
+            f"{label} needs " + ("the service identifier, " if status == "researched" else "")
+            + "local times, duration, changes, and an interchange note."))
+    elif not (isinstance(leg.get("duration_minutes"), (int, float))
+              and not isinstance(leg.get("duration_minutes"), bool)
+              and leg["duration_minutes"] > 0):
+        found.append(cite_fn("booking.option_contract",
+            f"{label}.duration_minutes must be a positive number of minutes."))
+    return found
+
+
 def validate_plan(plan: dict) -> list[str]:
     errors: list[str] = []
     if not is_iso_datestamp(plan.get("generated_at")):
@@ -3079,14 +3145,7 @@ def validate_plan(plan: dict) -> list[str]:
                 if not is_iso_datestamp(item.get("round_trip_search_checked_at")):
                     errors.append(cite("booking.option_contract", "ground.round_trip_search_checked_at must be an ISO date or date-time."))
                 for leg_name in ("outbound_itinerary",) if one_way else ("outbound_itinerary", "return_itinerary"):
-                    leg = item.get(leg_name)
-                    if not isinstance(leg, dict) or not all(leg.get(key) is not None and leg.get(key) != "" for key in ("service_identifier", "departure_local", "arrival_local", "duration_minutes", "stops", "connection_or_terminal_note")):
-                        errors.append(cite("booking.option_contract", f"ground.{leg_name} needs the service identifier, local times, duration, changes, and an interchange note."))
-                    elif not (isinstance(leg.get("duration_minutes"), (int, float)) and not isinstance(leg.get("duration_minutes"), bool) and leg["duration_minutes"] > 0):
-                        # A journey of zero minutes is not a researched journey, and zero was what
-                        # the contract template seeded the field with -- so the one value that
-                        # means "I did not fill this in" was the one value every gate accepted.
-                        errors.append(cite("booking.option_contract", f"ground.{leg_name}.duration_minutes must be a positive number of minutes."))
+                    errors.extend(itinerary_findings(item.get(leg_name), f"ground.{leg_name}", cite))
                 if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
                     errors.append(cite("booking.option_contract", "ground.availability_status must be available, limited, or unknown."))
                 if item.get("price_basis") != "per_person_round_trip":
@@ -3145,9 +3204,7 @@ def validate_plan(plan: dict) -> list[str]:
                 if not is_iso_datestamp(item.get("round_trip_search_checked_at")):
                     errors.append(cite("booking.option_contract", "flight.round_trip_search_checked_at must be an ISO date or date-time."))
                 for leg_name in ("outbound_itinerary", "return_itinerary"):
-                    leg = item.get(leg_name)
-                    if not isinstance(leg, dict) or not all(leg.get(key) is not None and leg.get(key) != "" for key in ("service_identifier", "departure_local", "arrival_local", "duration_minutes", "stops", "connection_or_terminal_note")):
-                        errors.append(cite("booking.option_contract", f"flight.{leg_name} needs carrier/flight or service identifier, local times, duration, stops, and connection/terminal note."))
+                    errors.extend(itinerary_findings(item.get(leg_name), f"flight.{leg_name}", cite))
                 if not is_one_of(item.get("availability_status"), {"available", "limited", "unknown"}):
                     errors.append(cite("booking.option_contract", "flight.availability_status must be available, limited, or unknown."))
                 if item.get("price_basis") != "per_person_round_trip":

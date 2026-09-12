@@ -212,6 +212,10 @@ def _vocabularies() -> tuple[dict, str]:
                  "rental_cars"):
         table[f"booking_options.{kind}[].price_status"] = price
         table[f"booking_options.{kind}[].availability_status"] = avail
+    for kind in ("flights", "ground_transport"):
+        for leg in ("outbound_itinerary", "return_itinerary"):
+            table[f"booking_options.{kind}[].{leg}.service_identifier_status"] = \
+                set(renderer.SERVICE_IDENTIFIER_STATUSES)
     for entry in renderer.ESSENTIAL_ENTRIES:
         table[f"arrival_essentials.{entry}.status"] = set(renderer.ESSENTIAL_STATUSES)
     return table, ""

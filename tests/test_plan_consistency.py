@@ -2131,6 +2131,68 @@ def json_output_cases(base: dict) -> list[str]:
     return failures
 
 
+
+def check_a_flight_number_may_be_unresearched_but_never_invented(itinerary_findings, failures):
+    """The one field on a booking card that cannot be estimated, and its honest blank.
+
+    A fare has a range and a duration has a typical value, but a service identifier is either the
+    right string or a lie. The contract used to require it unconditionally, which left an author
+    who could not price the actual services two moves: invent a plausible number, or put prose in
+    a field meant for a code. Both were taken on one real run -- and this repository has already
+    shipped a fabricated `KL1927`, which reads as researched to every gate and to the traveller.
+
+    So the identifier now has the escape the dining rating has had all along (`rating_status:
+    "none"` plus a written reason). The four cases below are the whole rule.
+
+    Written against `itinerary_findings` directly rather than against the fixture, and that is not
+    a style choice: the first version built legs on top of booking-ready-fixture.json, which
+    carries **zero flight cards**, so its own `if not flights: return` guard skipped everything and
+    the case passed while three mutations of the code it claimed to test all survived. A test whose
+    subject the fixture does not contain is a test that reports on nothing.
+    """
+    def leg(**over):
+        base = {"service_identifier": "AA123", "departure_local": "09:10", "arrival_local": "18:40",
+                "duration_minutes": 570, "stops": 1, "connection_or_terminal_note": "via PHL"}
+        base.update(over)
+        return [e for e in itinerary_findings(base, "flight.outbound_itinerary", lambda _r, m: m)]
+
+    if leg():
+        failures.append(f"flight identifier: a fully researched leg must pass, got {leg()[:1]}")
+
+    honest = leg(service_identifier=None, service_identifier_status="unresearched",
+                 service_identifier_unresearched_reason="No direct route; the carrier and number "
+                 "only exist on the search page for these dates.")
+    if honest:
+        failures.append(f"flight identifier: unresearched WITH a reason must pass, got {honest[:1]}")
+
+    mute = leg(service_identifier=None, service_identifier_status="unresearched",
+               service_identifier_unresearched_reason=None)
+    if not mute:
+        failures.append("flight identifier: unresearched with no reason must be refused -- a blank "
+                        "that does not explain itself is indistinguishable from an oversight")
+
+    both = leg(service_identifier="KL1927", service_identifier_status="unresearched",
+               service_identifier_unresearched_reason="not checked")
+    if not both:
+        failures.append("flight identifier: a number under an 'unresearched' label must be refused; "
+                        "that is the fabricated-flight-number defect wearing a disclaimer")
+
+    missing = leg(service_identifier=None)
+    if not missing:
+        failures.append("flight identifier: a researched leg with no identifier must still be "
+                        "refused, or the escape becomes the default")
+
+    # Everything else about this leg is legitimate, so ONLY the vocabulary check can refuse it.
+    # The first version wrote `leg(service_identifier_status="probably")` with the identifier still
+    # filled in, which the unresearched-needs-a-reason rule caught instead -- so the case passed
+    # while a mutation that deleted the vocabulary check survived.
+    bogus = leg(service_identifier=None, service_identifier_status="probably",
+                service_identifier_unresearched_reason="not checked")
+    if not bogus:
+        failures.append("flight identifier: an invented status must be refused by the vocabulary "
+                        "check, not left to another rule to catch by accident")
+
+
 def main() -> int:
     base = json.loads(FIXTURE.read_text(encoding="utf-8"))
     failures: list[str] = []
@@ -4109,6 +4171,10 @@ def main() -> int:
     failures += rule_split_cases()
     failures += pointer_cases(base)
     failures += json_output_cases(base)
+
+    import render_final_trip_html as _renderer
+    check_a_flight_number_may_be_unresearched_but_never_invented(
+        _renderer.itinerary_findings, failures)
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
