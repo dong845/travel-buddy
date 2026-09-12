@@ -243,7 +243,7 @@ def dining_card(meal: str, anchor: str) -> dict:
         "time_window": f"{TODO}HH:MM-HH:MM",
         # Researched, not unverified, because a card that names a seating time is claiming the
         # venue is open then; check_plan_consistency refuses the pair "unverified" + a clock.
-        "venue_hours": f"{TODO}Mon-Sun HH:MM-HH:MM (the days it is OPEN)",
+        "venue_hours": f"{TODO}Mon-Sun HH:MM-HH:MM (the days it is OPEN)", "venue_hours_by_weekday": None,
         "hours_status": "researched",
         # Opening the venue's map page hands you all five of these in one read, plus the
         # coordinates the route segments need.
@@ -624,6 +624,10 @@ def main() -> int:
     # anyone expects at this prompt. Warn where it starts to hurt, refuse where it is certainly a
     # mistake, and let --oversize through for the person who genuinely means it.
     dining_estimate = max(0, span - 2) * 2 + 2
+    # Whether a second city exists at all, which decides what the size advice below can honestly
+    # recommend. Absent an intake there is nothing to read, so the flag-only path is unchanged.
+    single_base = (str(dig(intake, "destination_scope", "trip_shape", "state") or "")
+                   == "single_base") if intake else False
     if span > OVERSIZE_DAYS or args.stops_per_day > OVERSIZE_STOPS:
         if not args.oversize:
             print(
@@ -645,7 +649,15 @@ def main() -> int:
             f"NOTE: {span} days x {args.stops_per_day} stops/day is a large plan -- roughly "
             f"{dining_estimate} dining cards and {span * (args.stops_per_day + 1)} route segments "
             f"to research, and the verification pass scales with the number of claims rather than "
-            f"the number of nights. Consider one plan per city.",
+            f"the number of nights. "
+            # "Consider one plan per city" is only advice if there is a second city. On a
+            # single-base trip -- which the intake states outright -- it names a split that cannot
+            # be made, and advice a reader cannot act on teaches them to skip the next note. The
+            # lever on a long stay in one place is stops per day, not cities.
+            + ("Cut --stops-per-day rather than splitting the plan: the intake says this trip "
+               "keeps one base, so there is no second city to split off."
+               if single_base else
+               "Consider one plan per city."),
             file=sys.stderr)
 
     days = []

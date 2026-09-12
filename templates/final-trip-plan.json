@@ -757,7 +757,17 @@
           "reservation_provider": null,
           "reservation_url": null,
           "backup_venue_name": null,
-          "backup_note": null
+          "backup_note": null,
+          "venue_hours_by_weekday": {
+            "_comment": "Optional and sharper than venue_hours. One key per weekday, mon..sun. A time window like '11:00-22:00' (or two, '11:00-15:00, 17:00-21:00'); the word 'closed' (or 休息) for a day the venue is shut; null or omitted means not filled in, and the flattened venue_hours governs instead. When present, the gate checks the meal against the weekday it is actually scheduled on and the page prints that day's hours -- venue_hours has to be the narrowest window that holds every day, so on its own it shows the traveller less than was researched, and can refuse a meal that is fine.",
+            "mon": null,
+            "tue": null,
+            "wed": null,
+            "thu": null,
+            "fri": null,
+            "sat": null,
+            "sun": null
+          }
         }
       ],
       "route": {

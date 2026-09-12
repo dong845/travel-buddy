@@ -1448,7 +1448,22 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
                     f"'Tue-Sun 15:00-21:00', '周二至周日 15:00-21:00' -- or drop venue_hours and set "
                     f"hours_status='unverified' to say plainly that nobody checked.")
                 continue
-            if window and not any(window[0] >= start and window[1] <= end for start, end in opening):
+            # The per-weekday table wins when the card carries one: it is the sharper claim, and
+            # it is the only one that can say "closed on Tuesday" without inverting into its
+            # opposite the way a prose closure does.
+            exact, exact_raw = _per_weekday_window(card, date)
+            if exact is not None:
+                if not exact:
+                    errors.append(
+                        f"day {number} ({date}) is a {WEEKDAYS[date.weekday()][0]}/"
+                        f"{WEEKDAYS[date.weekday()][2].title()}, and '{venue}' lists that weekday "
+                        f"as closed in venue_hours_by_weekday. Move the meal, or take the backup.")
+                elif window and not any(window[0] >= start and window[1] <= end
+                                        for start, end in exact):
+                    errors.append(
+                        f"day {number}: '{venue}' is scheduled {card.get('time_window')} but its "
+                        f"hours on that weekday are {exact_raw}.")
+            elif window and not any(window[0] >= start and window[1] <= end for start, end in opening):
                 errors.append(
                     f"day {number}: '{venue}' is scheduled {card.get('time_window')} but its hours "
                     f"are {hours}.")
@@ -1460,6 +1475,39 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
                     f"{', '.join(f'{WEEKDAYS[i][0]}({WEEKDAYS[i][2][:3].title()})' for i in sorted(open_days))}. "
                     f"Move the meal to a day the venue opens, choose the backup venue, or correct "
                     f"the weekday prefix -- a closed door at 19:00 is a missed dinner, not a note.")
+
+
+WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _per_weekday_window(card: dict, date) -> tuple[list[tuple[int, int]] | None, str | None]:
+    """(windows for THIS date, the raw string) from venue_hours_by_weekday, or (None, None).
+
+    `venue_hours` has to reduce to one open-days-plus-times set so the closed-day check can run on
+    it, and that requirement costs real information: a venue open 11:00-22:00 on weekdays and
+    08:30-23:00 at the weekend can only be written as the narrowest window that holds every day.
+    On a real run all eight venues were researched per weekday and all eight were flattened -- the
+    traveller received less than had been checked, and the loss was not necessary, only unmodelled.
+
+    So the card may ALSO carry the per-weekday table. When it does, this is what the meal is
+    checked against, because it is the sharper claim: `null` for a day means closed that day, which
+    the flattened string cannot express at all. `venue_hours` stays required as the human summary
+    and the fallback.
+    """
+    table = card.get("venue_hours_by_weekday")
+    if not isinstance(table, dict) or date is None:
+        return None, None
+    raw = table.get(WEEKDAY_KEYS[date.weekday()], None)
+    # `null` keeps the meaning it has everywhere else in this contract -- NOT FILLED IN -- and
+    # falls back to the flattened venue_hours. Closure is written as the word, because a null that
+    # silently meant "closed" would turn an unfilled skeleton into a venue shut seven days a week,
+    # and the one convention this file must not break is the one every other field follows.
+    if raw is None:
+        return None, None
+    if str(raw).strip().casefold() in ("closed", "休息", "闭店", "不营业"):
+        return [], None
+    _, windows = _parse_venue_hours(str(raw))
+    return windows, str(raw)
 
 
 @cites

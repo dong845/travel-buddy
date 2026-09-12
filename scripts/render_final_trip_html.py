@@ -539,6 +539,8 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "entry_required_to_apply": "需要签证（尚未办理）",
             "budget_cap": "人均预算上限",
             "venue_hours_label": "营业时间：",
+            "hours_closed_today": "本日闭店",
+            "hours_today_suffix": "（本日）",
             "rating_label": "评分：",
             "rating_none": "无公开评分",
             "rating_reviews": " 条评价",
@@ -597,6 +599,8 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "round_trip_in",
     "budget_cap",
     "venue_hours_label",
+    "hours_closed_today",
+    "hours_today_suffix",
     "rating_label",
     "rating_none",
     "rating_reviews",
@@ -1082,6 +1086,8 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
             for status, english in HOURS_STATUS_ENGLISH.items()
         },
         "Opening hours: ": labels.get("venue_hours_label", "Opening hours: "),
+        ">closed today ·": f">{labels.get('hours_closed_today', 'closed today')} ·",
+        " (today) ·": f"{labels.get('hours_today_suffix', ' (today)')} ·",
         # Anchored on the whole paragraph the renderer emits rather than on the bare word:
         # "Ticket: " is ordinary prose that an author may well have written inside an activity
         # detail or a source note, and a loose replacement would translate the traveller's own
@@ -2352,7 +2358,7 @@ def dining_rating_line(item: dict) -> str:
             f'data-rating-value="{attr(value)}" data-rating-count="{attr(count)}">{body}</p>')
 
 
-def dining_hours_line(item: dict) -> str:
+def dining_hours_line(item: dict, day_date: object = None) -> str:
     """Show the researched opening hours, and say plainly when nobody verified them.
 
     The plan collected `venue_hours` and `hours_status` and the page printed neither, so a
@@ -2362,6 +2368,23 @@ def dining_hours_line(item: dict) -> str:
     line at the bottom of a card is exactly the presentation that let this go unnoticed.
     """
     hours = item.get("venue_hours")
+    # When the card carries the per-weekday table, print the hours for the day this meal is
+    # actually on. `venue_hours` has to be the narrowest window that holds every weekday so the
+    # closed-day check can parse it, which means the page was showing the traveller LESS than had
+    # been researched -- on one real run, eight venues were looked up per weekday and all eight
+    # were flattened before they reached the page.
+    table = item.get("venue_hours_by_weekday")
+    if isinstance(table, dict) and isinstance(day_date, str) and len(day_date) >= 10:
+        try:
+            weekday = date.fromisoformat(day_date[:10]).weekday()
+        except ValueError:
+            weekday = None
+        if weekday is not None:
+            today = table.get(("mon", "tue", "wed", "thu", "fri", "sat", "sun")[weekday])
+            if str(today or "").strip().casefold() in ("closed", "休息", "闭店", "不营业"):
+                hours = "closed today"
+            elif today is not None and str(today).strip():
+                hours = f"{today} (today)"
     raw_status = str(item.get("hours_status") or "").strip()
     if not hours and not raw_status:
         return ""
@@ -2378,7 +2401,7 @@ def dining_hours_line(item: dict) -> str:
     )
 
 
-def dining_cards(value: object) -> str:
+def dining_cards(value: object, day_date: object = None) -> str:
     if not isinstance(value, list) or not value:
         return '<p class="meta">No meal recommendation was researched.</p>'
     cards = []
@@ -2400,7 +2423,7 @@ def dining_cards(value: object) -> str:
             f'<p>{esc(item.get("why_this_stop"))}</p>'
             f'<p class="meta">{esc(money(item.get("price_per_person_low"), item.get("price_per_person_high"), item.get("currency")))} per person · {esc(item.get("reservation_or_queue_note"))}</p>'
             f'{dining_rating_line(item)}'
-            f'{dining_hours_line(item)}'
+            f'{dining_hours_line(item, day_date)}'
             f'<a class="dining-link" data-dining-provider="{attr(provider)}" data-verified-at="{attr(item.get("checked_at"))}" href="{attr(item.get("venue_url"))}" target="_blank" rel="noopener noreferrer">View restaurant in {esc(provider)}</a>'
             f'{reservation}{backup}</article>'
         )
@@ -3580,7 +3603,7 @@ def render_unlocalized(plan: dict) -> str:
         transport_line = " · ".join(bit for bit in transport_bits if bit)
         transport_html = mode_cell + (f" · {esc(transport_line)}" if transport_line else "")
         segment_links = route_segment_links(route, trip["currency"])
-        dining = dining_cards(day.get("dining"))
+        dining = dining_cards(day.get("dining"), day.get("date"))
         route_scope = route.get("route_map_scope")
         route_map_label = "Open full-day route" if route_scope == "multi_stop" else "Open route overview — see segments below"
         # The whole-day walking load and the bad-weather/closure fallback are required by

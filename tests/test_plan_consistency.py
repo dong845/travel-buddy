@@ -2193,6 +2193,85 @@ def check_a_flight_number_may_be_unresearched_but_never_invented(itinerary_findi
                         "check, not left to another rule to catch by accident")
 
 
+
+def check_per_weekday_hours_are_used_when_present(check_dining, failures):
+    """The sharper hours claim wins, and it corrects the flattened one in both directions.
+
+    `venue_hours` must reduce to one open-days-plus-times set so the closed-day check can parse it,
+    which forces a venue open 11:30-22:00 on weekdays and 11:30-23:00 at the weekend down to the
+    narrowest window that holds every day. On a real run all eight venues were researched per
+    weekday and all eight were flattened before they reached the page.
+
+    That is not only lost information, it is a FALSE REJECTION: a Friday meal at 22:10 is fine at a
+    venue that closes at 23:00 on Fridays, and the flattened 22:00 refuses it -- pushing the author
+    to move a meal that was never a problem. Both directions are asserted below.
+    """
+    import datetime as dt
+
+    def plan_with(hours_by_weekday, window, date="2026-10-18"):   # 2026-10-18 is a Sunday
+        return {"trip": {"start_date": date, "end_date": date, "currency": "EUR"},
+                "days": [{"number": 1, "date": date, "day_type": "full",
+                          "route": {"stops_in_order": ["Somewhere"]},
+                          "dining": [{"meal": "dinner", "time_window": window,
+                                      "venue_name": "Test Venue", "route_anchor": "Somewhere",
+                                      "hours_status": "researched",
+                                      "venue_hours": "Mon-Sun 12:00-21:00",
+                                      "venue_hours_by_weekday": hours_by_weekday}]}]}
+
+    WEEK = {"mon": "11:30-22:00", "tue": "11:30-22:00", "wed": "11:30-22:00",
+            "thu": "11:30-22:00", "fri": "11:30-23:00", "sat": "11:30-23:00",
+            "sun": "12:00-21:00"}
+
+    def run(plan):
+        errs: list[str] = []
+        check_dining(plan, errs, [])
+        return [e for e in errs if "scheduled" in e or "closed" in e]
+
+    late_sunday = run(plan_with(WEEK, "21:15-22:00", "2026-10-18"))
+    if not late_sunday:
+        failures.append("per-weekday hours: a Sunday meal past Sunday's closing time must be "
+                        "refused using that weekday's hours")
+    elif "12:00-21:00" not in late_sunday[0]:
+        failures.append(f"per-weekday hours: the refusal must quote the day's own hours, got "
+                        f"{late_sunday[0]!r}")
+
+    # 2026-10-16 is a Friday, when this venue is open until 23:00. The flattened window says 22:00
+    # and would refuse it; the per-weekday table must not.
+    late_friday = run(plan_with(WEEK, "22:10-22:50", "2026-10-16"))
+    if late_friday:
+        failures.append(f"per-weekday hours: a Friday meal inside FRIDAY's hours must pass even "
+                        f"though the flattened window ends earlier, got {late_friday[0]!r}")
+
+    # Closure is written as the WORD, not as null. A null that meant "closed" would have turned
+    # every unfilled skeleton into a venue shut seven days a week, and null means "not filled in"
+    # in every other field of this contract -- breaking that convention in one place is how a
+    # reader learns to distrust it everywhere.
+    shut = run(plan_with(dict(WEEK, sun="closed"), "13:00-14:00", "2026-10-18"))
+    if not shut:
+        failures.append("per-weekday hours: a weekday written as 'closed' must be refused -- that "
+                        "is the one thing the flattened string cannot express at all")
+    shut_zh = run(plan_with(dict(WEEK, sun="休息"), "13:00-14:00", "2026-10-18"))
+    if not shut_zh:
+        failures.append("per-weekday hours: 休息 must mean closed too, or a Chinese plan silently "
+                        "loses the check")
+    unfilled = run(plan_with(dict(WEEK, sun=None), "21:15-22:00", "2026-10-18"))
+    if not unfilled:
+        failures.append("per-weekday hours: a null weekday means NOT FILLED IN, so the flattened "
+                        "venue_hours must govern that day rather than the check vanishing")
+
+    # Absent table: the flattened string still governs, so nothing regresses for existing plans.
+    without = {"trip": {"start_date": "2026-10-18", "end_date": "2026-10-18", "currency": "EUR"},
+               "days": [{"number": 1, "date": "2026-10-18", "day_type": "full",
+                         "route": {"stops_in_order": ["Somewhere"]},
+                         "dining": [{"meal": "dinner", "time_window": "21:15-22:00",
+                                     "venue_name": "Test Venue", "route_anchor": "Somewhere",
+                                     "hours_status": "researched",
+                                     "venue_hours": "Mon-Sun 12:00-21:00"}]}]}
+    if not run(without):
+        failures.append("per-weekday hours: with no table the flattened venue_hours must still "
+                        "govern, or every plan written before this field stops being checked")
+
+
 def main() -> int:
     base = json.loads(FIXTURE.read_text(encoding="utf-8"))
     failures: list[str] = []
@@ -4175,6 +4254,7 @@ def main() -> int:
     import render_final_trip_html as _renderer
     check_a_flight_number_may_be_unresearched_but_never_invented(
         _renderer.itinerary_findings, failures)
+    check_per_weekday_hours_are_used_when_present(CHECKER_MODULE.check_dining, failures)
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)

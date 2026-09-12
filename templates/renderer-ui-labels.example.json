@@ -240,5 +240,7 @@
   "essentials_payment": "Paying",
   "essentials_connectivity": "Getting online",
   "essentials_emergency": "If something goes wrong",
-  "essentials_health": "Health and insurance"
+  "essentials_health": "Health and insurance",
+  "hours_closed_today": "closed today",
+  "hours_today_suffix": " (today)"
 }
