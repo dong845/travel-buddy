@@ -2626,12 +2626,12 @@ def itinerary_findings(leg: object, label: str, cite_fn) -> list[str]:
     if status == "researched":
         required.append("service_identifier")
     else:
-        if not str(leg.get("service_identifier_unresearched_reason") or "").strip():
+        if not visible_text(leg.get("service_identifier_unresearched_reason")):
             found.append(cite_fn("booking.option_contract",
                 f"{label} is marked unresearched with no reason. Say what could not be checked and "
                 f"where the traveller will find it -- a blank that explains itself is information, "
                 f"an invented flight number is not."))
-        if str(leg.get("service_identifier") or "").strip():
+        if visible_text(leg.get("service_identifier")):
             found.append(cite_fn("booking.option_contract",
                 f"{label} is marked unresearched but still carries a service identifier "
                 f"{leg.get('service_identifier')!r}. Clear it, or drop the unresearched mark: a "
@@ -2639,7 +2639,17 @@ def itinerary_findings(leg: object, label: str, cite_fn) -> list[str]:
         # The times are what a traveller plans the day around, so an unresearched identifier does
         # not excuse them -- but it does mean they may be the intended window rather than a
         # booked one, which the reason above is where to say.
-    if any(leg.get(key) is None or leg.get(key) == "" for key in required):
+    # `is None or == ""` lets whitespace through, and a service identifier of "   " then reads as
+    # researched to every gate while the page shows a blank. visible_text() is the same test the
+    # arrival-essentials block already uses, and it also catches the invisible characters that
+    # strip() does not -- a zero-width space is content to Python and blank to a reader.
+    def missing(key: str) -> bool:
+        value = leg.get(key)
+        if isinstance(value, str):
+            return not visible_text(value)
+        return value is None or value == ""
+
+    if any(missing(key) for key in required):
         found.append(cite_fn("booking.option_contract",
             f"{label} needs " + ("the service identifier, " if status == "researched" else "")
             + "local times, duration, changes, and an interchange note."))

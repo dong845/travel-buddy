@@ -2186,6 +2186,19 @@ def check_a_flight_number_may_be_unresearched_but_never_invented(itinerary_findi
     # The first version wrote `leg(service_identifier_status="probably")` with the identifier still
     # filled in, which the unresearched-needs-a-reason rule caught instead -- so the case passed
     # while a mutation that deleted the vocabulary check survived.
+    # Whitespace and invisible characters are not a value. `is None or == ""` let both through,
+    # so an identifier of "   " read as researched to every gate while the page showed a blank --
+    # the same hole the arrival-essentials block had, closed with the same visible_text() test.
+    for label, value in (("spaces", "   "), ("a zero-width space", "\u200b"),
+                         ("a byte-order mark", "\ufeff")):
+        blank = leg(service_identifier=value)
+        if not blank:
+            failures.append(f"flight identifier: an identifier that is only {label} must be "
+                            f"refused; it renders as a gap under a label that says researched")
+    if not leg(arrival_local="  "):
+        failures.append("flight identifier: a whitespace-only local time must be refused too, or "
+                        "the hole just moves to the next string field")
+
     bogus = leg(service_identifier=None, service_identifier_status="probably",
                 service_identifier_unresearched_reason="not checked")
     if not bogus:
@@ -2258,6 +2271,27 @@ def check_per_weekday_hours_are_used_when_present(check_dining, failures):
     if not unfilled:
         failures.append("per-weekday hours: a null weekday means NOT FILLED IN, so the flattened "
                         "venue_hours must govern that day rather than the check vanishing")
+
+    # UNREADABLE IS NOT CLOSED. Found by feeding the parser shapes it was not built against: a
+    # full-width dash is what a Chinese keyboard produces by default, and it silently became
+    # "shut all day", refusing a meal at a venue that was open. Same shape as the null trap above
+    # and as every other Latin-constant-meets-CJK defect in this repository.
+    for label, value in (("a full-width dash", "11:30－23:00"),
+                         ("a phrase", "看心情"),
+                         ("a bare number", 1130)):
+        noisy = run(plan_with(dict(WEEK, sun=value), "13:00-14:00", "2026-10-18"))
+        if not noisy:
+            failures.append(f"per-weekday hours: {label} carries no readable window and must be "
+                            f"REPORTED, not silently read as a closed day")
+        elif "closed" in noisy[0] and "not a closed day" not in noisy[0]:
+            failures.append(f"per-weekday hours: {label} was reported as a closure, which inverts "
+                            f"the answer: {noisy[0]!r}")
+
+    # An empty string means nobody filled it in, not that the venue is shut.
+    blank = run(plan_with(dict(WEEK, sun="  "), "13:00-14:00", "2026-10-18"))
+    if blank:
+        failures.append(f"per-weekday hours: a blank weekday must fall back to venue_hours, not be "
+                        f"read as closed, got {blank[0]!r}")
 
     # Absent table: the flattened string still governs, so nothing regresses for existing plans.
     without = {"trip": {"start_date": "2026-10-18", "end_date": "2026-10-18", "currency": "EUR"},

@@ -498,7 +498,13 @@ def main() -> int:
             # like that is only current on the day it is written -- the same losing bet this
             # repository has already made twice with assistant names and tty detection. The author
             # can answer it in one second; no list can.
-            if str(intake.get("mode") or "") == "construction":
+            # Only an EXPLICIT discovery declaration silences the question. An absent, misspelled
+            # or differently-cased mode is not a statement that this is not Construction -- and
+            # this script only ever emits a Construction artifact, so silence on the intake's part
+            # is a reason to ask rather than a reason to assume. `== "construction"` missed
+            # "Construction" and every hand-written intake that omits the field.
+            declared = str(intake.get("mode") or "").strip().casefold()
+            if declared not in ("discovery", "constrained_discovery"):
                 report.append(f"  CHECK THE WORK MODE: this intake says construction and names "
                               f"{first!r} as the destination. If that is a CITY or a small area, "
                               f"carry on. If it is a country or a whole region, the city has not "

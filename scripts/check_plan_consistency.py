@@ -1452,7 +1452,15 @@ def check_dining(plan: dict, errors: list[str], notes: list[str]) -> None:
             # it is the only one that can say "closed on Tuesday" without inverting into its
             # opposite the way a prose closure does.
             exact, exact_raw = _per_weekday_window(card, date)
-            if exact is not None:
+            if exact == "unreadable":
+                errors.append(
+                    f"day {number}: '{venue}' has venue_hours_by_weekday for this weekday set to "
+                    f"{exact_raw!r}, which carries no readable time window. Write it as "
+                    f"'11:00-22:00' (two windows as '11:00-15:00, 17:00-21:00'), or as 'closed'/"
+                    f"「休息」 for a day it is shut -- an unreadable string is not a closed day, and "
+                    f"reading it as one refuses a meal at a venue that is open. Use ASCII colons "
+                    f"and hyphens: a full-width 「－」 does not parse.")
+            elif exact is not None:
                 if not exact:
                     errors.append(
                         f"day {number} ({date}) is a {WEEKDAYS[date.weekday()][0]}/"
@@ -1502,11 +1510,20 @@ def _per_weekday_window(card: dict, date) -> tuple[list[tuple[int, int]] | None,
     # falls back to the flattened venue_hours. Closure is written as the word, because a null that
     # silently meant "closed" would turn an unfilled skeleton into a venue shut seven days a week,
     # and the one convention this file must not break is the one every other field follows.
-    if raw is None:
+    if raw is None or not str(raw).strip():
         return None, None
     if str(raw).strip().casefold() in ("closed", "休息", "闭店", "不营业"):
         return [], None
     _, windows = _parse_venue_hours(str(raw))
+    if not windows:
+        # UNREADABLE IS NOT CLOSED, and conflating them inverts the answer exactly. The flattened
+        # path has refused an unparseable venue_hours since the day it was written -- "contains no
+        # readable time window, so the opening-hours check would skip it in silence" -- and this
+        # path was built without the same guard, so a full-width dash (「11:30－23:00」, which a
+        # Chinese keyboard produces by default) or a phrase like 「看心情」 silently became "shut
+        # all day" and refused a meal at a venue that was open. Same Latin-constant-meets-CJK
+        # shape this repository has now paid for five times.
+        return "unreadable", str(raw)
     return windows, str(raw)
 
 

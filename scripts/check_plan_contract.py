@@ -232,7 +232,16 @@ def enum_issues(plan: object, table: dict, path: str = "") -> list[dict]:
         for key, value in plan.items():
             child = f"{path}.{key}" if path else key
             allowed = table.get(child)
-            if allowed is not None and value is not None and value not in allowed:
+            # `value not in allowed` raises on a list or a dict, because the vocabulary is a set.
+            # A plan carrying `plan_status: ["researched"]` crashed this script outright, which is
+            # the one outcome a pre-gate worklist must never produce: it reports nothing at all,
+            # including the twenty other things it had already found. An unhashable value is not in
+            # any vocabulary by definition, so it is a finding like any other.
+            try:
+                outside = allowed is not None and value is not None and value not in allowed
+            except TypeError:
+                outside = allowed is not None
+            if outside:
                 found.append({"path": child, "problem": "not in the closed vocabulary",
                               "found_value": value, "allowed": sorted(allowed)})
                 continue
@@ -285,9 +294,18 @@ def main() -> int:
         print(json.dumps({"ok": not issues, "issues": issues,
                           "enum_check": vocab_failure or "ran"}, ensure_ascii=False, indent=1))
     elif not issues:
-        print(f"CONTRACT OK: every key in {Path(args.plan).name} is one "
-              f"templates/final-trip-plan.json declares, and every value in a closed vocabulary "
-              f"is one that vocabulary contains.")
+        # The second half of this sentence is a claim about a check that may not have run. Saying
+        # it anyway is worse than silence: the warning goes to stderr and this line goes to stdout,
+        # which is what an assistant reads, so a failed import would have produced a confident
+        # "every value is in its vocabulary" about values nothing had looked at.
+        if vocab_failure:
+            print(f"CONTRACT OK ON KEYS ONLY: every key in {Path(args.plan).name} is one "
+                  f"templates/final-trip-plan.json declares. Closed-vocabulary VALUES were NOT "
+                  f"checked -- see the warning on stderr. Do not read this as a clean run.")
+        else:
+            print(f"CONTRACT OK: every key in {Path(args.plan).name} is one "
+                  f"templates/final-trip-plan.json declares, and every value in a closed "
+                  f"vocabulary is one that vocabulary contains.")
         # The next command, named rather than left to be re-derived from SKILL.md. An assistant
         # that cannot hold 110KB of prose can still read the line the last command printed, and
         # this pipeline is a fixed order -- there is nothing to decide here, only to remember.

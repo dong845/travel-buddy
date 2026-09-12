@@ -276,6 +276,18 @@ def main() -> int:
                  "arrival_essentials.payment.status"):
         check(f"a wrong value at {path} is reported", path in found, sorted(found))
 
+    # An unhashable value must be a finding, not a crash. `value not in allowed` raises on a list,
+    # and a plan carrying `plan_status: ["researched"]` took the whole worklist down with it --
+    # the one outcome a pre-gate worklist must never produce, because it then reports none of the
+    # twenty other things it had already found.
+    for label, value in (("a list", ["researched"]), ("an object", {"a": 1})):
+        try:
+            crashed = enum_issues({"plan_status": value}, table)
+        except Exception as exc:                                    # noqa: BLE001
+            failures.append(f"a value that is {label} crashed the checker: {exc!r}")
+        else:
+            check(f"a value that is {label} is reported", len(crashed), crashed)
+
     # A null is "not filled in yet", not a wrong value -- calling it one would fire on every
     # skeleton this repository tells authors to start from.
     empty = {"plan_status": None, "days": [{"day_type": None}]}
@@ -298,6 +310,30 @@ def main() -> int:
               f"published {published.get(path)!r}, renderer says {sorted(allowed)!r}")
     extra = {k for k in published if not k.startswith("_")} - set(table)
     check("and publishes nothing the checker does not enforce", not extra, sorted(extra))
+
+
+    # A failed renderer import must not leave stdout claiming the values were checked. The warning
+    # goes to stderr and the verdict goes to stdout, which is what an assistant reads -- so the
+    # confident half of that sentence has to disappear with the check it describes.
+    import subprocess as _sp, sys as _sys, shutil as _shutil, tempfile as _tf
+    with _tf.TemporaryDirectory() as _sandbox:
+        broken = Path(_sandbox) / "scripts"
+        _shutil.copytree(ROOT / "scripts", broken)
+        # The script resolves the contract as SCRIPT_DIR.parent / "templates", so the sandbox
+        # needs that too or it fails for the wrong reason and the case proves nothing.
+        _shutil.copytree(ROOT / "templates", Path(_sandbox) / "templates")
+        target = broken / "render_final_trip_html.py"
+        target.write_text("import a_module_that_does_not_exist_xyz\n"
+                          + target.read_text(encoding="utf-8"), encoding="utf-8")
+        result = _sp.run([_sys.executable, str(broken / "check_plan_contract.py"),
+                          str(ROOT / "tests" / "booking-ready-fixture.json")],
+                         capture_output=True, text=True)
+        check("a failed enum check says so on stdout, not only on stderr",
+              "NOT checked" in result.stdout or "KEYS ONLY" in result.stdout,
+              result.stdout.strip()[-160:])
+        check("and it does not claim every value is in its vocabulary",
+              "every value in a closed vocabulary is one that vocabulary contains"
+              not in result.stdout, result.stdout.strip()[-160:])
 
     if failures:
         print(f"PLAN CONTRACT FAILED ({len(failures)}):", file=sys.stderr)

@@ -136,10 +136,18 @@ def check_work_mode_question_when_the_destination_may_be_a_country(failures: lis
         failures.append("work mode: --destination means the author already chose, so the question "
                         "must not fire")
 
-    # Discovery intakes are not building an itinerary yet, so the question does not apply.
-    discovery = {**base, "mode": "constrained_discovery"}
-    if "CHECK THE WORK MODE" in run(discovery):
-        failures.append("work mode: the question is about construction only")
+    # Only an EXPLICIT discovery declaration silences it. `== "construction"` was the first
+    # version and it missed "Construction" and every hand-written intake that omits the field --
+    # and this script only ever emits a Construction artifact, so silence is a reason to ask.
+    for mode in ("construction", "Construction", "CONSTRUCTION ", None, 7):
+        quiet = {**base, "mode": mode} if mode is not None else {k: v for k, v in base.items()}
+        if "CHECK THE WORK MODE" not in run(quiet):
+            failures.append(f"work mode: mode={mode!r} must still be asked about -- an absent or "
+                            f"differently-cased mode is not a claim that this is not Construction")
+    for mode in ("discovery", "constrained_discovery", "Constrained_Discovery"):
+        if "CHECK THE WORK MODE" in run({**base, "mode": mode}):
+            failures.append(f"work mode: mode={mode!r} explicitly says discovery, so the question "
+                            f"must not fire")
 
 
 def main() -> int:
