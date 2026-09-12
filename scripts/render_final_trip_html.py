@@ -33,6 +33,12 @@ ROUTE_MAP_SCOPES = {"multi_stop", "primary_leg"}
 # Booking states from references/decision-and-research.md. Constrained so the page can
 # localize them; a free-form status would print an English enum on a Chinese page.
 BOOKING_STATES = ("idea", "researched", "held", "booked")
+DAY_TYPES = ("arrival", "departure", "full", "transfer")
+# The four questions the first hour on the ground has to answer, and the three states each may
+# be in. Module-level so check_plan_contract.py can report a wrong value in its one pass rather
+# than leaving it to a second round trip through this gate.
+ESSENTIAL_ENTRIES = ("payment", "connectivity", "emergency", "health_and_insurance")
+ESSENTIAL_STATUSES = ("researched", "unverified", "not_applicable")
 # How much the source register says a row can be trusted. Printed as visible text beside every
 # source, and therefore a closed enum for precisely the reason SKILL.md gives for plan_status and
 # the budget categories: an arbitrary string cannot be translated, so it leaks.
@@ -2569,8 +2575,6 @@ def validate_plan(plan: dict) -> list[str]:
     # Required rather than encouraged, because a note about a missing section is a note nobody
     # reads -- and each entry may be marked not_applicable WITH A REASON, which is how a domestic
     # trip says it needs no consulate without pretending it researched one.
-    ESSENTIAL_ENTRIES = ("payment", "connectivity", "emergency", "health_and_insurance")
-    ESSENTIAL_STATUSES = ("researched", "unverified", "not_applicable")
     essentials = plan.get("arrival_essentials")
     if not isinstance(essentials, dict):
         errors.append(cite("arrival.essentials",
@@ -2782,7 +2786,7 @@ def validate_plan(plan: dict) -> list[str]:
         if not isinstance(day, dict) or day.get("number") != expected:
             errors.append("days must be objects numbered consecutively from 1.")
             continue
-        if day.get("day_type") not in {"arrival", "departure", "full", "transfer"}:
+        if day.get("day_type") not in set(DAY_TYPES):
             errors.append(f"day {expected}.day_type must be arrival, departure, full, or transfer.")
         activities = day.get("activities")
         if not isinstance(activities, list) or not activities:

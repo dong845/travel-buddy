@@ -1,4 +1,198 @@
 {
+  "_enums": {
+    "_comment": "The closed vocabularies. Free-text fields are written as null in this template on purpose -- a specimen string is a string somebody ships verbatim -- which left these values learnable only by being rejected. They are listed here and checked by scripts/check_plan_contract.py, which reads them from render_final_trip_html.py rather than from this block, so the two cannot drift: tests/test_plan_contract.py fails if this list stops matching.",
+    "arrival_essentials.connectivity.status": [
+      "not_applicable",
+      "researched",
+      "unverified"
+    ],
+    "arrival_essentials.emergency.status": [
+      "not_applicable",
+      "researched",
+      "unverified"
+    ],
+    "arrival_essentials.health_and_insurance.status": [
+      "not_applicable",
+      "researched",
+      "unverified"
+    ],
+    "arrival_essentials.payment.status": [
+      "not_applicable",
+      "researched",
+      "unverified"
+    ],
+    "booking_options.accommodations[].availability_status": [
+      "available",
+      "limited",
+      "unknown"
+    ],
+    "booking_options.accommodations[].price_basis": [
+      "per_room_per_night"
+    ],
+    "booking_options.accommodations[].price_status": [
+      "estimate",
+      "researched_current",
+      "user_confirmed"
+    ],
+    "booking_options.attraction_tickets[].availability_status": [
+      "available",
+      "limited",
+      "unknown"
+    ],
+    "booking_options.attraction_tickets[].price_basis": [
+      "per_person_ticket"
+    ],
+    "booking_options.attraction_tickets[].price_status": [
+      "estimate",
+      "researched_current",
+      "user_confirmed"
+    ],
+    "booking_options.attraction_tickets[].ticket_status": [
+      "booked",
+      "held",
+      "idea",
+      "researched"
+    ],
+    "booking_options.flights[].availability_status": [
+      "available",
+      "limited",
+      "unknown"
+    ],
+    "booking_options.flights[].price_basis": [
+      "per_person_round_trip"
+    ],
+    "booking_options.flights[].price_status": [
+      "estimate",
+      "researched_current",
+      "user_confirmed"
+    ],
+    "booking_options.ground_transport[].availability_status": [
+      "available",
+      "limited",
+      "unknown"
+    ],
+    "booking_options.ground_transport[].price_basis": [
+      "per_person_round_trip"
+    ],
+    "booking_options.ground_transport[].price_status": [
+      "estimate",
+      "researched_current",
+      "user_confirmed"
+    ],
+    "booking_options.rental_cars[].availability_status": [
+      "available",
+      "limited",
+      "unknown"
+    ],
+    "booking_options.rental_cars[].price_basis": [
+      "per_vehicle_per_day"
+    ],
+    "booking_options.rental_cars[].price_status": [
+      "estimate",
+      "researched_current",
+      "user_confirmed"
+    ],
+    "budget.breakdown[].category": [
+      "accommodation",
+      "attractions",
+      "contingency",
+      "ferry",
+      "flight",
+      "food",
+      "fuel_tolls_parking",
+      "insurance",
+      "intercity_bus",
+      "local_transport",
+      "rail",
+      "rental_car",
+      "shopping_and_misc",
+      "tours_and_activities",
+      "visa_and_entry"
+    ],
+    "budget.breakdown[].price_status": [
+      "estimate",
+      "researched_current",
+      "user_confirmed"
+    ],
+    "budget.calculation_basis": [
+      "per_person"
+    ],
+    "days[].day_type": [
+      "arrival",
+      "departure",
+      "full",
+      "transfer"
+    ],
+    "days[].dining[].meal": [
+      "breakfast",
+      "dinner",
+      "lunch",
+      "snack"
+    ],
+    "days[].route.route_map_scope": [
+      "multi_stop",
+      "primary_leg"
+    ],
+    "entry_context.status": [
+      "no_visa_required",
+      "not_required",
+      "required_held",
+      "required_to_apply",
+      "unverified",
+      "visa_required"
+    ],
+    "intake_context.method": [
+      "chat_fallback",
+      "html_form",
+      "user_supplied"
+    ],
+    "plan_status": [
+      "booked",
+      "held",
+      "idea",
+      "researched"
+    ],
+    "regional_service_context.booking_access_checks[].access_status": [
+      "available",
+      "limited",
+      "unknown"
+    ],
+    "regional_service_context.booking_access_checks[].category": [
+      "accommodation",
+      "attraction_ticket",
+      "flight",
+      "rail_or_ground",
+      "rental_car"
+    ],
+    "regional_service_context.google_services_access": [
+      "available",
+      "unavailable",
+      "unknown"
+    ],
+    "sources[].confidence": [
+      "high",
+      "low",
+      "medium",
+      "researched",
+      "unverified"
+    ],
+    "transport_preference.mode": [
+      "public-transit",
+      "self-drive"
+    ],
+    "trip.arrival_transport_mode": [
+      "flight",
+      "other",
+      "rail",
+      "road"
+    ],
+    "trip.traveler_constraints.allergy_severity": [
+      "intolerance",
+      "none",
+      "preference",
+      "severe"
+    ]
+  },
   "_contract": [
     "Notes on the three blocks a real run shipped without. All three are OPTIONAL -- a plan that",
     "omits them passes every gate exactly as before -- so nothing warns you when they are absent.",

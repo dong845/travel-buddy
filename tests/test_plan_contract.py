@@ -31,6 +31,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 SCRIPT = ROOT / "scripts" / "check_plan_contract.py"
 CONTRACT = ROOT / "templates" / "final-trip-plan.json"
 
@@ -249,6 +250,54 @@ def main() -> int:
         check(f"{label} is refused", proc.returncode == 2, f"exit {proc.returncode}")
         check(f"{label} refuses without a traceback", "Traceback" not in proc.stderr,
               proc.stderr[-200:])
+
+
+    # --- closed vocabularies -------------------------------------------------------------------
+    # The gap this closes, measured on a real Construction run: this script printed CONTRACT OK and
+    # the very next command rejected the same file with fourteen findings, every one of them an
+    # enum VALUE or a required field rather than a key name. Two "everything at once" passes is the
+    # round trip this file exists to delete.
+    from check_plan_contract import _vocabularies, enum_issues
+
+    table, failure = _vocabularies()
+    check("the vocabularies import from the renderer", not failure, failure)
+    check("and there are enough of them to be worth having", len(table) > 20, len(table))
+
+    bad = {"plan_status": "draft",
+           "days": [{"day_type": "arrive", "dining": [{"meal": "brunch"}]}],
+           "sources": [{"confidence": "very_high"}],
+           "booking_options": {"attraction_tickets": [{"ticket_status": "available",
+                                                       "price_status": "researched"}]},
+           "arrival_essentials": {"payment": {"status": "checked"}}}
+    found = {i["path"] for i in enum_issues(bad, table)}
+    for path in ("plan_status", "days[].day_type", "days[].dining[].meal", "sources[].confidence",
+                 "booking_options.attraction_tickets[].ticket_status",
+                 "booking_options.attraction_tickets[].price_status",
+                 "arrival_essentials.payment.status"):
+        check(f"a wrong value at {path} is reported", path in found, sorted(found))
+
+    # A null is "not filled in yet", not a wrong value -- calling it one would fire on every
+    # skeleton this repository tells authors to start from.
+    empty = {"plan_status": None, "days": [{"day_type": None}]}
+    check("nulls are not reported as wrong values", not enum_issues(empty, table),
+          enum_issues(empty, table))
+
+    good = {"plan_status": "researched", "days": [{"day_type": "full",
+                                                   "dining": [{"meal": "lunch"}]}]}
+    check("legitimate values pass", not enum_issues(good, table), enum_issues(good, table))
+
+    # The template publishes the same vocabularies for an author to read BEFORE being rejected.
+    # Pinned here because a second copy of a list is exactly how this repository's renderer-owned
+    # English guard went stale beside the renderer it was meant to mirror.
+    import json as _json
+    published = _json.loads((ROOT / "templates" / "final-trip-plan.json").read_text(
+        encoding="utf-8")).get("_enums", {})
+    for path, allowed in table.items():
+        check(f"templates/final-trip-plan.json publishes {path}",
+              published.get(path) == sorted(allowed),
+              f"published {published.get(path)!r}, renderer says {sorted(allowed)!r}")
+    extra = {k for k in published if not k.startswith("_")} - set(table)
+    check("and publishes nothing the checker does not enforce", not extra, sorted(extra))
 
     if failures:
         print(f"PLAN CONTRACT FAILED ({len(failures)}):", file=sys.stderr)

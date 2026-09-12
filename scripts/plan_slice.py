@@ -118,6 +118,11 @@ IRRELEVANT_TO: dict[str, tuple[frozenset[str], str]] = {
         "localized chrome strings for the rendered page. Nothing in it is a claim about the "
         "world, and the domain that would care whether a label reaches the page is the "
         "completeness auditor, which is not sliced."),
+    "_enums": (
+        ALL_FIVE,
+        "the closed vocabularies templates/final-trip-plan.json publishes so an author can read "
+        "them before a gate rejects a value. Like `_contract` it is documentation about the file "
+        "format, addressed to whoever fills the template in, and it says nothing about the trip."),
     "_contract": (
         ALL_FIVE,
         "the note block templates/final-trip-plan.json carries to explain its own optional "
