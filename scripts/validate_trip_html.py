@@ -1942,6 +1942,12 @@ def main() -> int:
             print(f"- {error}")
         return 1
     print("VALID: booking-ready HTML structure passed.")
+    # The last two steps, and the one nobody runs: check_link_targets needs the network, so
+    # save_trip_deliverables deliberately does not re-run it, which means a link pass skipped here
+    # is a link pass nobody does.
+    print("NEXT: python scripts/check_link_targets.py <final.html>, then "
+          "python scripts/save_trip_deliverables.py <plan.json> --workspace \"<workspace>\" "
+          "--verification <report.json> (or --unverified).", file=sys.stderr)
     return 0
 
 

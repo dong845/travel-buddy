@@ -155,9 +155,11 @@ def main() -> int:
     #         order from whatever the last command printed. A clean gate is the most dangerous
     #         place to stay silent, which is why this is asserted on the SUCCESS path.
     _chain = {
+        "new_plan_skeleton.py": "check_plan_contract.py",
         "check_plan_contract.py": "check_plan_consistency.py",
         "check_plan_consistency.py": "render_final_trip_html.py",
         "render_final_trip_html.py": "validate_trip_html.py",
+        "validate_trip_html.py": "check_link_targets.py",
     }
     for _script, _next in _chain.items():
         _source = (ROOT / "scripts" / _script).read_text(encoding="utf-8")
@@ -172,6 +174,18 @@ def main() -> int:
                 f"is the step that follows it. A pointer to the wrong command is worse than none.")
         if not (ROOT / "scripts" / _next).exists():
             failures.append(f"scripts/{_script} points at scripts/{_next}, which does not exist.")
+
+    # The waiver branch is, by its own name, the moment a report is still owed -- so it is the one
+    # place that has to say how one is started. Before it did, an assistant following the printed
+    # order went from here straight to the renderer and reached delivery with --unverified having
+    # never learned a scaffold existed. Every plan in the author's workspace took that path:
+    # seventeen delivered, zero surviving verification reports.
+    _waiver = (ROOT / "scripts" / "check_plan_consistency.py").read_text(encoding="utf-8")
+    if "new_verification_report.py" not in _waiver:
+        failures.append(
+            "check_plan_consistency.py never names scripts/new_verification_report.py. The "
+            "--no-verification-yet branch is the moment the report is still owed, and an assistant "
+            "that is not told how to start one delivers with --unverified instead.")
 
     # 2b. The other direction of check 2, and the one nothing was watching: a file deleted on
     #     purpose must stay deleted, and must stay unmentioned.

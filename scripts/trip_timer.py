@@ -103,6 +103,20 @@ def durations(events: list[dict]) -> tuple[list[tuple[str, float, str]], float, 
                 seconds = (dt.datetime.fromisoformat(stamp)
                            - dt.datetime.fromisoformat(started)).total_seconds()
             except ValueError:
+                # Dropping it was the same silent failure as the orphaned stop above, one file
+                # over: a phase whose stamps cannot be parsed vanished from the report entirely,
+                # so a run with a corrupt record read as a run with fewer phases.
+                spans.append((phase, -2.0,
+                              f"stamps could not be read ({started!r} → {stamp!r})"))
+                continue
+            if seconds < 0:
+                # A stop before its own start is not a negative duration, it is an unusable pair --
+                # and summing it SUBTRACTED from the totals while printing as "unfinished". This
+                # file's subject is honest measurement; a number that quietly shrinks the total is
+                # worse than an admitted gap, which is the same rule the spine follows about
+                # negative nights.
+                spans.append((phase, -2.0,
+                              f"stopped at {stamp} before it started at {started} — unusable"))
                 continue
             spans.append((phase, seconds, str(event.get("note") or "")))
             if is_wait(phase):

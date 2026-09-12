@@ -900,6 +900,10 @@ def main() -> int:
               "(none | preference | intolerance | severe), write the card, and delete the marker "
               "entry, or nothing on the page or in the gates knows there is anything to avoid.",
               file=sys.stderr)
+    # The chain's first link. An assistant that has just produced a skeleton needs to know the
+    # loop it is now in, and the field-name pass is the cheapest thing to run first.
+    print("NEXT: fill it in, then python scripts/check_plan_contract.py <plan.json>",
+          file=sys.stderr)
     return 0
 
 

@@ -56,11 +56,18 @@ def size_limit_cases(failures: list[str]) -> None:
     def run_size(args: list[str]) -> tuple[int, str]:
         proc = subprocess.run([sys.executable, str(SCRIPTS / "new_plan_skeleton.py"), *base, *args],
                               capture_output=True, text=True)
-        return proc.returncode, proc.stderr
+        # The subject of these cases is the SIZE warning, not an empty stderr. The skeleton writes
+        # the plan to stdout, so everything else it has to say -- the next command in the chain,
+        # the untyped-constraint markers -- necessarily goes to stderr, and asserting silence there
+        # made this fail the moment the pipeline started naming its own next step.
+        noise = "\n".join(line for line in proc.stderr.splitlines()
+                          if not line.startswith("NEXT:"))
+        return proc.returncode, noise
 
     code, err = run_size(["--start", "2027-03-01", "--end", "2027-03-04", "--stops-per-day", "3"])
     if code != 0 or err.strip():
-        failures.append(f"size: an ordinary 4-day plan must be silent, got exit {code} / {err[:120]!r}")
+        failures.append(f"size: an ordinary 4-day plan must raise no size warning, got exit "
+                        f"{code} / {err[:120]!r}")
 
     code, err = run_size(["--start", "2027-03-01", "--end", "2027-03-10", "--stops-per-day", "3"])
     if code != 0 or "NOTE:" not in err:

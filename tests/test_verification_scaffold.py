@@ -32,7 +32,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from check_plan_consistency import check_verification, resolve_pointer  # noqa: E402
+from check_plan_consistency import (  # noqa: E402
+    RESEARCHED_HOURS_STATUS,
+    check_verification,
+    resolve_pointer,
+)
 import new_verification_report as SCAFFOLD  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "booking-ready-fixture.json"
@@ -89,7 +93,6 @@ def main() -> int:
           f"{[b.get('audit') for b in report['audits']]}")
 
     # The coverage rule the gate enforces: a dining card claiming researched hours owes a pointer.
-    from check_plan_consistency import RESEARCHED_HOURS_STATUS
     wanted = {f"days[{d}].dining[{c}].venue_hours"
               for d, day in enumerate(plan.get("days") or [])
               for c, card in enumerate((day or {}).get("dining") or [])
@@ -99,6 +102,31 @@ def main() -> int:
     missing = sorted(wanted - set(sights))
     check("every researched dining card is cited by sights_and_hours", not missing,
           f"{missing[:4]} -- the gate demands these and the scaffold has to pre-list them")
+
+    # The coverage rule asks for a pointer UNDER the card, not for `venue_hours` by name. A card
+    # claiming researched hours while carrying no `venue_hours` key produced no pointer at all --
+    # the resolve filter dropped it -- and the scaffold then handed over a report the gate refuses
+    # for a gap it had no way to fill. Found by running the scaffold on degenerate shapes rather
+    # than on the plan it was written against.
+    stripped = json.loads(json.dumps(plan))
+    for day in stripped.get("days") or []:
+        for card in (day or {}).get("dining") or []:
+            if str((card or {}).get("hours_status") or "") in RESEARCHED_HOURS_STATUS:
+                card.pop("venue_hours", None)
+                break
+        else:
+            continue
+        break
+    thin, _ = SCAFFOLD.build(stripped, Path("plan.json"))
+    thin_sights = next((b["claims_checked"] for b in thin["domains"]
+                        if b["domain"] == "sights_and_hours"), [])
+    uncovered = [f"days[{d}].dining[{c}]"
+                 for d, day in enumerate(stripped.get("days") or [])
+                 for c, card in enumerate((day or {}).get("dining") or [])
+                 if str((card or {}).get("hours_status") or "") in RESEARCHED_HOURS_STATUS
+                 and not any(p.startswith(f"days[{d}].dining[{c}]") for p in thin_sights)]
+    check("a researched card with no venue_hours is still cited", not uncovered,
+          f"{uncovered[:3]} -- the card itself resolves and is the fallback")
 
     # And it must not be deliverable as emitted. This is the property that makes a scaffold for an
     # evidence document safe to ship at all.

@@ -80,8 +80,15 @@ def pointers_for(plan: dict) -> dict[str, list[str]]:
         # The coverage rule: a card claiming researched hours owes a pointer.
         for card_index, card in enumerate(_seq(_obj(day).get("dining"))):
             if str(_obj(card).get("hours_status") or "") in RESEARCHED_HOURS_STATUS:
+                # The gate asks for a pointer UNDER the card, not for `venue_hours` specifically.
+                # Naming only that field meant a card claiming researched hours while carrying no
+                # `venue_hours` key produced no pointer at all -- the resolve filter dropped it --
+                # and the scaffold then handed over a report the coverage rule refuses for a gap it
+                # had no way to fill. The card itself always resolves, so it is the fallback.
+                prefix = f"days[{day_index}].dining[{card_index}]"
                 out["sights_and_hours"].append(
-                    f"days[{day_index}].dining[{card_index}].venue_hours")
+                    f"{prefix}.venue_hours" if _obj(card).get("venue_hours") is not None
+                    else prefix)
 
     for index, _ in enumerate(_seq(plan.get("destination_experience_anchors"))):
         out["sights_and_hours"].append(f"destination_experience_anchors[{index}].source_url")

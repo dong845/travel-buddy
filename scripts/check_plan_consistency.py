@@ -5250,6 +5250,15 @@ def main() -> int:
         print("=" * 78, file=sys.stderr)
         print("NOT VERIFIED: --no-verification-yet was passed. No verification report was read.",
               file=sys.stderr)
+        # The waiver is, by its own name, the moment the author still owes a report -- so it is the
+        # moment to say how one is started. Before this line the chain went straight from here to
+        # the renderer, and an assistant following the printed order reached delivery with
+        # --unverified having never learned a scaffold existed. Every plan in the author's
+        # workspace took exactly that path: seventeen delivered, zero surviving reports.
+        print(f"  START ONE: python scripts/new_verification_report.py --from-plan {args.plan} "
+              f"--out <report.json>  — it binds the report to this plan, computes the tier, and "
+              f"pre-lists every pointer. Then re-run this command with "
+              f"--verification <report.json> instead of --no-verification-yet.", file=sys.stderr)
         print("=" * 78, file=sys.stderr)
         notes.append(
             "NO VERIFICATION REPORT: the report checks did not run. This plan has NOT been "
