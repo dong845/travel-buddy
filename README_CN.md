@@ -8,14 +8,6 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg"></a>
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude_Code-supported-5b5bd6">
   <img alt="Codex" src="https://img.shields.io/badge/Codex-supported-111827">
-  <img alt="输出" src="https://img.shields.io/badge/%E8%BE%93%E5%87%BA-%E8%87%AA%E5%8C%85%E5%90%AB_HTML_%2B_JSON-0f766e">
-  <img alt="依赖" src="https://img.shields.io/badge/%E4%BE%9D%E8%B5%96-%E4%BB%85%E6%A0%87%E5%87%86%E5%BA%93-2f6feb">
-  <img alt="数据" src="https://img.shields.io/badge/%E6%95%B0%E6%8D%AE-100%25_%E6%9C%AC%E5%9C%B0-16a34a">
-</p>
-
-<p align="center">
-  <a href="#安装"><img alt="用 npx skills 安装" src="https://img.shields.io/badge/npx_skills-add_dong845%2Ftravel--buddy-000000"></a>
-  <a href="#安装"><img alt="作为 Claude Code 插件安装" src="https://img.shields.io/badge/Claude_Code-%E4%BD%9C%E4%B8%BA%E6%8F%92%E4%BB%B6%E5%AE%89%E8%A3%85-5b5bd6"></a>
   <a href="https://clawhub.ai/dong845/skills/travel-buddy"><img alt="在 ClawHub 上" src="https://img.shields.io/badge/ClawHub-%40dong845%2Ftravel--buddy-7c3aed"></a>
   <a href="https://skillhub.cn/skills/user_f486c577/travel-buddy"><img alt="在 SkillHub 上" src="https://img.shields.io/badge/SkillHub-travel--buddy-ff6a00"></a>
 </p>
