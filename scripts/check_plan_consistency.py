@@ -2638,6 +2638,32 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                     f"accommodation '{name}': guest_rating_url carries date/occupancy parameters, "
                     f"so it is an availability search rather than the property's page. A review "
                     f"score is not shown on one; cite the page the score was actually read from.")
+        # THE RECORD-ONCE RULE, ENFORCED. references/decision-and-research.md has said since it was
+        # written that "every accommodation carries its guest score beside a price and an
+        # availability that came off the same visit", and nothing read it -- so a card could claim
+        # a VERIFIED score while its availability stayed `unknown`, which is self-contradictory:
+        # the sellability of the dates is on the same page as the score. Either the page was never
+        # opened, in which case the score is not verified, or it was opened and two of the three
+        # fields were left behind.
+        #
+        # That combination is exactly what a delivered plan carried -- verified / unknown /
+        # estimate -- while its scores had in fact been lifted from a multi-platform search
+        # summary. tests/booking-ready-fixture.json carried it too, so the known-good example was
+        # teaching it. This is the check the citation rules above do not reach: they prove the link
+        # goes somewhere a score can be read, and this one asks whether anyone went.
+        #
+        # `unknown` stays available, because a platform really can refuse this machine -- but then
+        # it is a fact about the run and the traveller has to see it, so it costs a sentence.
+        if str(option.get("guest_rating_status") or "").lower() in ("verified", "researched") \
+                and str(option.get("availability_status") or "").lower() == "unknown" \
+                and not str(option.get("availability_unknown_reason") or "").strip():
+            errors.append(
+                f"accommodation '{name}': the guest score is marked verified while availability is "
+                f"'unknown' and nothing says why. Those two live on the same page, so one visit "
+                f"answers both -- open the property for these dates and set availability, or write "
+                f"availability_unknown_reason saying what stopped you. A score with no sellable "
+                f"dates beside it is a recommendation the traveller cannot act on, and this is the "
+                f"shape a score copied from a search summary takes.")
         status = str(option.get("guest_rating_status") or "").lower()
         if status == "none":
             if not str(option.get("guest_rating_absence_reason") or "").strip():

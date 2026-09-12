@@ -2054,7 +2054,14 @@ def option_detail_list(kind: str, item: dict) -> str:
                 hotel_rating_line(item),
                 f'<li><strong>Location and access: </strong>{esc(item.get("neighborhood"))} · {esc(item.get("address_or_location_reference"))} · {esc(item.get("arrival_access_note"))} · {esc(item.get("key_area_access_note"))}</li>',
                 f'<li><strong>Why it fits: </strong>{esc(item.get("selection_rationale"))}</li>',
-                f'<li><strong>Availability: </strong>{esc(item.get("availability_status"))} · <strong>Price status: </strong>{esc(item.get("price_status"))} · <strong>Price checked: </strong>{stamp(item.get("price_checked_at"))}</li>',
+                f'<li><strong>Availability: </strong>{esc(item.get("availability_status"))} · <strong>Price status: </strong>{esc(item.get("price_status"))} · <strong>Price checked: </strong>{stamp(item.get("price_checked_at"))}</li>'
+                # Collected and not shown is the same defect as never collected, and this is
+                # the sentence the traveller most needs: on a trip where no hotel's dates
+                # could be confirmed, the page has to say so where the booking decision is
+                # made rather than leaving it in the JSON.
+                + (f'<p class="warning">{esc(item.get("availability_unknown_reason"))}</p>'
+                   if str(item.get("availability_status") or "").lower() == "unknown"
+                   and item.get("availability_unknown_reason") else ""),
             )
         )
     elif kind == "ticket":

@@ -625,7 +625,8 @@
         "arrival_access_note": null,
         "key_area_access_note": null,
         "selection_rationale": null,
-        "single_option_reason": null
+        "single_option_reason": null,
+        "availability_unknown_reason": null
       }
     ],
     "attraction_tickets": [

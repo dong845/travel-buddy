@@ -2391,6 +2391,56 @@ def check_a_review_score_is_not_cited_to_a_price_search(check_booking_identity, 
                         f"from, not the booking platform, got {line[:200]!r}")
 
 
+
+def check_a_verified_score_owes_an_availability_from_the_same_visit(check_booking_identity, failures):
+    """The record-once rule, which lived in a reference file and was read by nothing.
+
+    references/decision-and-research.md: "every accommodation carries its guest score beside a price
+    and an availability that came off the same visit." A card claiming a VERIFIED score while its
+    availability is `unknown` contradicts that -- the sellability of the dates is on the same page
+    as the score, so either the page was never opened (and the score is not verified) or it was
+    opened and two of the three fields were left behind.
+
+    That is the shape a delivered plan carried on both hotels -- verified / unknown / estimate --
+    while its scores had actually been lifted from a multi-platform search summary and attributed
+    to a site nobody had opened. Ten cards across three saved trips carried it, and
+    booking-ready-fixture.json did too, so the known-good example was teaching it.
+
+    This is the ROOT of that defect, one layer under the citation rules: those prove the link goes
+    somewhere a score can be read; this asks whether anyone went.
+    """
+    def card(**over):
+        base = {"property_name": "Hotel X", "stay_group_id": "stay-1",
+                "guest_rating_status": "verified", "guest_rating_value": 8.1,
+                "guest_rating_scale": 10, "guest_rating_count": 101,
+                "guest_rating_source": "Trip.com",
+                "guest_rating_url": "https://www.trip.com/hotels/x-detail-1/hotel-x/",
+                "review_url": "https://www.trip.com/hotels/x-detail-1/hotel-x/",
+                "availability_status": "unknown", "comparison_searches": []}
+        base.update(over)
+        errs: list[str] = []
+        check_booking_identity({"booking_options": {"accommodations": [base]}}, errs, [])
+        return [e for e in errs if "availability" in e]
+
+    if not card():
+        failures.append("record-once: a verified score beside an unknown availability with no "
+                        "reason must be refused -- they live on the same page")
+
+    if card(availability_unknown_reason="The platform answers this machine with a challenge page."):
+        failures.append("record-once: saying WHY availability is unknown must be accepted; a "
+                        "platform really can refuse a scripted request")
+
+    if card(availability_status="available"):
+        failures.append("record-once: an availability that was actually checked must pass")
+
+    # A card with no rating claim is not claiming to have been on the page, so it is not caught
+    # here -- that gap is owned by the rating rules above, and firing twice helps nobody.
+    if card(guest_rating_status="none", guest_rating_value=None,
+            guest_rating_absence_reason="Too new for reviews."):
+        failures.append("record-once: a card claiming no score is not claiming a visit, so this "
+                        "check must stay quiet on it")
+
+
 def main() -> int:
     base = json.loads(FIXTURE.read_text(encoding="utf-8"))
     failures: list[str] = []
@@ -4375,6 +4425,8 @@ def main() -> int:
         _renderer.itinerary_findings, failures)
     check_per_weekday_hours_are_used_when_present(CHECKER_MODULE.check_dining, failures)
     check_a_review_score_is_not_cited_to_a_price_search(
+        CHECKER_MODULE.check_booking_identity, failures)
+    check_a_verified_score_owes_an_availability_from_the_same_visit(
         CHECKER_MODULE.check_booking_identity, failures)
 
     if failures:

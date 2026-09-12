@@ -187,7 +187,8 @@
         "guest_rating_source": "Trip.com",
         "guest_rating_url": "https://www.trip.com/hotels/chengdu-hotel-detail-0/fixture-hotel-a/",
         "guest_rating_checked_at": "2026-07-30",
-        "guest_rating_absence_reason": null
+        "guest_rating_absence_reason": null,
+        "availability_unknown_reason": "Fixture data: these dates were never queried on the selling platform, which is why availability stays unknown."
       },
       {
         "id": "stay-b",
@@ -246,7 +247,8 @@
         "guest_rating_source": "Trip.com",
         "guest_rating_url": "https://www.trip.com/hotels/chengdu-hotel-detail-0/fixture-hotel-b/",
         "guest_rating_checked_at": "2026-07-30",
-        "guest_rating_absence_reason": null
+        "guest_rating_absence_reason": null,
+        "availability_unknown_reason": "Fixture data: these dates were never queried on the selling platform, which is why availability stays unknown."
       }
     ],
     "attraction_tickets": [],

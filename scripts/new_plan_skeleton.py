@@ -894,7 +894,7 @@ def main() -> int:
                  "room_basis": f"{TODO}room basis", "nightly_cost_low": 0, "nightly_cost_high": 0,
                  "price_basis": "per_room_per_night", "price_status": "estimate",
                  "trip_cost_low": 0, "trip_cost_high": 0, "currency": currency,
-                 "price_checked_at": DATE, "availability_status": "unknown",
+                 "price_checked_at": DATE, "availability_status": "unknown", "availability_unknown_reason": None,
                  # The page you open to read the price publishes the score beside it, so these
                  # cost one read rather than a second errand.
                  "guest_rating_status": "verified", "guest_rating_value": 0,
