@@ -320,6 +320,20 @@ def main() -> int:
         print(f"note: removed {sidecar_path}, the previous save's photographs for this slug. This "
               f"plan carries none, and a leftover sidecar is found by name -- the delivered page "
               f"and a later re-render of the delivered plan would have disagreed about the trip.")
+    # The calendar is a deliverable, not a nicety: it is the only thing here that leaves the
+    # laptop. Written beside the plan as well as embedded in the page, because a traveller who
+    # wants it on a second device should not have to re-open a 466 KB page to get it.
+    calendar_path = plan_path.with_suffix(".ics")
+    try:
+        from plan_to_calendar import build as _build_calendar
+        _body, _counts = _build_calendar(plan)
+        calendar_path.write_bytes(_body.encode("utf-8"))
+        calendar_events = sum(_counts.values())
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        calendar_path, calendar_events = None, 0
+        print(f"note: no calendar file was written ({type(exc).__name__}: {exc}). The page is "
+              f"complete; nothing on it reaches a phone.", file=sys.stderr)
+
     report_path = None
     if args.verification:
         report_path = plan_path.with_name(plan_path.stem + "-verification.json")
@@ -330,6 +344,8 @@ def main() -> int:
         write_json_atomic(plan_path, plan)
     print(f"Plan JSON: {plan_path}")
     print(f"Final HTML: {html_path}")
+    if calendar_path is not None:
+        print(f"Calendar: {calendar_path} ({calendar_events} event(s))")
     if report_path is not None:
         print(f"Verification report: {report_path}")
     if carries_photos:

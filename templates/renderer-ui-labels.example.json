@@ -233,5 +233,7 @@
   "age_since": "Opened N day(s) after that research.",
   "age_until": "Departure is in N day(s).",
   "age_past": "This trip has already started or passed.",
-  "age_stale": "Prices, opening hours and entry rules drift; treat every figure here as needing a recheck."
+  "age_stale": "Prices, opening hours and entry rules drift; treat every figure here as needing a recheck.",
+  "calendar_add": "Add this trip to your calendar",
+  "calendar_note": "Downloads a calendar file. Opening it puts every flight, train, stay, meal and timed stop into your own calendar, which is how this page reaches your phone — reminders included."
 }
