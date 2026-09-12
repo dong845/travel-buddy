@@ -532,8 +532,25 @@ def main() -> int:
         if ignored:
             failures.append(f"{path} is gitignored and would not ship")
 
-    # 7. Both READMEs document the gate; a one-sided update leaves the other language wrong.
-    readmes = {name: (ROOT / name).read_text(encoding="utf-8") for name in ("README.md", "README_CN.md")}
+    # 7. Both languages document the gate; a one-sided update leaves the other language wrong.
+    #
+    # "The docs" is a README plus its internals page, not the README alone. The READMEs used to
+    # carry everything, which made them 78k and 36k characters of gate-by-gate engineering record
+    # in front of a reader who wanted to know what the tool does -- so the machinery moved to
+    # docs/internals*.md and the README went back to being about the trip. This check follows the
+    # content instead of pinning it: what it has always been for is that no script ships
+    # undocumented, and that is just as true in either file. Reading the pair also keeps the
+    # failure honest in the other direction -- deleting a script's paragraph outright still fails,
+    # which a relaxed-to-one-file version of this test would not have caught.
+    DOCS = {"en": ("README.md", "docs/internals.md"),
+            "zh": ("README_CN.md", "docs/internals_CN.md")}
+    for language, files in DOCS.items():
+        for name in files:
+            if not (ROOT / name).exists():
+                failures.append(f"{name} is missing; the {language} documentation is incomplete")
+    readmes = {" + ".join(files): "\n".join((ROOT / n).read_text(encoding="utf-8")
+                                            for n in files if (ROOT / n).exists())
+               for files in DOCS.values()}
     for readme, text in readmes.items():
         if "check_plan_consistency.py" not in text:
             failures.append(f"{readme} does not mention check_plan_consistency.py")
@@ -555,8 +572,9 @@ def main() -> int:
         for readme, text in readmes.items():
             if script.name not in text:
                 failures.append(
-                    f"{readme} does not mention scripts/{script.name}. Either document it, or add "
-                    f"it to INTERNAL in this test with the reason it needs no entry.")
+                    f"{readme} does not mention scripts/{script.name}. Either document it (the "
+                    f"README if a user needs it, docs/internals*.md if only a maintainer does), "
+                    f"or add it to INTERNAL in this test with the reason it needs no entry.")
 
     if failures:
         print(f"PACKAGING FAILED ({len(failures)}):", file=sys.stderr)
