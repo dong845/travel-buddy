@@ -235,5 +235,10 @@
   "age_past": "This trip has already started or passed.",
   "age_stale": "Prices, opening hours and entry rules drift; treat every figure here as needing a recheck.",
   "calendar_add": "Add this trip to your calendar",
-  "calendar_note": "Downloads a calendar file. Opening it puts every flight, train, stay, meal and timed stop into your own calendar, which is how this page reaches your phone — reminders included."
+  "calendar_note": "Downloads a calendar file. Opening it puts every flight, train, stay, meal and timed stop into your own calendar, which is how this page reaches your phone — reminders included.",
+  "essentials_heading": "Your first hour on the ground",
+  "essentials_payment": "Paying",
+  "essentials_connectivity": "Getting online",
+  "essentials_emergency": "If something goes wrong",
+  "essentials_health": "Health and insurance"
 }

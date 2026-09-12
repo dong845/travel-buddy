@@ -85,6 +85,46 @@ The cost is stated in the tests rather than hidden: an anchor that genuinely wan
 photograph ("Vevey old town") is refused by the first guard even though the second would clear it.
 That is the direction this file errs in on purpose.
 
+<a id="arrival-essentials"></a>
+### The first hour on the ground
+
+Every other block in the plan is about the days. None of them answered the three questions a
+traveller actually has when they walk out of an arrivals hall: can I pay, can I get online, who do
+I call. A page that schedules six days of meals and cannot say whether the card in the traveller's
+pocket will work at the first ticket machine has answered the easy half.
+
+`arrival_essentials` carries four entries, and each is a researched fact with a source and a date
+or is marked `not_applicable` with a reason — never written from memory, because these are exactly
+the claims that are recalled confidently and wrongly. Which cards a country takes changes; the
+number to dial differs by country and is looked up in seconds; a consulate's phone number is a fact
+about one passport in one country.
+
+- **payment** — whether the traveller's cards work, how much cash is customary, and where to get
+  it. A declined card at the first machine is a trip that starts badly.
+- **connectivity** — SIM/eSIM or roaming, and the plug type and voltage. The phone holding this
+  page is also the phone holding the map; a dead or offline one is a navigation failure rather
+  than an inconvenience.
+- **emergency** — the local emergency number, and when the traveller is abroad the consulate or
+  embassy of their own nationality with a contact that works. The number is the one field in this
+  block somebody dials while something is going wrong, so a `researched` emergency entry that names
+  no number is refused.
+- **health_and_insurance** — what cover the traveller stated they hold, what the destination
+  expects, and what care costs without it. For Schengen visa applicants travel medical insurance
+  is a condition of the visa, which makes this an entry question rather than only a prudent one.
+
+`not_applicable` is a real answer and needs a real reason: a domestic trip needs no consulate, and
+saying so is different from nobody having looked. The block renders as its own panel — collected
+and not shown is the same defect as never collected, which is the rule this skill already applies
+to ratings.
+
+**Write each detail field so it survives on its own.** The entry-specific fields (`cards_accepted`,
+`plug_types`, `local_emergency_number`, `consulate_contact`, `destination_requirement` and the
+rest) render as one line beneath the summary, joined by `·`, with **no labels** — the field name
+never reaches the page. `"Visa / Mastercard, plus contactless"` reads; `"yes"` and `"widely"` do
+not, because the question they answer is invisible to the reader. The same rule already governs
+every closed enum on this page and for the same reason: a value a reader cannot decode in one
+second is a value that was not delivered.
+
 <a id="multi-stop-trips"></a>
 ### Multi-stop trips: one stay group per stop, one leg group per journey
 

@@ -1298,7 +1298,12 @@ def validate(
     # output before and after a fix, or a regression check asserting findings are unchanged, reads
     # a reordering as a real difference and goes looking for a change that was never made. Sorting
     # also makes the order the reader sees stable, which is worth having on its own.
-    for required_id in sorted(("trip-plan", "trip-summary", "budget-breakdown", "destination-essentials", "booking-panel", "transport-overview", "source-register")):
+    # `arrival-essentials` is required for the same reason every other id here is: the renderer
+    # emits the panel whenever the plan carries the block, and the plan gate already refuses a plan
+    # without it -- so a page missing the region means either a plan that predates the block or a
+    # page assembled by hand around the gates. Both are pages that plan six days and cannot say
+    # whether the traveller's card will work, which is the failure the block exists to prevent.
+    for required_id in sorted(("trip-plan", "trip-summary", "budget-breakdown", "destination-essentials", "booking-panel", "transport-overview", "source-register", "arrival-essentials")):
         if required_id not in parser.ids:
             errors.append(cite("html.required_regions", f"Missing required region #{required_id}."))
     if parser.trip_plan_attrs is not None:

@@ -142,9 +142,37 @@ def _needs_booking(note: object) -> bool:
                 or "reserv" in text.casefold() or "book ahead" in text.casefold())
 
 
+def _dtstamp(plan: dict) -> str:
+    """DTSTAMP, derived from the plan rather than from the clock.
+
+    RFC 5545 wants the moment the iCalendar object was created, and `datetime.now()` is the
+    obvious reading of that. It is also what made the delivered page IRREPRODUCIBLE: the calendar
+    is embedded in the HTML as a base64 `data:` URI, so rendering the same plan twice one second
+    apart produced two different pages. That surfaced as an intermittent ~20% failure in
+    tests/test_plan_imagery.py's "the pages are byte-identical" case -- a test that is right, about
+    a defect in here rather than in imagery, and whose flakiness was the only thing reporting it.
+
+    `generated_at` is the honest answer anyway: the calendar is created from the plan, so the
+    plan's own research timestamp is when its contents came into being, and a re-render is not a
+    new creation. The clock stays as the fallback for a plan that carries no usable timestamp,
+    which keeps the property a bonus rather than a new way to fail.
+    """
+    raw = str(plan.get("generated_at") or "").strip()
+    if raw:
+        try:
+            parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            if parsed.tzinfo is None:            # a naive stamp is read as UTC, not as local
+                parsed = parsed.replace(tzinfo=dt.timezone.utc)
+            return parsed.astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
 def build(plan: dict) -> tuple[str, dict[str, int]]:
     trip = _obj(plan.get("trip"))
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = _dtstamp(plan)
     title = str(trip.get("title") or trip.get("destination") or "Trip")
     body: list[str] = ["BEGIN:VCALENDAR", "VERSION:2.0", f"PRODID:{PRODID}",
                        "CALSCALE:GREGORIAN", "METHOD:PUBLISH",

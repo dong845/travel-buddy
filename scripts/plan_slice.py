@@ -150,6 +150,24 @@ IRRELEVANT_TO: dict[str, tuple[frozenset[str], str]] = {
         "the visa conclusion, its basis, source and date -- the entry row's whole subject. No "
         "other row turns on it: a fare, an opening time, a sale window and a sunset are the same "
         "whether the traveller needs a visa or not."),
+    "arrival_essentials": (
+        ALL_FIVE - {"entry"},
+        "can the traveller pay, get online, call for help, and are they insured. Every one of the "
+        "four is keyed to NATIONALITY x DESTINATION, which is the entry row's own axis: the "
+        "consulate is a fact about one passport in one country, and travel medical insurance is a "
+        "condition of a Schengen visa rather than only a prudent purchase. `entry` is also the "
+        "only row whose verifier already holds the traveller's nationality and residence status, "
+        "and without those the block cannot be checked at all -- a Dutch EHIC is valid across the "
+        "EU and worthless in Switzerland for a third-country national, and nothing but nationality "
+        "separates those two answers.\n"
+        "        The edge worth naming, because it is the one that could make this wrong: card "
+        "acceptance is arguably a `transport` fact the moment a tram ticket machine refuses the "
+        "traveller's card. It is dropped there anyway. The transport row checks fares, routes and "
+        "durations against operators, and each claim in this block carries its own source and "
+        "date -- so a transport verifier handed it would be re-checking a sourced fact outside its "
+        "own evidence base. If a real report is ever seen citing arrival_essentials from the "
+        "transport domain, this entry is wrong and the precedent for fixing it is "
+        "regional_service_context directly below."),
     "profile_context": (
         ALL_FIVE - {"entry"},
         "provenance for which saved profile fields fed which decision. `entry` keeps it because "

@@ -725,6 +725,42 @@ def main() -> int:
             "source_url": URL,
             "checked_at": DATE,
         },
+        # The four questions a traveller has walking out of an arrivals hall, which nothing else in
+        # this scaffold asks. Emitted as `unverified` with TODO text rather than omitted, for the
+        # reason entry_context is emitted directly above: a block that has to be remembered is a
+        # block that gets skipped, and the renderer refuses a plan without it -- so the author who
+        # never opens this scaffold meets the requirement as a gate failure instead of as a form.
+        # Every entry may legitimately become `not_applicable` WITH a reason (a domestic trip needs
+        # no consulate); none of them may stay silent.
+        "arrival_essentials": {
+            "payment": {
+                "status": "unverified",
+                "summary": f"{TODO}will the traveller's cards work, and how much cash to carry",
+                "cards_accepted": None, "cash_customary": None, "atm_or_fx_note": None,
+                "not_applicable_reason": None, "source_url": None, "checked_at": None,
+            },
+            "connectivity": {
+                "status": "unverified",
+                "summary": f"{TODO}SIM/eSIM or roaming, and what the sockets take",
+                "sim_or_esim": None, "roaming_note": None, "plug_types": None, "voltage": None,
+                "not_applicable_reason": None, "source_url": None, "checked_at": None,
+            },
+            "emergency": {
+                "status": "unverified",
+                # The number is the field somebody dials while something is going wrong, so the
+                # renderer refuses a `researched` emergency entry that leaves it empty.
+                "summary": f"{TODO}who to call, and the consulate for this passport if abroad",
+                "local_emergency_number": None, "consulate_or_embassy": None,
+                "consulate_contact": None,
+                "not_applicable_reason": None, "source_url": None, "checked_at": None,
+            },
+            "health_and_insurance": {
+                "status": "unverified",
+                "summary": f"{TODO}cover the traveller stated, and what the destination expects",
+                "cover_stated_by_traveller": None, "destination_requirement": None,
+                "not_applicable_reason": None, "source_url": None, "checked_at": None,
+            },
+        },
         "regional_service_context": {
             "destination_service_market": f"{TODO}service market",
             "selection_basis": f"{TODO}why these providers suit this market",

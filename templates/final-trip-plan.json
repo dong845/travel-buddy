@@ -138,6 +138,53 @@
       }
     ]
   },
+  "arrival_essentials": {
+    "_note": "What the traveller needs in the first hour on the ground, and the part of a trip this skill used to say nothing about. Every other block here is about the days; none of them answered 'can I pay', 'can I get online', 'who do I call'. Each entry is researched and dated like any other fact -- never written from memory -- or marked not_applicable with a reason. `status` is one of researched / unverified / not_applicable.",
+    "payment": {
+      "_note": "Will the traveller's cards work, and how much cash do they need? A card that is declined at the first ticket machine is a trip that starts badly, and the answer differs by country far more than travellers expect.",
+      "status": null,
+      "summary": null,
+      "cards_accepted": null,
+      "cash_customary": null,
+      "atm_or_fx_note": null,
+      "not_applicable_reason": null,
+      "source_url": null,
+      "checked_at": null
+    },
+    "connectivity": {
+      "_note": "Can they get online on arrival, and can they charge the phone that holds this page? A dead or offline phone is a navigation failure, not an inconvenience.",
+      "status": null,
+      "summary": null,
+      "sim_or_esim": null,
+      "roaming_note": null,
+      "plug_types": null,
+      "voltage": null,
+      "not_applicable_reason": null,
+      "source_url": null,
+      "checked_at": null
+    },
+    "emergency": {
+      "_note": "The local emergency number, and -- when the traveller is abroad -- the consulate or embassy of their own nationality with a contact that works. Both are facts about a specific country and a specific passport, so both are researched, never recalled.",
+      "status": null,
+      "summary": null,
+      "local_emergency_number": null,
+      "consulate_or_embassy": null,
+      "consulate_contact": null,
+      "not_applicable_reason": null,
+      "source_url": null,
+      "checked_at": null
+    },
+    "health_and_insurance": {
+      "_note": "Whether the traveller carries cover, what the destination expects, and what a visit costs without it. Schengen visa applicants are required to hold travel medical insurance, which makes this an entry question and not only a prudence one.",
+      "status": null,
+      "summary": null,
+      "cover_stated_by_traveller": null,
+      "destination_requirement": null,
+      "not_applicable_reason": null,
+      "source_url": null,
+      "checked_at": null
+    }
+  },
   "regional_service_context": {
     "destination_service_market": null,
     "selection_basis": null,

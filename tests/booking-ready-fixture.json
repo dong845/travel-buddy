@@ -482,5 +482,47 @@
   ],
   "recheck_before_purchase": [
     "Recheck price, availability, entry requirements, and operating conditions before purchase."
-  ]
+  ],
+  "arrival_essentials": {
+    "payment": {
+      "status": "unverified",
+      "summary": "Mobile wallets dominate here; carry a little cash and expect some counters to refuse foreign cards. Not checked against a source in this fixture.",
+      "cards_accepted": null,
+      "cash_customary": null,
+      "atm_or_fx_note": null,
+      "not_applicable_reason": null,
+      "source_url": null,
+      "checked_at": null
+    },
+    "connectivity": {
+      "status": "unverified",
+      "summary": "Check roaming with your operator, or buy a local data plan on arrival. Not checked against a source in this fixture.",
+      "sim_or_esim": null,
+      "roaming_note": null,
+      "plug_types": null,
+      "voltage": null,
+      "not_applicable_reason": null,
+      "source_url": null,
+      "checked_at": null
+    },
+    "emergency": {
+      "status": "unverified",
+      "summary": "Look up the local emergency number before you travel. Not checked against a source in this fixture.",
+      "local_emergency_number": null,
+      "consulate_or_embassy": null,
+      "consulate_contact": null,
+      "not_applicable_reason": null,
+      "source_url": null,
+      "checked_at": null
+    },
+    "health_and_insurance": {
+      "status": "not_applicable",
+      "summary": null,
+      "cover_stated_by_traveller": null,
+      "destination_requirement": null,
+      "not_applicable_reason": "A domestic day trip that starts and ends in the traveller's own city: no border is crossed and their ordinary cover applies.",
+      "source_url": null,
+      "checked_at": null
+    }
+  }
 }

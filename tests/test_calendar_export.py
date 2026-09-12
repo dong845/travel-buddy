@@ -218,6 +218,35 @@ def main() -> int:
                   decoded[:60])
             check("the download link names a file", 'download="' in page)
 
+    # 6. Rendering the same plan twice must produce the same bytes. DTSTAMP used to be
+    #    `datetime.now()`, which is the obvious reading of RFC 5545 and made the delivered PAGE
+    #    irreproducible, because the calendar rides inside it as a base64 data: URI. Nothing here
+    #    reported that; it surfaced as an intermittent ~20% failure of an imagery test asserting
+    #    two renders are byte-identical -- a flake in a file that has nothing to do with calendars,
+    #    which is the least useful place for a defect to be visible. Pinned here instead.
+    plan = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    first, _ = CAL.build(plan)
+    second, _ = CAL.build(json.loads(FIXTURE.read_text(encoding="utf-8")))
+    check("building the same plan twice gives the same calendar", first == second,
+          "the calendar is embedded in the page, so a moving byte makes the page irreproducible")
+
+    stamps = {line.split(":", 1)[1] for line in unfold(first) if line.startswith("DTSTAMP:")}
+    check("every event carries one DTSTAMP value", len(stamps) == 1, stamps)
+    dated = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    dated["generated_at"] = "2026-09-03T10:00:00Z"
+    stamped, _ = CAL.build(dated)
+    check("DTSTAMP follows the plan's generated_at",
+          "DTSTAMP:20260903T100000Z" in stamped,
+          [l for l in unfold(stamped) if l.startswith("DTSTAMP")][:1])
+
+    # And a plan with no usable timestamp still produces a calendar: the clock is the fallback,
+    # so reproducibility is a bonus rather than a new way to fail.
+    undated = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    undated["generated_at"] = "not a date"
+    fallback, _ = CAL.build(undated)
+    check("an unparseable generated_at still stamps the calendar",
+          re.search(r"DTSTAMP:\d{8}T\d{6}Z", fallback), fallback[:200])
+
     if failures:
         print(f"CALENDAR EXPORT FAILED ({len(failures)}):", file=sys.stderr)
         for failure in failures:
