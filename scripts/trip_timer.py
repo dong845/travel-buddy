@@ -71,7 +71,18 @@ def durations(events: list[dict]) -> tuple[list[tuple[str, float, str]], float, 
 
     An unclosed phase is reported rather than dropped: a run that died mid-phase is the case most
     worth seeing, and silently omitting it would make a crashed run look like a fast one.
+
+    The OPPOSITE case was silent, and it is the one that happened. A `stop` with no matching
+    `start` fell through this loop entirely, so a real run that forgot one `start` around a
+    traveller checkpoint reported `waiting on the traveller 0s (0%)` while the traveller had spent
+    twenty-six minutes answering -- and the total read 15m17s against a real span of 41m16s. This
+    file exists to measure exactly that number, and it printed a confident zero. Both directions
+    are now spans: -1 means started and never stopped, -2 means stopped without a start, and the
+    report refuses to present a percentage as a measurement while either is present. Nothing is
+    inferred from the gap; a plausible duration written into a measurement is worse than a gap
+    that says it is one.
     """
+
     open_phases: dict[str, tuple[str, str]] = {}
     spans: list[tuple[str, float, str]] = []
     compute = wait = 0.0
@@ -83,7 +94,10 @@ def durations(events: list[dict]) -> tuple[list[tuple[str, float, str]], float, 
             continue
         if kind == "start":
             open_phases[phase] = (stamp, str(event.get("note") or ""))
-        elif kind == "stop" and phase in open_phases:
+        elif kind == "stop" and phase not in open_phases:
+            spans.append((phase, -2.0,
+                          f"stopped at {stamp} without a start — its duration is unmeasured"))
+        elif kind == "stop":
             started, _ = open_phases.pop(phase)
             try:
                 seconds = (dt.datetime.fromisoformat(stamp)
@@ -101,6 +115,12 @@ def durations(events: list[dict]) -> tuple[list[tuple[str, float, str]], float, 
 
 
 def human(seconds: float) -> str:
+    # Two different absences, two different words. -1 is a phase that started and never stopped
+    # (the run died in it); -2 is one that stopped with no start (its duration was never captured).
+    # Printing both as "unfinished" hid the second behind the first, which is how the case that
+    # actually happened read as the case that had been thought about.
+    if seconds == -2.0:
+        return "unmeasured"
     if seconds < 0:
         return "unfinished"
     minutes, secs = divmod(int(seconds), 60)
@@ -138,9 +158,38 @@ def main() -> int:
                 share = f"{seconds / total * 100:4.0f}%" if total > 0 and seconds >= 0 else "   -"
                 print(f"  {tag} {human(seconds):>9} {share}  {phase}"
                       + (f"   ({note})" if note else ""))
+            unmeasured = [phase for phase, seconds, _ in spans if seconds < 0]
+            # The real span of the run, from its first stamp to its last. A percentage computed
+            # only from the phases that paired up says nothing about the ones that did not, and
+            # the gap between the two numbers is the size of what was missed: on the run that
+            # prompted this, 15m17s of paired phases inside 41m16s of elapsed time.
+            stamps = sorted(str(e.get("at")) for e in (data.get("events") or [])
+                            if isinstance(e, dict) and isinstance(e.get("at"), str))
+            elapsed = None
+            if len(stamps) >= 2:
+                try:
+                    elapsed = (dt.datetime.fromisoformat(stamps[-1])
+                               - dt.datetime.fromisoformat(stamps[0])).total_seconds()
+                except ValueError:
+                    elapsed = None
             if total > 0:
-                print(f"  ── compute {human(compute)} · waiting on the traveller {human(wait)} "
-                      f"({wait / total * 100:.0f}% of the elapsed time)")
+                if unmeasured:
+                    # Never a percentage while a phase is unmeasured. This file's whole subject is
+                    # the traveller's time, and printing "0%" for a run that forgot one `start`
+                    # is the confident zero it exists to prevent.
+                    print(f"  ── compute {human(compute)} · waiting on the traveller "
+                          f"AT LEAST {human(wait)}"
+                          + (f", inside {human(elapsed)} of elapsed time" if elapsed else "")
+                          + f". NOT a percentage: {len(unmeasured)} phase(s) "
+                          f"({', '.join(unmeasured)}) have no duration, so what is missing from "
+                          f"these totals is exactly the thing this file measures. Wrap the phase "
+                          f"in both `start` and `stop` next time.")
+                else:
+                    print(f"  ── compute {human(compute)} · waiting on the traveller {human(wait)} "
+                          f"({wait / total * 100:.0f}% of the elapsed time)")
+                    if elapsed and elapsed - total > 60:
+                        print(f"     note: {human(elapsed - total)} of the run sits outside any "
+                              f"phase — elapsed {human(elapsed)} against {human(total)} measured.")
         if not any_shown:
             print(f"No timing records in {timing_dir(workspace)}.")
         return 0
@@ -161,6 +210,19 @@ def main() -> int:
     })
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"{args.action} {args.phase} → {path}")
+    # Said HERE, not only at report time, because this is the moment it can still be fixed. A stop
+    # with no start records a boundary and no duration, and on the run that prompted this the
+    # missing one was around a traveller checkpoint -- so the number that vanished was the only
+    # number this file exists to produce.
+    if args.action == "stop":
+        prior = [e for e in data["events"][:-1]
+                 if isinstance(e, dict) and str(e.get("phase")) == args.phase]
+        if not any(e.get("event") == "start" for e in prior):
+            print(f"WARNING: '{args.phase}' was never started, so this stop records a boundary and "
+                  f"no duration. The report will name it as unmeasured and will refuse to print a "
+                  f"waiting percentage for this run"
+                  + (" -- and a checkpoint is the one phase whose duration is the traveller's own "
+                     "time." if is_wait(args.phase) else "."), file=sys.stderr)
     return 0
 
 

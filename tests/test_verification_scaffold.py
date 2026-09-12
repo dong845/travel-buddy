@@ -192,6 +192,49 @@ def main() -> int:
                       isinstance(pointer, str) and (body[0].parent / pointer).exists(),
                       repr(pointer))
 
+    # 4. THE TIMER'S OWN SILENT FAILURE. A `stop` with no matching `start` fell through the
+    #    pairing loop entirely, so a run that forgot one `start` around a traveller checkpoint
+    #    printed "waiting on the traveller 0s (0%)" while the traveller had spent twenty-six
+    #    minutes answering. The docstring said an unclosed phase is reported rather than dropped --
+    #    and it was, in the one direction that had been thought about.
+    import trip_timer as TIMER
+    events = [{"phase": "feasibility", "event": "start", "at": "2026-09-02T23:48:54+02:00"},
+              {"phase": "feasibility", "event": "stop", "at": "2026-09-02T23:57:58+02:00"},
+              {"phase": "checkpoint-shape", "event": "stop", "at": "2026-09-03T00:23:56+02:00"},
+              {"phase": "design", "event": "start", "at": "2026-09-03T00:23:56+02:00"},
+              {"phase": "design", "event": "stop", "at": "2026-09-03T00:30:10+02:00"}]
+    spans, compute, wait = TIMER.durations(events)
+    orphan = [s for s in spans if s[0] == "checkpoint-shape"]
+    check("a stop with no start is reported, not dropped", orphan,
+          "it vanished, and with it the only number this file exists to produce")
+    if orphan:
+        check("it is marked unmeasured rather than unfinished", orphan[0][1] == -2.0,
+              f"{orphan[0][1]}")
+        check("and the two absences read differently",
+              TIMER.human(-2.0) != TIMER.human(-1.0),
+              "both print the same word, so the case that happened hides behind the one that did not")
+    # The opposite direction must keep working: a phase that started and never stopped.
+    spans, _, _ = TIMER.durations([{"phase": "design", "event": "start", "at": "2026-09-03T00:00:00+02:00"}])
+    check("a start with no stop is still reported",
+          any(s[0] == "design" and s[1] == -1.0 for s in spans), f"{spans}")
+
+    with tempfile.TemporaryDirectory() as raw:
+        out = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "trip_timer.py"), "stop", "checkpoint-x",
+             "--workspace", raw, "--run", "t"], capture_output=True, text=True)
+        check("stopping an unstarted phase warns at the time it can still be fixed",
+              "WARNING" in out.stderr, out.stderr[:160])
+        run_file = Path(raw) / "timing" / "t.json"
+        if run_file.exists():
+            report = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "trip_timer.py"), "report",
+                 "--workspace", raw, "--run", "t"], capture_output=True, text=True)
+            body = report.stdout
+            check("the report refuses to print a waiting percentage while a phase is unmeasured",
+                  "NOT a percentage" in body or "%" not in body.split("──")[-1],
+                  body[-200:])
+            check("and it names the unmeasured phase", "checkpoint-x" in body, body[-200:])
+
     if failures:
         print(f"VERIFICATION SCAFFOLD FAILED ({len(failures)}):", file=sys.stderr)
         for failure in failures:

@@ -229,5 +229,9 @@
   "spine_note": "Each move is a day with a change of accommodation; the day cards below say which.",
   "avail_available": "Available",
   "avail_limited": "Limited",
-  "avail_unknown": "Not yet checked"
+  "avail_unknown": "Not yet checked",
+  "age_since": "Opened N day(s) after that research.",
+  "age_until": "Departure is in N day(s).",
+  "age_past": "This trip has already started or passed.",
+  "age_stale": "Prices, opening hours and entry rules drift; treat every figure here as needing a recheck."
 }

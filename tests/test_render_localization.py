@@ -546,6 +546,46 @@ def check_enum_reflection_property(render, check) -> None:
         validate_html.renderer_enum_reflection.cache_clear()
 
 
+def check_page_age_element(render, check) -> None:
+    """The page has to say how old it is, and say it in the reader's language.
+
+    The plan carries fixed dates and the page carries fixed timestamps, so a reader opening it four
+    months later sees exactly what a reader opening it the same day sees -- while every price,
+    opening hour and entry rule has drifted underneath. The cue is computed when the page is
+    OPENED, which means a script; the script is progressive enhancement, so with scripting off the
+    element stays empty and the static sentence beside it is already complete.
+
+    Its strings live in data attributes rather than in text, and that is exactly why they are
+    checked here: an attribute is renderer-owned text like any other, and a Chinese page carrying
+    "Departure is in N day(s)." would leak English through a door the visible-text rules do not
+    watch.
+    """
+    zh = render.labels_for("zh-CN")
+    for key, english in (("age_since", "Opened N day(s) after that research."),
+                         ("age_until", "Departure is in N day(s)."),
+                         ("age_past", "This trip has already started or passed."),
+                         ("age_stale", "Prices, opening hours and entry rules drift; treat every "
+                                       "figure here as needing a recheck.")):
+        check(f"{key} has a Chinese label", zh.get(key) and zh[key] != english,
+              f"{zh.get(key)!r}")
+        # Optional, for the reason every label added since 2.2 is: a required key rejects every
+        # ui_labels set written before it existed and drops the whole page back to English.
+        check(f"{key} is optional", key in render.OPTIONAL_UI_LABEL_KEYS,
+              "it is required, so an older custom label set now fails and its page loses Chinese")
+
+    page = f'<span id="plan-age" data-age-tpl="Opened N day(s) after that research." ' \
+           f'data-until-tpl="Departure is in N day(s)."></span>'
+    # static_replacements is the table that owns whole-string renderer text; localize_enum_values
+    # handles the closed enums. The age templates are the first kind.
+    localized = page
+    for needle, replacement in render.static_replacements(zh).items():
+        localized = localized.replace(needle, replacement)
+    check("the templates are substituted, not left in English",
+          "Opened N day" not in localized and "Departure is in" not in localized, localized[:160])
+    check("and the substitution puts the Chinese in",
+          zh["age_since"] in localized and zh["age_until"] in localized, localized[:160])
+
+
 def check_structural_i18n_gate(render, check) -> None:
     """The half of the fix that has to survive the NEXT field nobody remembers.
 
@@ -765,6 +805,7 @@ def main() -> int:
     check_optional_label_subscripts(render, check)
     check_enum_reflection_property(render, check)
     check_structural_i18n_gate(render, check)
+    check_page_age_element(render, check)
 
     labels = render.labels_for("zh")
     page = render.localize_enum_values(PROSE + BUDGET_FIGURE + MACHINE, labels)
