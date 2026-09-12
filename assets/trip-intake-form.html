@@ -73,7 +73,7 @@
 
       <section class="section"><h2>2. 想去哪里</h2>
         <div class="grid">
-          <div><label for="scope">目的地状态 <span>必填</span></label><select id="scope" required><option value="">请选择</option><option value="fixed">已固定城市/国家</option><option value="anchored">偏好某个国家/区域，但可比较</option><option value="continent">只限定大洲/大区域</option><option value="open">完全开放，帮我推荐</option></select></div>
+          <div><label for="scope">目的地状态 <span>必填</span></label><select id="scope" required><option value="">请选择</option><option value="fixed">已定到具体城市或地区（例如：京都、马略卡、劳德代尔堡）</option><option value="anchored">国家或大区定了，城市还没定（例如：日本、美国、加州）</option><option value="continent">只限定大洲/大区域（例如：东南亚、南欧）</option><option value="open">完全开放，帮我推荐</option></select></div>
           <div><label for="places">具体是哪里 <span id="places-hint">逗号分隔</span></label><input id="places" placeholder="例如：意大利, 日本关西"></div>
           <div><label for="trip-shape">这趟想怎么走 <span>必填——决定整份行程的结构</span></label><select id="trip-shape" required><option value="">请选择</option><option value="single_base">住一个地方，当天来回玩周边</option><option value="multi_city">分几站走，每站住几晚</option><option value="planner_decides">我只给范围，你来决定分几站</option></select></div>
           <div id="multi-stop-wrap" hidden>
@@ -291,8 +291,17 @@
         $("multi-stop-wrap").hidden = !multiStop;
         const somethingBooked = text("booked-already") && text("booked-already") !== "nothing";
         $("booked-detail-wrap").hidden = !somethingBooked;
-        const anchored = ["fixed", "anchored"].includes(text("scope"));
-        $("places-hint").textContent = anchored ? "必填，逗号分隔" : "逗号分隔，可选";
+        // The hint has to say what to type at the moment of typing, because `fixed` and
+        // `anchored` differ by exactly one thing -- whether a CITY is settled -- and the option
+        // used to read "已固定城市/国家", which is both answers at once. A real run answered
+        // `fixed` with the single word 「美国」; the form recorded mode=construction and the
+        // assistant was one step away from writing an eight-day itinerary for a whole country.
+        const scopeNow = text("scope");
+        const anchored = ["fixed", "anchored"].includes(scopeNow);
+        $("places-hint").textContent =
+          scopeNow === "fixed" ? "必填。填你会住下来的那个城市或地区；如果这里只填得出国家名，请把上面改选「国家或大区定了，城市还没定」"
+          : scopeNow === "anchored" ? "必填，逗号分隔。填国家或大区就行，城市由后续比较决定"
+          : "逗号分隔，可选";
         refreshRanking();
       }
 

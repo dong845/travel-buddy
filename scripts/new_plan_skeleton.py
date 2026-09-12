@@ -483,6 +483,27 @@ def main() -> int:
         else:
             destination = first
             report.append(f"  destination_scope.named_places[0] -> trip.destination: {first!r}")
+            # The one question the intake cannot answer for itself, asked where it is cheap.
+            #
+            # `destination_scope.state` used to offer "已固定城市/国家" as a single option, which is
+            # two different answers -- a settled CITY is a Construction trip, a settled COUNTRY is
+            # constrained discovery, and the skill's own work-mode table says so. A real run
+            # answered it with the single word 「美国」, the form recorded mode=construction, and
+            # the next step would have been an eight-day itinerary for a whole country. The form's
+            # wording is fixed; this line is the backstop, because a skeleton is built from a file
+            # somebody may have filled in before that fix, or in another language, or wrongly.
+            #
+            # Deliberately a QUESTION and not a check: deciding whether a string names a country
+            # needs a list of every country in every language a traveller might type, and a list
+            # like that is only current on the day it is written -- the same losing bet this
+            # repository has already made twice with assistant names and tty detection. The author
+            # can answer it in one second; no list can.
+            if str(intake.get("mode") or "") == "construction":
+                report.append(f"  CHECK THE WORK MODE: this intake says construction and names "
+                              f"{first!r} as the destination. If that is a CITY or a small area, "
+                              f"carry on. If it is a country or a whole region, the city has not "
+                              f"been chosen yet -- that is constrained discovery, and the shortlist "
+                              f"comes before this skeleton (references/decision-and-research.md).")
         if len(places) > 1:
             report.append(f"  destination_scope.named_places: {len(places)} places named; only the "
                           f"first became trip.destination. Plan the rest by hand, or run one "

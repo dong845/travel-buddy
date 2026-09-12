@@ -86,6 +86,62 @@ def size_limit_cases(failures: list[str]) -> None:
         failures.append(f"size: --oversize must let it through and say so, got exit {code}")
 
 
+
+def check_work_mode_question_when_the_destination_may_be_a_country(failures: list[str]) -> None:
+    """A construction intake naming a whole country must be questioned, not silently built on.
+
+    `destination_scope.state` used to offer "已固定城市/国家" as ONE option, which is two different
+    answers: a settled city is Construction, a settled country is constrained discovery. A real run
+    answered it with 「美国」, the form recorded mode=construction, and the next step would have been
+    an eight-day itinerary for a country. The form's wording is fixed; this is the backstop for an
+    intake filled in before that fix.
+
+    Asserted on the QUESTION, not on country detection -- deciding whether a string names a country
+    needs a list of every country in every language, and this repository has twice lost that bet
+    (assistant names, tty detection). The author answers it in a second; no list can.
+    """
+    import json, subprocess, sys, tempfile
+    base = {"mode": "construction", "intake_status": "complete",
+            "travel_window": {"start_date": "2026-10-12", "end_date": "2026-10-15"},
+            "origin": {"home_city": "Leiden", "country": "NL"},
+            "party": {"traveler_count": 1},
+            "budget": {"currency": "EUR", "hard_cap_amount": 1500},
+            "destination_scope": {"state": "fixed", "named_places": ["美国"]}}
+
+    def run(intake, extra=()):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8") as handle:
+            json.dump(intake, handle, ensure_ascii=False)
+            path = handle.name
+        proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "new_plan_skeleton.py"),
+                               "--from-intake", path, *extra],
+                              capture_output=True, text=True)
+        return proc.stderr
+
+    asked = run(base)
+    question = [line for line in asked.splitlines() if "CHECK THE WORK MODE" in line]
+    if not question:
+        failures.append("work mode: a construction intake copying its destination straight from "
+                        "the intake must ask whether that destination is a city; it said nothing")
+    # Scoped to the question's own line on purpose. Checking the whole of stderr for the
+    # destination passes no matter what, because another report line always prints it -- which is
+    # how the first version of this case survived a mutation that dropped {first!r} entirely.
+    elif "美国" not in question[0]:
+        failures.append(f"work mode: the question must quote the destination it is about, got "
+                        f"{question[0]!r}")
+
+    # An author who named the city on the command line has already decided; asking again is noise.
+    overridden = run(base, ("--destination", "劳德代尔堡"))
+    if "CHECK THE WORK MODE" in overridden:
+        failures.append("work mode: --destination means the author already chose, so the question "
+                        "must not fire")
+
+    # Discovery intakes are not building an itinerary yet, so the question does not apply.
+    discovery = {**base, "mode": "constrained_discovery"}
+    if "CHECK THE WORK MODE" in run(discovery):
+        failures.append("work mode: the question is about construction only")
+
+
 def main() -> int:
     failures: list[str] = []
     size_limit_cases(failures)
@@ -244,6 +300,8 @@ def main() -> int:
                 failures.append(f"booking state: nothing printed for {_label}")
             elif _want not in _proc.stderr:
                 failures.append(f"booking state: {_label} did not say {_want!r}")
+
+    check_work_mode_question_when_the_destination_may_be_a_country(failures)
 
     if failures:
         print("FAIL")
