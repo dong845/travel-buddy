@@ -2596,9 +2596,22 @@ def main() -> int:
 
     report = full_verification()
     report["domains"][0]["findings"] = [
-        {"claim": "entry requires only a visa", "verdict": "wrong", "resolved": True}
+        {"claim": "entry requires only a visa", "verdict": "wrong", "severity": "critical",
+         "resolved": True,
+         "resolution": "entry_context now names the electronic travel authorisation as well"}
     ]
     expect_ok("verification defect resolved", copy.deepcopy(base), report)
+
+    # This case used to pass with `resolved: True` and nothing else -- the shape that made a wrong
+    # finding vanish without anyone saying what was done about it (2026-09-24). A closed finding
+    # now names its change; the bare flag is the unresolved entry it always was.
+    report = full_verification()
+    report["domains"][0]["findings"] = [
+        {"claim": "entry requires only a visa", "verdict": "wrong", "severity": "critical",
+         "resolved": True}
+    ]
+    expect_fail("verification defect closed by a bare flag", copy.deepcopy(base),
+                "no resolution", report)
 
     # 10a. The verification tier is read off the plan, never declared by the run. A two-night rail
     # city break with no allergy and no walking cap was paying the same seven-block pass as a

@@ -1993,6 +1993,50 @@ def required_domains_for(plan: dict | None) -> tuple[set[str], str]:
         "no severe allergy or walking cap), so only sights_and_hours is required among the truth "
         "domains -- but both audits are still mandatory and cost no network.")
 VERDICTS = {"confirmed", "wrong", "misleading", "unverifiable"}
+FINDING_SEVERITIES = ("critical", "major", "minor")
+
+
+def _open_finding_problem(finding: dict) -> str | None:
+    """Why a wrong or misleading finding is still open, or None when it is properly closed.
+
+    Mirrors replan_context.must_reverify, which learned this first: a bare `true` is the same
+    claim as an unresolved entry, made harder to see. Measured 2026-09-24 against v2.7.0:
+    `resolved: true` with no resolution, and `resolved: "yes"`, both made a wrong finding vanish,
+    and with it the page's reason to carry a banner. The five legacy reports in the author's
+    workspace write a resolution on every one of their 81 closed findings, so this asks for
+    nothing a real report did not already do.
+    """
+    resolved = finding.get("resolved")
+    if resolved is not True:
+        return "unresolved" if resolved in (None, False) else \
+            f"resolved is {_short(resolved)}, not the JSON literal true"
+    resolution = finding.get("resolution")
+    if not isinstance(resolution, str) or not resolution.strip():
+        return ("marked resolved with no resolution -- name the change that fixed it, or that "
+                "the traveller accepted it")
+    if any(marker in resolution for marker in PLACEHOLDER_MARKERS):
+        return "its resolution still holds a placeholder"
+    return None
+
+
+def _finding_errors(finding: dict, where: str, errors: list[str], unresolved: list[str]) -> None:
+    """Hold one wrong or misleading finding to the report's rules; other verdicts pass through.
+
+    Severity is checked only here, where it means something. The report scaffold used to write
+    `low / medium / high` against the spec's `critical / major / minor`, and the one real report
+    built from it put `high` on confirmed findings -- where a severity ranks nothing.
+    """
+    if str(finding.get("verdict") or "").lower() not in {"wrong", "misleading"}:
+        return
+    if str(finding.get("severity") or "").lower() not in FINDING_SEVERITIES:
+        errors.append(
+            f"verification finding in {where} has severity {finding.get('severity')!r}; a wrong or "
+            f"misleading finding is {', '.join(FINDING_SEVERITIES[:-1])} or "
+            f"{FINDING_SEVERITIES[-1]}, which is what decides whether it can be accepted rather "
+            f"than fixed.")
+    problem = _open_finding_problem(finding)
+    if problem:
+        unresolved.append(f"[{where}] {finding.get('claim')} ({problem})")
 # A dining card whose hours_status is one of these says a human went and looked. Anything else
 # ("unverified", "closed_unknown", an unrecognised word) claims nothing, so nothing is demanded.
 RESEARCHED_HOURS_STATUS = {"verified", "researched"}
@@ -2286,8 +2330,7 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
                     f"verification finding in '{domain.get('domain')}' has invalid verdict "
                     f"'{verdict}'.")
                 continue
-            if verdict in {"wrong", "misleading"} and not finding.get("resolved"):
-                unresolved.append(f"[{domain.get('domain')}] {finding.get('claim')}")
+            _finding_errors(finding, str(domain.get("domain")), errors, unresolved)
     # The two network-free auditors carry the same weight as a domain and are checked the same
     # way. They are separate from `domains` because the five domains are truth checks against the
     # outside world and these two are checks of the plan against itself -- but keeping them out of
@@ -2320,8 +2363,7 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
             if verdict not in VERDICTS:
                 errors.append(f"verification finding in audit '{name}' has invalid verdict '{verdict}'.")
                 continue
-            if verdict in {"wrong", "misleading"} and not finding.get("resolved"):
-                unresolved.append(f"[{name}] {finding.get('claim')}")
+            _finding_errors(finding, f"audit {name}", errors, unresolved)
 
     if unresolved:
         errors.append(

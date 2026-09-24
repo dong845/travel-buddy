@@ -218,7 +218,12 @@ because the five check the plan against the outside world and these two check it
 they are *required* because the schema used to accept five while this reference told you to run
 seven, so the cheapest way past the gate was to delete the two highest-yield agents in the pass.
 `verdict` is `confirmed`, `wrong`, `misleading`, or `unverifiable`. `severity` is `critical`,
-`major`, or `minor`. `resolved` is required on `wrong` and `misleading`.
+`major`, or `minor`. `resolved` is required on `wrong` and `misleading`, and it closes a finding
+only as the JSON literal `true` beside a `resolution` that says what changed in the plan, or that
+the traveller accepted it — a bare `true` with no resolution, or `"yes"`, is refused, because
+either one made a wrong finding vanish without anyone saying what was done about it. The severity
+of a wrong or misleading finding is held to those three words; on a confirmed finding it ranks
+nothing and is not read.
 
 `plan` and `claims_checked` exist to make forgery cost something. `plan` binds the report to one
 itinerary, so a single clean report cannot be handed to every trip; the checker compares it to

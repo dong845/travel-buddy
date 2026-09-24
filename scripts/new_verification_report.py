@@ -133,7 +133,7 @@ def build(plan: dict, plan_path: Path) -> tuple[dict, list[str]]:
         return {name_field: key, "claims_checked": cited,
                 "findings": [{"claim": TODO + f"what {key} actually checked, in one sentence",
                               "verdict": TODO + "confirmed / wrong / misleading / unverifiable",
-                              "correction": None, "severity": TODO + "low / medium / high",
+                              "correction": None, "severity": TODO + "critical / major / minor (wrong or misleading findings)",
                               "evidence_url": TODO + "the page you opened",
                               "resolved": False, "resolution": None}]}
 
