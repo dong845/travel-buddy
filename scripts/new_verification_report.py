@@ -40,7 +40,13 @@ from check_plan_consistency import (  # noqa: E402
     required_domains_for,
     resolve_pointer,
 )
-from verification_sections import changed_sections, section_digests, section_pointers  # noqa: E402
+from verification_sections import (  # noqa: E402
+    changed_sections,
+    digest_is_current,
+    resave_command,
+    section_digests,
+    section_pointers,
+)
 
 TODO = "TODO: "
 
@@ -165,16 +171,20 @@ def recheck_entries(plan: dict, report: dict) -> tuple[list[dict], list[str], st
     if not receipt or str(receipt.get("report_checked_at") or "") != str(report.get("checked_at") or ""):
         return [], [], ("this plan carries no verification receipt for a report checked on "
                         f"{report.get('checked_at')!r}, so there is nothing to recheck against. "
-                        "Run a full verification: python scripts/new_verification_report.py "
+                        "If it is an edited copy of a plan delivered verified, name the delivered "
+                        "copy with --receipt-from <workspace>/plans/<file>.json; otherwise run a "
+                        "full verification: python scripts/new_verification_report.py "
                         "--from-plan <plan.json> --out <report.json>.")
     changed, removed = changed_sections(receipt.get("sections") or {}, plan)
     # A recheck covers the part as it was when checked, so each entry records that version's
     # digest; check_verification counts it only while the part still has it. A part the report
     # already rechecked at its current version needs no second entry.
     current = section_digests(plan)
-    done = {(str(r.get("section")), str(r.get("section_digest")))
-            for r in report.get("rechecks") or [] if isinstance(r, dict)}
-    changed = [section for section in changed if (section, current.get(section)) not in done]
+    rechecks = [r for r in report.get("rechecks") or [] if isinstance(r, dict)]
+    changed = [section for section in changed
+               if not any(str(r.get("section")) == section
+                          and digest_is_current(plan, section, r.get("section_digest"))
+                          for r in rechecks)]
     today = dt.date.today().isoformat()
     entries = [{
         "section": section,
@@ -199,14 +209,20 @@ def recheck_entries(plan: dict, report: dict) -> tuple[list[dict], list[str], st
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--from-plan", required=True, help="The plan this report will vouch for")
-    parser.add_argument("--out", default="-", help="Write here instead of standard output")
+    parser.add_argument("--out", default=None,
+                        help="Write here instead of standard output (with --recheck: instead of "
+                             "amending --report in place)")
     parser.add_argument("--recheck", action="store_true",
                         help="Append one recheck entry per section the plan changed since its "
                              "verified save, to the report named by --report")
     parser.add_argument("--report", help="With --recheck: the verification report to amend")
+    parser.add_argument("--receipt-from", default=None,
+                        help="With --recheck, when --from-plan is an edited working copy: the "
+                             "delivered plan whose verification receipt it is compared against")
     args = parser.parse_args()
     if args.recheck:
         return run_recheck(args)
+    args.out = args.out or "-"
 
     path = Path(args.from_plan)
     try:
@@ -250,6 +266,17 @@ def run_recheck(args: argparse.Namespace) -> int:
     if not isinstance(plan, dict) or not isinstance(report, dict):
         print("ERROR: the plan and the report must both be JSON objects.", file=sys.stderr)
         return 2
+    # The receipt lives in the delivered copy; an author editing their own working file has none
+    # in it, and this refused them with "run a full verification" while the save they came from
+    # was comparing against the delivered copy's receipt all along.
+    if args.receipt_from and not isinstance(plan.get("verification_receipt"), dict):
+        try:
+            delivered = json.loads(Path(args.receipt_from).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: could not read --receipt-from: {exc}", file=sys.stderr)
+            return 2
+        if isinstance(delivered, dict) and isinstance(delivered.get("verification_receipt"), dict):
+            plan["verification_receipt"] = delivered["verification_receipt"]
     entries, notes, refusal = recheck_entries(plan, report)
     if refusal:
         print(f"ERROR: {refusal}", file=sys.stderr)
@@ -257,18 +284,27 @@ def run_recheck(args: argparse.Namespace) -> int:
     amended = dict(report)
     amended["rechecks"] = list(report.get("rechecks") or []) + entries
     body = json.dumps(amended, ensure_ascii=False, indent=2) + "\n"
-    if args.out == "-":
+    # Amended in place unless told otherwise -- what --report's help has always said this does.
+    # Walked literally on 2026-09-24, the command the gate printed (no --out) wrote the amended
+    # report to standard output and saved nothing, and the report the save reads never changed.
+    out = args.out or args.report
+    if out == "-":
         sys.stdout.write(body)
     else:
-        Path(args.out).write_text(body, encoding="utf-8")
-        print(f"Verification report with rechecks: {args.out}")
+        Path(out).write_text(body, encoding="utf-8")
+        print(f"Verification report with rechecks: {out}", file=sys.stderr)
     for note in notes:
         print(f"  {note}", file=sys.stderr)
     print("Each new recheck is a TODO on purpose: check_verification refuses placeholder text, so "
           "the amended report cannot certify the plan until somebody has re-opened those parts.",
           file=sys.stderr)
-    print(f"NEXT: fill them in, then python scripts/check_plan_consistency.py {args.from_plan} "
-          f"--verification {args.out if args.out != '-' else '<report.json>'}", file=sys.stderr)
+    resave = resave_command(args.from_plan, out, args.receipt_from) if out != "-" else ""
+    if resave:
+        print(f"Fill in every TODO in {out} with what you re-opened, then save:", file=sys.stderr)
+        print(f"NEXT: {resave}", file=sys.stderr)
+    else:
+        print(f"NEXT: fill them in, then python scripts/check_plan_consistency.py {args.from_plan} "
+              f"--verification {out if out != '-' else '<report.json>'}", file=sys.stderr)
     return 0
 
 

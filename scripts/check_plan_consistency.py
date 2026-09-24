@@ -55,7 +55,14 @@ from pathlib import Path
 # of tests/test_plan_consistency.py died on ModuleNotFoundError while the pytest run, which shares
 # one sys.path across files, stayed green.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from verification_sections import changed_sections, section_digests, section_of_pointer  # noqa: E402
+from verification_sections import (  # noqa: E402
+    changed_sections,
+    delivered_workspace,
+    digest_is_current,
+    recheck_command,
+    resave_command,
+    section_of_pointer,
+)
 
 # Route totals are authored in round numbers; allow a little slack before failing.
 DURATION_TOLERANCE_MIN = 5
@@ -463,6 +470,9 @@ CHECK_REFERENCES: dict[str, str] = {
     # Settling the entry answer is the entry domain's job, stated with the verification domains.
     "check_verified_plan_entry_answer": "verification.md#verify-domains",
     "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
+    # A card for fewer guests than the trip is what a party change leaves behind when it is typed
+    # into trip.traveler_count and traced no further.
+    "check_rooms_hold_the_party": "replanning.md#party-changes",
     "check_routes": "booking-html-output.md#day-route-burden",
     "check_implied_speed": "booking-html-output.md#day-route-burden",
     "check_map_link_modes": "booking-html-output.md#map-modes",
@@ -1458,6 +1468,32 @@ def check_verified_plan_entry_answer(plan: dict, errors: list[str], notes: list[
 
 
 @cites
+def check_rooms_hold_the_party(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A hotel card is booked for the whole party: its guest_count is the trip's traveler_count.
+
+    Walked on 2026-09-24: a party that grew from four to five after a verified save kept four hotel
+    cards "for 4 guests", each with a search link for 2 adults + 2 children, and the page shipped
+    verified. The link check compares a link with its own card's guest_count, so a card and a link
+    that agree with each other and not with the trip passed everything. A room for four is the
+    wrong room for five whether or not the page is verified, so this is a plan check rather than a
+    verification one. Measured before it existed: none of the 18 real plans in the author's
+    workspace disagrees, so it refuses nothing that was right.
+    """
+    count = _obj(plan.get("trip")).get("traveler_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        return
+    for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
+        guests = option.get("guest_count")
+        if isinstance(guests, bool) or not isinstance(guests, int) or guests == count:
+            continue
+        name = str(option.get("property_name") or "?")
+        errors.append(
+            f"accommodation '{name}' ({option.get('id') or 'no id'}) is for {guests} guest(s) and "
+            f"the trip is for {count}. Re-price the room product for {count}: room_count, "
+            f"room_basis, the nightly cost and the search link all follow the party.")
+
+
+@cites
 def check_stay_groups_do_not_overlap(plan: dict, errors: list[str], notes: list[str]) -> None:
     """Two stay groups must not claim the same night.
 
@@ -2365,7 +2401,8 @@ def _walk_strings(node: object, path: str = "") -> list[tuple[str, str]]:
 
 
 def check_verification(report: dict, errors: list[str], notes: list[str],
-                       plan: dict | None = None, plan_path: str | None = None) -> None:
+                       plan: dict | None = None, plan_path: str | None = None,
+                       report_path: str | None = None, receipt_from: str | None = None) -> None:
     """The report is written by the same run it vouches for, so treat it as an interested
     witness. These checks make the cheap forgeries fail; see the limitation note below for the
     one that cannot be automated."""
@@ -2396,9 +2433,16 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", checked_at[:10]) or len(checked_at) < 10:
         errors.append("verification report needs an ISO checked_at date.")
     else:
-        # A report older than the plan it certifies cannot have seen the plan.
+        # A report older than the plan it certifies cannot have seen the plan -- unless the plan
+        # carries the receipt of this very report. Then the receipt says, section by section,
+        # which content the report saw, and every section that moved since needs a recheck dated
+        # after it (below): a stronger test than one date. Without this exception an author who
+        # bumped generated_at along with a covered edit had the valid recheck refused.
         generated = str(_obj(plan).get("generated_at") or "")[:10] if plan else ""
-        if re.match(r"^\d{4}-\d{2}-\d{2}$", generated) and checked_at[:10] < generated:
+        bound_receipt = _obj(_obj(plan).get("verification_receipt")) if plan else {}
+        bound = str(bound_receipt.get("report_checked_at") or "") == checked_at
+        if (not bound and re.match(r"^\d{4}-\d{2}-\d{2}$", generated)
+                and checked_at[:10] < generated):
             errors.append(
                 f"verification report is dated {checked_at[:10]}, before the plan's generated_at "
                 f"{generated}. It cannot have checked this plan.")
@@ -2536,16 +2580,24 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
         uncovered = [section for section in changed if section not in rechecked]
         if uncovered:
             stale = sorted(set(uncovered) & outdated)
+            # The command is printed whole when this knows both files, so it runs as printed.
+            runnable = bool(plan_path and report_path and str(plan_path) != "-")
             errors.append(cite(
                 "verification.rechecks",
                 f"these parts of the plan changed after it was verified on {checked_at}, and the "
                 f"report has no recheck of them as they are now: {', '.join(uncovered)}. "
                 + (f"The report's recheck of {', '.join(stale)} checked an earlier version -- the "
                    f"part has changed again since. " if stale else "")
-                + f"Re-verify only those parts and append one `rechecks` entry each -- python "
-                f"scripts/new_verification_report.py --recheck --from-plan <plan.json> --report "
-                f"<report.json> writes them for you to fill -- or save with --unverified so the "
-                f"page says so. Every other part keeps its verification."))
+                + "Re-verify only those parts and append one `rechecks` entry each, or save with "
+                  "--unverified so the page says so. Every other part keeps its verification. "
+                # The command gets a line of its own, and a sentence after it for the citation
+                # suffix to land on: appended to the command line, it became two more arguments.
+                + ("The scaffold appends the entries to the report for you to fill:\n    NEXT: "
+                   + recheck_command(plan_path, report_path, receipt_from)
+                   + "\n    It then prints the save that finishes the recheck."
+                   if runnable else
+                   "python scripts/new_verification_report.py --recheck --from-plan <plan.json> "
+                   "--report <report.json> --out <report.json> writes them for you to fill.")))
         if removed:
             notes.append(f"note: removed since verification (nothing to recheck): "
                          f"{', '.join(removed)}")
@@ -2577,7 +2629,6 @@ def _valid_rechecks(report: dict, plan: dict, checked_at: str, errors: list[str]
     `outdated` so the refusal can say why the report's recheck no longer counts.
     """
     kept: dict[str, dict] = {}
-    current = section_digests(plan)
     today = dt.date.today().isoformat()
     for position, raw in enumerate(_seq(report.get("rechecks"))):
         entry = _obj(raw)
@@ -2607,7 +2658,7 @@ def _valid_rechecks(report: dict, plan: dict, checked_at: str, errors: list[str]
                           f"part it checked. Write rechecks with python "
                           f"scripts/new_verification_report.py --recheck, which records it.")
             continue
-        if digest.strip() != current.get(section):
+        if not digest_is_current(plan, section, digest):
             if outdated is not None:
                 outdated.add(section)
             continue
@@ -5180,6 +5231,7 @@ PLAN_CHECKS = (
     check_entry_covers_every_jurisdiction,
     check_verified_plan_entry_answer,
     check_stay_groups_do_not_overlap,
+    check_rooms_hold_the_party,
     check_verification_tier_is_stated,
     check_dates_agree_with_the_gates_that_ran,
     check_preferences_came_from_the_intake,
@@ -6022,7 +6074,8 @@ def main() -> int:
                    f"\"audits\": [...]}}; see templates/verification-report.json.")
             return 2
         errors.current_check = check_verification.__name__
-        check_verification(report, errors, notes, plan=plan, plan_path=args.plan)
+        check_verification(report, errors, notes, plan=plan, plan_path=args.plan,
+                           report_path=args.verification)
         errors.current_check = ""
     elif args.no_verification_yet:
         # Printed here, before the notes and before any finding, and printed to stderr as well as
@@ -6081,6 +6134,18 @@ def main() -> int:
     # never reached. Nothing was wrong with its reasoning; the pipeline simply did not say where it
     # continues, and an assistant that cannot hold 110KB of prose reconstructs the order from
     # whatever the last command printed. A clean gate is the most dangerous place to stay silent.
+    #
+    # A delivered plan being revised continues differently: the save is what renders the page,
+    # carries the amended report beside it and records the recheck, so pointing at the renderer
+    # sent a literal-minded assistant to overwrite the page by hand with the receipt left behind.
+    resave = (resave_command(args.plan, args.verification)
+              if args.verification and isinstance(plan.get("verification_receipt"), dict)
+              and delivered_workspace(args.plan) is not None else "")
+    if resave:
+        print("This plan was delivered verified; saving it again renders the page, runs the page "
+              "checks and records the recheck:", file=sys.stderr)
+        print(f"NEXT: {resave}", file=sys.stderr)
+        return status
     print(f"NEXT: python scripts/render_final_trip_html.py {args.plan} <final.html>  "
           f"— it runs its own contract checks (booking options, leg groups, map endpoints) that "
           f"this gate does not, and a clean run here is not a clean plan.", file=sys.stderr)

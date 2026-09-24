@@ -40,7 +40,13 @@ from fetch_plan_imagery import (
 from plan_flags import PlanFlagsError, derive_html_flags
 from render_final_trip_html import intake_context_errors, read_json, render, validate_plan
 from validate_trip_html import validate as validate_html
-from verification_sections import section_digests
+from verification_sections import (
+    command_line,
+    delivered_slug,
+    delivered_workspace,
+    digest_is_current,
+    section_digests,
+)
 
 
 DEFAULT_WORKSPACE = Path.home() / "Travel Buddy"
@@ -69,6 +75,22 @@ def workspace_plan_path(plan: dict, args: argparse.Namespace) -> Path:
     return Path(args.workspace).expanduser() / "plans" / f"{date_part}-{slug}.json"
 
 
+def delivered_report(plan: dict, args: argparse.Namespace) -> Path | None:
+    """The report beside the verified copy this save would replace, when that copy has one."""
+    path = workspace_plan_path(plan, args)
+    try:
+        delivered = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except (OSError, ValueError):
+        return None
+    if not isinstance(delivered, dict) or delivered.get("verification_status") != "verified":
+        return None
+    name = delivered.get("verification_report")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    report = path.with_name(Path(name).name)
+    return report if report.exists() else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Save a validated Travel Buddy HTML and source JSON.")
     parser.add_argument("plan", help="Plan JSON path, or - to read standard input (a plan whose "
@@ -95,6 +117,12 @@ def main() -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: Could not read plan JSON: {exc}", file=sys.stderr)
         return 2
+    # A delivered copy saved again in place names its own slug. Without this the slug came from
+    # the title, which names a different file whenever the first save was given --slug: the edit
+    # landed as a second plan beside the first, and the verified copy was never compared against.
+    if args.slug is None and args.plan != "-" and delivered_slug(args.plan) \
+            and delivered_workspace(args.plan) == Path(args.workspace).expanduser().resolve():
+        args.slug = delivered_slug(args.plan)
 
     # The photographs sit beside the plan, not in it (fetch_plan_imagery.py carries the whole
     # argument). Found here by the plan's own name or its imagery_sidecar key -- no new flag,
@@ -154,6 +182,18 @@ def main() -> int:
         )
         return 1
 
+    # An edit to a plan delivered verified keeps its report (SKILL.md: "re-save it, and the gate
+    # names exactly the sections that moved"). Walked literally on 2026-09-24, --overwrite alone
+    # answered "No verification report ... run the parallel-verify stage", which sends an assistant
+    # to buy the full pass again for one moved dinner, or to --unverified. A save that replaces a
+    # verified copy now reads that copy's report unless told otherwise.
+    if args.overwrite and not args.verification and not args.unverified:
+        adopted = delivered_report(plan, args)
+        if adopted is not None:
+            args.verification = str(adopted)
+            print(f"note: comparing against {adopted}, the report of the verified copy this save "
+                  f"replaces. Pass --unverified to save without it.")
+
     # The status this save is about to record, set before any check reads it: checks judge the page
     # being made, not the one being replaced. A plan once saved verified, with its entry answer
     # still open, was refused by the rule whose own message says "save with --unverified" -- while
@@ -181,6 +221,7 @@ def main() -> int:
         # read as a plan from before receipts existed, and re-stamped the edit as verified -- an
         # edit after verification passing on the most natural in-session path. A save that
         # replaces a delivered copy compares against that copy's receipt when it brings none.
+        receipt_from = None
         if args.overwrite and not isinstance(plan.get("verification_receipt"), dict):
             delivered_path = workspace_plan_path(plan, args)
             try:
@@ -190,9 +231,11 @@ def main() -> int:
                 delivered = {}
             if isinstance(delivered, dict) and isinstance(delivered.get("verification_receipt"), dict):
                 plan["verification_receipt"] = delivered["verification_receipt"]
+                receipt_from = str(delivered_path)
                 notes.append(f"compared against the verification receipt of {delivered_path.name}, "
                              f"the verified copy this save replaces.")
-        check_verification(report, consistency_errors, notes, plan=plan, plan_path=args.plan)
+        check_verification(report, consistency_errors, notes, plan=plan, plan_path=args.plan,
+                           report_path=args.verification, receipt_from=receipt_from)
         plan["verification_status"] = "verified"
         # The report is EVIDENCE, and evidence that lives outside the workspace is a claim with
         # nothing behind it. Measured on the author's own workspace: of six plans claiming
@@ -216,6 +259,18 @@ def main() -> int:
             "or an entry rule is true.",
             file=sys.stderr,
         )
+        # The one case where a report already exists: this save would replace a verified copy.
+        replaced = delivered_report(plan, args)
+        if replaced is not None and args.plan != "-":
+            target = workspace_plan_path(plan, args)
+            print(f"This plan would replace {target.name}, a verified copy whose report is "
+                  f"{replaced.name}. Saving it with --overwrite compares against that report, and "
+                  f"the gate names exactly the parts that moved:", file=sys.stderr)
+            print("NEXT: " + command_line(
+                "save_trip_deliverables.py", Path(args.plan).expanduser().resolve(),
+                "--workspace", Path(args.workspace).expanduser().resolve(),
+                "--slug", delivered_slug(target) or safe_slug(args.slug), "--overwrite"),
+                file=sys.stderr)
         return 1
 
     # Stamped before render, not after, so the page and the JSON agree about what was run.
@@ -244,7 +299,8 @@ def main() -> int:
             "rechecked": {str(entry.get("section")): str(entry.get("checked_at"))
                           for entry in (report.get("rechecks") or [])
                           if isinstance(entry, dict) and entry.get("section")
-                          and entry.get("section_digest") == current.get(str(entry.get("section")))},
+                          and digest_is_current(plan, str(entry.get("section")),
+                                                entry.get("section_digest"))},
         }
     # A shallow copy carrying the photographs, so the page is rendered with every image while the
     # object about to be serialized keeps none of them. The two used to be the same dict, which is

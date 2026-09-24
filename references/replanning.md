@@ -116,6 +116,24 @@ propagating further than anyone noticed:
 two to three does not automatically need a second room in the data, but it does in reality. Treat
 those two flags as recording the decision, then work the table above by hand.
 
+<a id="party-changes"></a>
+## When the party changes
+
+A hotel card is booked for the whole party: every `booking_options.accommodations[].guest_count`
+equals `trip.traveler_count`, and `check_plan_consistency.py` refuses a card that does not. Its
+`room_count`, `room_basis`, nightly cost and search link follow the same number. The rule exists
+because the natural edit — typing the new number into `trip.traveler_count` — moves nothing else:
+walked on 2026-09-24, a party that grew from four to five kept four hotel cards for four guests,
+each linking to a search for 2 adults + 2 children, and the page shipped verified.
+
+On a plan delivered verified, the party and `trip.traveler_constraints` also count as part of every
+section that depends on them — each day, each booking option, the budget and the transport overview
+(the constraints: days, booking options and the transport overview). Changing either asks for a
+recheck of each of those sections, not of `trip` alone: a table, a family ticket and a car are all
+bought for a number of people, and a new allergy re-opens every meal. To start over instead,
+`python scripts/replan_trip.py <plan.json> --travellers N --out <new.json>` records the new party,
+flags what moves with it, and clears the verification.
+
 Keep what is still valid. A replan that rebuilds everything is not a replan, and it throws away
 research that was correct — the script prints a `RETAINED` block naming what it deliberately left
 alone so that a reviewer can see the claim and challenge it.

@@ -18,6 +18,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -75,6 +76,18 @@ def fill(node: object) -> object:
     if isinstance(node, str) and node.startswith("TODO:"):
         return "Re-opened the venue page for the new time and read its hours."
     return node
+
+
+def printed_command(text: str, script: str) -> list[str] | None:
+    """The next step a script printed for `script`: a `NEXT:` line that is a whole command."""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("NEXT:") and script in line:
+            try:
+                return shlex.split(line[len("NEXT:"):])
+            except ValueError:
+                return None
+    return None
 
 
 def main() -> int:
@@ -308,6 +321,25 @@ def main() -> int:
         check("re-saving the edited working file over its verified copy asks for a recheck",
               again.returncode != 0 and f"days[{day0}]" in again.stderr and "changed after" in again.stderr,
               f"exit {again.returncode}: {(again.stdout + again.stderr)[-600:]}")
+        # The receipt is in the delivered copy, not in this working file, so the scaffold the
+        # refusal names has to be told where it is -- run on the working file alone it answered
+        # "no receipt ... run a full verification".
+        command = printed_command(again.stderr, "new_verification_report.py")
+        ran = subprocess.run(command, capture_output=True, text=True) if command else None
+        check("the recheck command printed for a working file runs as printed",
+              ran is not None and ran.returncode == 0,
+              (ran.stdout + ran.stderr)[-500:] if ran else again.stderr[-600:])
+        if ran is not None and ran.returncode == 0:
+            report_path.write_text(json.dumps(fill(json.loads(report_path.read_text(
+                encoding="utf-8"))), ensure_ascii=False), encoding="utf-8")
+            follow = printed_command(ran.stderr, "save_trip_deliverables.py")
+            closed = subprocess.run(follow, capture_output=True, text=True) if follow else None
+            delivered_copy = workspace / "plans" / f"{stem}.json"
+            check("and the save it prints replaces the verified copy with the edit",
+                  closed is not None and closed.returncode == 0
+                  and json.loads(delivered_copy.read_text(encoding="utf-8"))["days"][0]
+                  ["activities"][0]["time"] == "09:30",
+                  (closed.stdout + closed.stderr)[-600:] if closed else ran.stderr[-600:])
 
     # 9. A recheck covers the content it checked, not its section from then on. After one recheck
     #    of a day and a covered re-save, a second edit of that day re-saved as verified with no
@@ -402,6 +434,176 @@ def main() -> int:
     found = verify(full_verification(), fresh, Path("plan.json"))
     check("a receipt from another report date is ignored",
           not [e for e in found if "changed after" in e], found)
+
+    # 11. A section's verification holds only while the trip facts it was checked against hold.
+    #     Walked on 2026-09-24: a party that grew 4 -> 5 after a verified save was rechecked as
+    #     "trip" alone and re-saved VERIFIED, every hotel card still for four guests and its search
+    #     link for 2 adults + 2 children -- the cards' own text had not changed, so nothing moved.
+    plan = base_plan()
+    digests = vs.section_digests(plan)
+    options = [f"booking_options.{kind}[{option['id']}]"
+               for kind, items in plan["booking_options"].items() if isinstance(items, list)
+               for option in items if isinstance(option, dict) and option.get("id")]
+    all_days = [f"days[{day['date']}]" for day in plan["days"]]
+    grown = copy.deepcopy(plan)
+    grown["trip"]["traveler_count"] = plan["trip"]["traveler_count"] + 1
+    moved, _ = vs.changed_sections(digests, grown)
+    party_parts = set(options + all_days + ["budget", "transport_overview", "trip"])
+    check("a party change moves every section priced, roomed or seated for the party",
+          party_parts <= set(moved), sorted(party_parts - set(moved)))
+    stricter = copy.deepcopy(plan)
+    constraints = stricter["trip"].setdefault("traveler_constraints", {})
+    constraints["allergy_severity"] = "none" if constraints.get("allergy_severity") == "severe" else "severe"
+    moved, _ = vs.changed_sections(digests, stricter)
+    check("a constraint change moves every day and booking option",
+          set(options + all_days) <= set(moved), sorted(set(options + all_days) - set(moved)))
+    check("a constraint change leaves the budget alone", "budget" not in moved, moved)
+    retitled = copy.deepcopy(plan)
+    retitled["trip"]["title"] = "The same trip under a new name"
+    check("a trip field nothing depends on moves only the trip",
+          vs.changed_sections(digests, retitled) == (["trip"], []),
+          vs.changed_sections(digests, retitled))
+
+    # 12. A receipt stamped before dependencies were folded in (plain digests) keeps its meaning:
+    #     unchanged content is not "changed", an edited day is still named, and a changed trip still
+    #     moves every section that depends on it.
+    old = {key: vs._digest(value) for key, value in vs.sections(plan).items()}
+    check("an old receipt of an unchanged plan reports nothing",
+          vs.changed_sections(old, plan) == ([], []), vs.changed_sections(old, plan))
+    edited = copy.deepcopy(plan)
+    edited["days"][0]["activities"][0]["time"] = "09:30"
+    check("an old receipt still names an edited day",
+          vs.changed_sections(old, edited) == ([f"days[{day0}]"], []), vs.changed_sections(old, edited))
+    check("an old receipt still moves the party's sections when the trip changed",
+          set(options) <= set(vs.changed_sections(old, grown)[0]), vs.changed_sections(old, grown))
+
+    # 13. An emptied section has nothing left to verify. Its recheck had no pointer to write, and
+    #     the gate refused the recheck as "checked nothing" -- a loop whose only exits were a full
+    #     re-verification or --unverified.
+    emptied = copy.deepcopy(plan)
+    emptied["assumptions"] = []
+    moved, removed = vs.changed_sections(digests, emptied)
+    check("an emptied section counts as removed, not changed",
+          "assumptions" in removed and "assumptions" not in moved, (moved, removed))
+
+    # 14. The recheck loop runs on the commands the scripts print, and nothing else. Walked
+    #     literally on 2026-09-24: re-saving the delivered copy with --overwrite alone answered "No
+    #     verification report ... run the parallel-verify stage" although SKILL.md says the edit
+    #     keeps its report; the recheck command the gate printed carried <plan.json>/<report.json>
+    #     placeholders; and run as printed it wrote the amended report to standard output and saved
+    #     nothing. The workspace path has a space in it, like the real default.
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        workspace = tmp / "Travel Buddy"
+        working = base_plan()
+        stem = f"{working['trip']['start_date']}-trip"
+        source = tmp / f"{stem}.json"
+        source.write_text(json.dumps(working, ensure_ascii=False), encoding="utf-8")
+        report = full_verification()
+        report["plan"] = source.name
+        report_path = tmp / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        first = save(source, workspace, "--verification", str(report_path))
+        check("the loop's verified save succeeds", first.returncode == 0,
+              (first.stdout + first.stderr)[-600:])
+        delivered = workspace / "plans" / f"{stem}.json"
+        delivered_report = workspace / "plans" / f"{stem}-verification.json"
+        if first.returncode == 0:
+            copy_of = json.loads(delivered.read_text(encoding="utf-8"))
+            copy_of["days"][0]["activities"][0]["time"] = "10:05"
+            delivered.write_text(json.dumps(copy_of, ensure_ascii=False), encoding="utf-8")
+            # No --slug and no --verification: the delivered copy names both itself.
+            resave = subprocess.run([sys.executable, str(SAVE), str(delivered), "--workspace",
+                                     str(workspace), "--overwrite"], capture_output=True, text=True)
+            check("re-saving the delivered copy with --overwrite alone checks it against its report",
+                  resave.returncode != 0 and f"days[{day0}]" in resave.stderr
+                  and "No verification report" not in resave.stderr,
+                  f"exit {resave.returncode}: {(resave.stdout + resave.stderr)[-700:]}")
+            check("that re-save writes no second plan under another name",
+                  sorted(p.name for p in (workspace / "plans").glob("*.json"))
+                  == sorted([delivered.name, delivered_report.name]),
+                  sorted(p.name for p in (workspace / "plans").glob("*.json")))
+            command = printed_command(resave.stderr, "new_verification_report.py")
+            check("the refusal prints the recheck command with real paths",
+                  command is not None and not any("<" in part for part in command)
+                  and str(delivered_report.resolve()) in command, resave.stderr[-900:])
+            if command:
+                ran = subprocess.run(command, capture_output=True, text=True)
+                check("the printed recheck command runs as printed", ran.returncode == 0,
+                      (ran.stdout + ran.stderr)[-500:])
+                amended = json.loads(delivered_report.read_text(encoding="utf-8"))
+                check("run as printed, it amends the report it names",
+                      any(r.get("section") == f"days[{day0}]" for r in amended.get("rechecks", [])),
+                      amended.get("rechecks"))
+                delivered_report.write_text(json.dumps(fill(amended), ensure_ascii=False),
+                                            encoding="utf-8")
+                follow = printed_command(ran.stderr, "save_trip_deliverables.py")
+                check("the scaffold then prints the save that closes the loop, with real paths",
+                      follow is not None and not any("<" in part for part in follow)
+                      and "--overwrite" in follow, ran.stderr[-700:])
+                if follow:
+                    closed = subprocess.run(follow, capture_output=True, text=True)
+                    check("the save it prints succeeds", closed.returncode == 0,
+                          (closed.stdout + closed.stderr)[-700:])
+                    # The checker's own next step on a delivered plan is the save, not the
+                    # renderer: rendering over the page by hand leaves the receipt behind.
+                    gate = subprocess.run([sys.executable, str(ROOT / "scripts" /
+                                                               "check_plan_consistency.py"),
+                                           str(delivered), "--verification", str(delivered_report)],
+                                          capture_output=True, text=True)
+                    after_gate = printed_command(gate.stderr, "save_trip_deliverables.py")
+                    check("a clean check of a delivered plan names the save that re-delivers it",
+                          gate.returncode == 0 and after_gate is not None
+                          and not any("<" in part for part in after_gate),
+                          f"exit {gate.returncode}: {gate.stderr[-500:]}")
+
+                    # 15. Bumping generated_at after a covered edit is not a new plan. The
+                    #     receipt already proves which content the report and its rechecks saw;
+                    #     the older "report dated before the plan" rule refused the valid recheck.
+                    bumped = json.loads(delivered.read_text(encoding="utf-8"))
+                    bumped["generated_at"] = TODAY
+                    delivered.write_text(json.dumps(bumped, ensure_ascii=False), encoding="utf-8")
+                    later = subprocess.run([sys.executable, str(SAVE), str(delivered), "--workspace",
+                                            str(workspace), "--overwrite"], capture_output=True,
+                                           text=True)
+                    check("a covered plan whose generated_at moved still saves verified",
+                          later.returncode == 0, (later.stdout + later.stderr)[-700:])
+
+    # 16. The same walk's party change, through the real save: every card for the old party is
+    #     named, and a hotel card for fewer guests than the trip is refused outright -- verified or
+    #     not, because a room for two is the wrong room for three either way.
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        workspace = tmp / "ws"
+        working = base_plan()
+        stem = f"{working['trip']['start_date']}-trip"
+        source = tmp / f"{stem}.json"
+        source.write_text(json.dumps(working, ensure_ascii=False), encoding="utf-8")
+        report = full_verification()
+        report["plan"] = source.name
+        report_path = tmp / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        first = save(source, workspace, "--verification", str(report_path))
+        check("the party walk's verified save succeeds", first.returncode == 0,
+              (first.stdout + first.stderr)[-600:])
+        if first.returncode == 0:
+            delivered = workspace / "plans" / f"{stem}.json"
+            party = json.loads(delivered.read_text(encoding="utf-8"))
+            party["trip"]["traveler_count"] += 1
+            delivered.write_text(json.dumps(party, ensure_ascii=False), encoding="utf-8")
+            grown_save = save(delivered, workspace, "--overwrite")
+            check("a party change names the hotel cards for the old party",
+                  grown_save.returncode != 0
+                  and "booking_options.accommodations[stay-a]" in grown_save.stderr,
+                  f"exit {grown_save.returncode}: {grown_save.stderr[-900:]}")
+            check("a hotel card for fewer guests than the trip is refused",
+                  "stay-a" in grown_save.stderr and "guest" in grown_save.stderr
+                  and str(party["trip"]["traveler_count"]) in grown_save.stderr,
+                  grown_save.stderr[-900:])
+            unverified = save(delivered, workspace, "--overwrite", "--unverified")
+            check("the room check holds on an unverified save too",
+                  unverified.returncode != 0 and "guest" in unverified.stderr,
+                  f"exit {unverified.returncode}: {unverified.stderr[-600:]}")
 
     return report_failures()
 

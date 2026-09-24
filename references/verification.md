@@ -264,9 +264,25 @@ changed or was added. Each of those needs a `rechecks` entry in the report —
 `{section, section_digest, checked_at, reason, claims_checked, findings}` — dated no earlier than
 the report, citing pointers that resolve and stay inside that section, with findings held to the
 rules above. `python scripts/new_verification_report.py --recheck --from-plan <plan.json> --report
-<report.json>` appends one TODO entry per changed section for you to fill; the placeholder rule
-refuses it until someone has re-opened those parts. The page then lists which parts were
-rechecked, and when — on a verified page only.
+<report.json>` appends one TODO entry per changed section to that report, in place, for you to
+fill; the placeholder rule refuses it until someone has re-opened those parts. The page then lists
+which parts were rechecked, and when — on a verified page only.
+
+**The loop runs on what the scripts print.** Re-save the edited plan with `--overwrite` alone: a
+save that replaces a verified copy reads that copy's report, and a delivered copy saved in place
+keeps its own name (the slug comes from the file). The refusal prints the scaffold as a whole
+command — this interpreter, absolute paths, `--receipt-from` when you edited a working copy rather
+than the delivered one — and the scaffold prints the save that finishes the loop. Run each as
+printed. Walked literally on 2026-09-24 before this existed, the same three steps sent an assistant
+to a full re-verification, handed it `<plan.json>` placeholders, and wrote the amended report to
+standard output where nothing read it.
+
+**A section also covers the trip facts it was checked against.** `trip.traveler_count` is part of
+every day, booking option, the budget and the transport overview; `trip.traveler_constraints` of
+every day, booking option and the transport overview. Changing either asks for a recheck of each
+of those, not of `trip` alone — see
+[replanning.md#party-changes](replanning.md#party-changes). A section emptied since the verified
+save counts as removed: nothing in it is left to verify.
 
 A recheck covers the part **as it was when rechecked**, not the part from then on. The scaffold
 records that version's `section_digest`, and an entry counts only while the part still has it: edit
@@ -285,7 +301,9 @@ so a day moved from 13:30 to 14:00 after verification re-saved as verified with 
 whole-file fingerprint would have closed that by making every edit cost the full seven-block pass
 again — the price of swapping one dinner. Per section, only the part that moved is rechecked and
 every other part keeps its verification. A receipt stamped against a different report date binds
-nothing: a fresh full report is a fresh verification.
+nothing: a fresh full report is a fresh verification. A receipt bound to the report also replaces
+the rule that a report may not predate the plan's `generated_at`: the receipt says section by
+section what the report saw, so bumping `generated_at` along with a rechecked edit is not refused.
 
 **What none of this can prove:** that a finding marked `resolved` was actually fixed. Code cannot
 diff an edit it never saw. That is why every resolved finding carries a `resolution` string
