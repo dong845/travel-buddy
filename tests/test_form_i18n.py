@@ -31,7 +31,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FORMS = [ROOT / "assets" / "trip-intake-form.html"]
+FORMS = [ROOT / "assets" / "trip-intake-form.html", ROOT / "assets" / "traveler-profile-intake.html"]
 
 CJK = re.compile(r"[　-〿㐀-鿿＀-￯]")
 
@@ -57,9 +57,21 @@ STORED_VALUE_LITERALS = {
     # feasibility.residence_status: the words the Chinese hint offers are what the intake has
     # always stored, so an English "EU citizen" is stored as the same word, not as a new value.
     "欧盟公民", "成员国居留卡", "欧盟长期居留", "短期签证", "其他", "不确定",
+    # The profile example selects the self-drive option VALUE.
+    "可接受自驾",
+}
+# Words a traveller may TYPE into the profile's list columns (scope, would-you-go-back, strength).
+# The form recognises them and stores a code; it never displays them except as a suggestion, and a
+# suggestion is taken from the table in the page's own language. Translating them would stop the
+# form understanding a Chinese answer.
+ACCEPTED_SPELLINGS = {
+    "城市", "区域", "地区", "国家",
+    "想", "想再去", "是", "不想", "不再去", "否", "说不好", "看情况", "也许",
+    "永不推荐", "永远不去", "绝对不去", "暂时避开", "暂时不去", "这次不去",
 }
 # The language switch names the OTHER language in that language, so a reader who cannot read the
-# page they are on can still find their own. It is a name, not a translation.
+# page they are on can still find their own. It is a name, not a translation. ("中文" is also the
+# profile's response-language option VALUE, which the example selects.)
 LANGUAGE_ENDONYMS = {"中文"}
 
 
@@ -254,7 +266,7 @@ def main() -> int:
 
         # 6. The only CJK left in the script is a stored value.
         literals = {lit for lit in string_literals(code) if CJK.search(lit)}
-        allowed = STORED_VALUE_LITERALS | LANGUAGE_ENDONYMS
+        allowed = STORED_VALUE_LITERALS | ACCEPTED_SPELLINGS | LANGUAGE_ENDONYMS
         stray = sorted(lit for lit in literals if lit not in allowed
                        and not re.fullmatch(r'input\[name="[\w-]+"\]\[value="[^"]+"\]', lit))
         check(f"{name}: CJK in the script is only stored values", not stray, stray[:10])

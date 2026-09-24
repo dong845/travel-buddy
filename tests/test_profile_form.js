@@ -30,47 +30,90 @@ const ROOT = path.resolve(__dirname, "..");
 const FORM = path.join(ROOT, "assets", "traveler-profile-intake.html");
 
 const html = fs.readFileSync(FORM, "utf8");
-const js = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
+// Only JavaScript runs; the zh/en dictionary is a JSON <script> the page reads by id.
+const scripts = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)];
+const js = scripts.filter((m) => !/type="application\/json"/.test(m[1])).map((m) => m[2]).join("\n");
 const ids = [...new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]))];
 
-const el = (id) => ({
-  id, value: "", checked: false, hidden: false, textContent: "", innerHTML: "",
-  style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-  addEventListener() {}, focus() {}, setAttribute() {}, getAttribute: () => null,
-  querySelectorAll: () => [], querySelector: () => null, closest: () => null,
-  reset() {}, checkValidity: () => true,
-});
-const store = {};
-ids.forEach((i) => { store[i] = el(i); });
+// One instance of the page per call, so the same answers can be given to the Chinese page and the
+// English one. `config` is what serve_profile_intake.py injects as TRAVEL_BUDDY_PROFILE_INTAKE.
+function loadForm(config = {}) {
+  const el = (id) => ({
+    id, value: "", checked: false, hidden: false, textContent: "", innerHTML: "",
+    style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    listeners: {},
+    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+    focus() {}, setAttribute() {}, getAttribute: () => null,
+    querySelectorAll: () => [], querySelector: () => null, closest: () => null,
+    reset() {}, checkValidity: () => true,
+  });
+  const store = {};
+  ids.forEach((i) => { store[i] = el(i); });
+  for (const m of scripts) {
+    const id = (m[1].match(/\bid="([^"]+)"/) || [])[1];
+    if (id && store[id]) store[id].textContent = m[2];
+  }
+  // Checkbox groups from the markup, so checked("natural") and the example button's
+  // querySelector('input[name=..][value=..]') see what the page would.
+  const groups = {};
+  for (const m of html.matchAll(/<input([^>]*)>/g)) {
+    const name = (m[1].match(/name="([^"]+)"/) || [])[1];
+    const value = (m[1].match(/value="([^"]*)"/) || [])[1];
+    if (name && value !== undefined) (groups[name] = groups[name] || []).push({ name, value, checked: false });
+  }
+  const g = {
+    document: {
+      getElementById: (i) => store[i] || null,
+      querySelector: (sel) => {
+        const m = String(sel).match(/^input\[name="([^"]+)"\]\[value="([^"]+)"\]$/);
+        return m ? (groups[m[1]] || []).find((n) => n.value === m[2]) || null : null;
+      },
+      querySelectorAll: (sel) => {
+        const out = [];
+        for (const m of String(sel).matchAll(/input\[name="([^"]+)"\](:checked)?/g)) {
+          const nodes = groups[m[1]] || [];
+          out.push(...(m[2] ? nodes.filter((n) => n.checked) : nodes));
+        }
+        return out;
+      },
+      addEventListener() {}, createElement: () => el("x"), body: el("body"), documentElement: el("html"),
+    },
+    window: { TRAVEL_BUDDY_PROFILE_INTAKE: config, addEventListener() {}, location: { href: "" },
+              setTimeout, clearTimeout },
+    fetch: async () => ({ ok: true, json: async () => ({}) }),
+    console, JSON, Date, Number, String, Array, Object, Math, parseInt, parseFloat, isNaN, Error, RegExp,
+  };
 
-const g = {
-  document: {
-    getElementById: (i) => store[i] || null,
-    querySelector: () => null, querySelectorAll: () => [],
-    addEventListener() {}, createElement: () => el("x"), body: el("body"),
-  },
-  window: { TRAVEL_BUDDY_PROFILE_INTAKE: {}, addEventListener() {}, location: { href: "" } },
-  fetch: async () => ({ ok: true, json: async () => ({}) }),
-  console, JSON, Date, Number, String, Array, Object, Math, parseInt, parseFloat, isNaN, Error, RegExp,
-};
+  // The probe is injected before the form's IIFE closes. If the anchor ever moves, this THROWS
+  // rather than leaving `buildProfile` undefined — a test that stops exercising the form while the
+  // suite stays green is worse than no test, which is the lesson the trip-form shim already carries.
+  const anchor = "})();";
+  const at = js.lastIndexOf(anchor);
+  if (at < 0) {
+    throw new Error("test_profile_form: could not find the form's closing IIFE; the probe was not "
+      + "injected, so nothing would have been tested. Update the anchor.");
+  }
+  let api = null;
+  g.__probe = (found) => { api = found; };
+  const names = Object.keys(g);
+  new Function(...names, js.slice(0, at)
+    + "\n__probe({ buildProfile, applyLanguage: typeof applyLanguage === \"function\" ? applyLanguage : null });\n"
+    + js.slice(at))(...names.map((n) => g[n]));
+  if (!api || typeof api.buildProfile !== "function") {
+    throw new Error("test_profile_form: buildProfile was never captured; nothing was tested.");
+  }
+  const fire = (id, type) => {
+    const handlers = (store[id] && store[id].listeners[type]) || [];
+    if (!handlers.length) throw new Error(`${id} has no ${type} listener`);
+    handlers.forEach((handler) => handler({ type, preventDefault() {} }));
+  };
+  const tick = (name, ...values) => (groups[name] || []).forEach((n) => { n.checked = values.includes(n.value); });
+  return { store, groups, api, fire, tick };
+}
 
-// The probe is injected before the form's IIFE closes. If the anchor ever moves, this THROWS
-// rather than leaving `buildProfile` undefined — a test that stops exercising the form while the
-// suite stays green is worse than no test, which is the lesson the trip-form shim already carries.
-const anchor = "})();";
-const at = js.lastIndexOf(anchor);
-if (at < 0) {
-  throw new Error("test_profile_form: could not find the form's closing IIFE; the probe was not "
-    + "injected, so nothing would have been tested. Update the anchor.");
-}
-let captured = null;
-g.__probe = (api) => { captured = api; };
-const names = Object.keys(g);
-new Function(...names, js.slice(0, at) + "\n__probe({ buildProfile });\n" + js.slice(at))(
-  ...names.map((n) => g[n]));
-if (!captured || typeof captured.buildProfile !== "function") {
-  throw new Error("test_profile_form: buildProfile was never captured; nothing was tested.");
-}
+const base = loadForm({});
+const store = base.store;
+const captured = base.api;
 
 const failures = [];
 const check = (label, condition, detail) => {
@@ -152,7 +195,9 @@ for (const [written, expected] of [["城市", "city_or_region"], ["国家", "cou
 //    This is the half that did not exist: every one of these used to be accepted silently.
 for (const [label, field, value, mustMention] of [
   ["a strength nobody can parse", "excluded", "某地 | 国家 | 理由 | 随便啦", "随便啦"],
-  ["the enum typo'd with a space", "excluded", "某地 | 国家 | 理由 | never recommend", "never recommend"],
+  // "never recommend" used to be here as a typo of the enum; it is plain English for this column
+  // and the English page teaches it, so it is now understood. This is a word nobody can map.
+  ["an English word nobody can parse", "excluded", "某地 | 国家 | 理由 | sometimes", "sometimes"],
   ["a revisit answer nobody can parse", "visited", "东京 | 城市 | 2024-04 | 大概吧 | n", "大概吧"],
   ["a scope nobody can parse", "wishlist", "冰岛 | 星球 | 5 | why", "星球"],
   ["a priority written as a word", "wishlist", "冰岛 | 国家 | 高 | why", "高"],
@@ -187,12 +232,140 @@ for (const [label, value, expected] of [["1", "1", 1], ["5", "5", 5], ["empty", 
 // 5. And the example button has to type what the form now documents. It is the one filled-in form
 //    most people will ever see, so an example the form itself would refuse teaches the wrong
 //    grammar — and this is exactly what happened: it still said `avoid_for_now` after the label
-//    stopped mentioning it.
-for (const [field, value] of [...html.matchAll(/\$\("(visited|wishlist|excluded)"\)\.value = "([^"]*)"/g)]
-     .map((m) => [m[1], m[2]])) {
-  const message = refused(field, value);
-  check(`the example the button types into ${field} is one this form accepts`, message === null,
-        `the form refuses its own example: ${message}`);
+//    stopped mentioning it. The button is pressed, in both languages, and the page it leaves
+//    behind must build; reading its literals out of the HTML stopped working once the example
+//    came from the dictionary, and a check that finds nothing to check passes.
+const CJK = /[　-〿㐀-鿿＀-￯]/;
+for (const lang of ["zh", "en"]) {
+  const f = loadForm({ language: lang });
+  let built = null;
+  try { f.fire("fill-example", "click"); built = f.api.buildProfile(); } catch (err) { built = err.message; }
+  check(`${lang}: the example the button fills in is one this form accepts`, typeof built === "object",
+        `the form refuses its own example: ${built}`);
+  if (lang === "en") {
+    const typed = ["nationality", "residence-country", "languages", "home-city", "home-country", "map-apps",
+                   "booking-platforms", "services-to-avoid", "booking-access-notes", "service-notes",
+                   "visited", "wishlist", "excluded", "cabin", "dietary", "accessibility", "avoid-list"];
+    const chinese = typed.filter((id) => CJK.test(f.store[id].value));
+    check("en: the example's typed answers are in English", !chinese.length, chinese.join(", "));
+  }
+}
+
+// 6. One page, two languages, ONE profile. The same answers given to the Chinese page and to the
+//    English one -- each list column written in the words that page's hint teaches -- must build
+//    the same profile: it is read later by code that knows nothing about the page's language.
+function fullProfile(lang) {
+  const f = loadForm({ language: lang });
+  const answers = {
+    "profile-id": "same-traveller", "response-language": "English", "nationality": "China",
+    "residence-country": "Netherlands", "residence-status": "member_state_residence_permit",
+    "languages": "English, Chinese", "language-comfort": "可用翻译工具", "home-city": "Leiden",
+    "home-country": "Netherlands", "airports": "AMS, RTM", "currency": "EUR", "map-apps": "Google Maps",
+    "booking-platforms": "Booking.com", "google-access": "available", "direction": "balance",
+    "pace": "适中", "lodging": "舒适中档", "location-priority": "景点步行范围", "self-drive": "可接受自驾",
+    "cabin": "economy", "dietary": "vegetarian", "avoid-list": "red-eye flights",
+  };
+  for (const [id, value] of Object.entries(answers)) f.store[id].value = value;
+  f.store.consent.checked = true;
+  const lists = lang === "en"
+    ? { visited: "Tokyo | city | 2024-04 | yes | food\nKyoto | city | 2019 | not sure | busy",
+        wishlist: "Iceland | country | 5 | aurora",
+        excluded: "Somewhere | country | crowds | avoid for now\nElsewhere | region | too hot | never" }
+    : { visited: "Tokyo | 城市 | 2024-04 | 想 | food\nKyoto | 城市 | 2019 | 不确定 | busy",
+        wishlist: "Iceland | 国家 | 5 | aurora",
+        excluded: "Somewhere | 国家 | crowds | 暂时避开\nElsewhere | 区域 | too hot | 永不推荐" };
+  for (const [id, value] of Object.entries(lists)) f.store[id].value = value;
+  f.tick("natural", "雪景/极光");
+  f.tick("cultural", "当地美食", "街区漫步");
+  try { return { ok: true, profile: f.api.buildProfile() }; } catch (err) { return { ok: false, message: err.message }; }
+}
+{
+  const zh = fullProfile("zh");
+  const en = fullProfile("en");
+  check("the Chinese page builds the full answer set", zh.ok, zh.message);
+  check("the English page builds the full answer set", en.ok, en.message);
+  if (zh.ok && en.ok) {
+    check("both languages build the identical profile", JSON.stringify(zh.profile) === JSON.stringify(en.profile),
+          `zh=${JSON.stringify(zh.profile.travel_history)}\n    en=${JSON.stringify(en.profile.travel_history)}`);
+  }
+}
+
+// 7. Consent is required on the English page too. It is the sentence the traveller agrees to; a
+//    translation that lost the requirement would save a profile nobody agreed to.
+{
+  const f = loadForm({ language: "en" });
+  f.store["profile-id"].value = "someone";
+  f.store.consent.checked = false;
+  let message = null;
+  try { f.api.buildProfile(); } catch (err) { message = err.message; }
+  check("en: a profile without consent is refused", message !== null, "it was built without consent");
+  if (message) check("en: that refusal is in English", !CJK.test(message), message);
+}
+
+// 8. Every refusal names the line, quotes what was written, reads in the page's language -- and
+//    every word it suggests is one the form then accepts, so following the advice cannot fail.
+const COLUMN = { excluded: 3, visited: 3, wishlist: 1 };
+for (const lang of ["zh", "en"]) {
+  const f = loadForm({ language: lang });
+  const attempt = (field, value) => {
+    for (const id of ["visited", "wishlist", "excluded"]) f.store[id].value = "";
+    f.store["profile-id"].value = "someone";
+    f.store.consent.checked = true;
+    f.store[field].value = value;
+    try { f.api.buildProfile(); return null; } catch (err) { return err.message; }
+  };
+  for (const [field, row, bad] of [["excluded", "X | country | r | whatever", "whatever"],
+                                   ["visited", "T | city | 2024 | perhaps not", "perhaps not"],
+                                   ["wishlist", "I | planet | 5 | w", "planet"],
+                                   ["wishlist", "I | country | high | w", "high"]]) {
+    const message = attempt(field, row);
+    check(`${lang}: "${bad}" in ${field} is refused`, message !== null, "accepted");
+    if (!message) continue;
+    check(`${lang}: the refusal quotes "${bad}"`, message.includes(bad), message);
+    check(`${lang}: the refusal names the line`, lang === "en" ? /Line 1\b/.test(message) : /第\s*1\s*行/.test(message), message);
+    check(`${lang}: the refusal for "${bad}" is in the page's language`,
+          lang === "en" ? !CJK.test(message.replace(bad, "")) : CJK.test(message), message);
+    const advice = message.match(lang === "en" ? /You can write: (.*)\.\s*$/ : /可以写：(.*)。\s*$/);
+    if (!advice) continue;
+    const words = advice[1].split(lang === "en" ? ", " : "、");
+    for (const word of words) {
+      const parts = row.split(" | ");
+      parts[COLUMN[field]] = word;
+      check(`${lang}: the suggested "${word}" is accepted in ${field}`, attempt(field, parts.join(" | ")) === null,
+            `the form suggests a word it then refuses: ${attempt(field, parts.join(" | "))}`);
+    }
+  }
+}
+
+// 9. The English words the English page teaches are understood (the tables are shared, so the
+//    Chinese page accepts them too).
+for (const [field, written, key, expected] of [
+  ["excluded", "某地 | 国家 | 理由 | never", "exclusion_strength", "never_recommend"],
+  ["excluded", "某地 | 国家 | 理由 | never recommend", "exclusion_strength", "never_recommend"],
+  ["excluded", "某地 | 国家 | 理由 | avoid for now", "exclusion_strength", "avoid_for_now"],
+  ["excluded", "某地 | 国家 | 理由 | Avoid  For Now", "exclusion_strength", "avoid_for_now"],
+  ["visited", "东京 | city | 2024-04 | not sure | x", "revisit_interest", "unknown"],
+  ["visited", "东京 | region | 2024-04 | maybe | x", "revisit_interest", "maybe"],
+]) {
+  let got;
+  try { got = firstRow(field, written)[key]; } catch (err) { got = `refused: ${err.message.trim()}`; }
+  check(`"${written.split(" | ")[3]}" in ${field} means ${expected}`, got === expected, `got ${got}`);
+}
+
+// 10. The switch works after load, both ways.
+{
+  const f = loadForm({ language: "zh" });
+  check("the profile page exposes its language switch", !!f.api.applyLanguage);
+  if (f.api.applyLanguage) {
+    f.store["profile-id"].value = "";
+    f.api.applyLanguage("en");
+    let message = null;
+    try { f.api.buildProfile(); } catch (err) { message = err.message; }
+    check("after switching to English, a refusal is in English", message !== null && !CJK.test(message), message);
+    f.api.applyLanguage("zh");
+    try { f.api.buildProfile(); message = null; } catch (err) { message = err.message; }
+    check("and after switching back, Chinese again", message !== null && CJK.test(message), message);
+  }
 }
 
 if (failures.length) {
