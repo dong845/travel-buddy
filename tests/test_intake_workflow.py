@@ -49,6 +49,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -884,6 +885,230 @@ def check_a_blocking_run_tells_a_weaker_agent_what_to_do(module, check) -> None:
           "two copies of a message is how the English-guard list drifted from the renderer")
 
 
+# --------------------------------------------------------------------------------------------
+# The language the traveller chose
+# --------------------------------------------------------------------------------------------
+# The profile collects `preferred_response_language`; the trip form received it and dropped it,
+# and 0 of 15 real intakes carried it. The pages now speak zh or en, so the servers have to decide
+# which, tell the page, answer in it, and write down what was used. These cases start the real
+# servers the way a caller does -- through main(), detached -- and read what a browser would get.
+
+# A trip intake exactly as trip-intake-form.html builds it (generated from its own build(), with
+# the budget label a browser takes from the selected option). The server validates what it saves,
+# so a hand-written dict would test the validator's patience instead of the language plumbing.
+FORM_INTAKE = ROOT / "tests" / "form-intake-fixture.json"
+LANGUAGE_HEADER = "X-Travel-Buddy-Language"
+
+
+def has_cjk(text: str) -> bool:
+    return any("㐀" <= ch <= "鿿" for ch in text)
+
+
+def fetch(url: str, payload: dict | None = None, headers: dict | None = None) -> tuple[int, str]:
+    data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method="GET" if payload is None else "POST",
+                                     headers={"Content-Type": "application/json", **(headers or {})})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError) as exc:
+        return 0, f"request failed: {exc}"
+
+
+def page_config(body: str, name: str) -> dict:
+    """The config object the server injected into the page, as the page's script reads it."""
+    marker = f"window.{name}="
+    start = body.find(marker)
+    if start < 0:
+        return {}
+    end = body.find(";</script>", start)
+    return json.loads(body[start + len(marker):end])
+
+
+def detached_link(module, workspace: Path, argv: list[str], check, label: str) -> dict | None:
+    # An unknown flag makes argparse exit; that is one failed case, not the end of the run.
+    with contextlib.redirect_stdout(io.StringIO()) as printed, contextlib.redirect_stderr(io.StringIO()) as errors:
+        try:
+            code = module.main(["--workspace", str(workspace), "--detach", "--assistant", "none", *argv])
+        except SystemExit as exc:
+            code = exc.code
+    check(f"{label}: the detached server came up", code == 0, printed.getvalue() + errors.getvalue())
+    return link_record(workspace) if code == 0 else None
+
+
+def check_language_module(check) -> None:
+    """The one place the language is decided: aliases, the order of sources, and the picker."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import intake_language as lang
+    except ImportError as exc:
+        check("scripts/intake_language.py exists", False, str(exc))
+        return
+    for value, expected in [("English", "en"), ("en", "en"), ("英文", "en"), (" EN ", "en"),
+                            ("中文", "zh"), ("zh", "zh"), ("Chinese", "zh"),
+                            ("中文和 English", None), ("其他", None), ("", None), (None, None), (5, None)]:
+        check(f"normalize_language({value!r}) is {expected!r}", lang.normalize_language(value) == expected,
+              repr(lang.normalize_language(value)))
+    english = {"identity_and_language": {"preferred_response_language": "English"}}
+    both = {"identity_and_language": {"preferred_response_language": "中文和 English"}}
+    for cli, profile, expected, why in [
+        ("en", None, "en", "the flag alone"),
+        ("zh", english, "zh", "the flag beats the profile"),
+        (None, english, "en", "the profile's preference when there is no flag"),
+        (None, both, "zh", "a bilingual preference names no single page language"),
+        (None, None, "zh", "nothing said: Chinese"),
+        (None, {"identity_and_language": "broken"}, "zh", "a malformed profile section is not an answer"),
+    ]:
+        check(f"resolve_form_language: {why}", lang.resolve_form_language(cli, profile) == expected,
+              repr(lang.resolve_form_language(cli, profile)))
+    check("pick chooses by language", lang.pick("en", "中", "E") == "E" and lang.pick("zh", "中", "E") == "中")
+    try:
+        lang.pick("fr", "中", "E")
+        check("pick refuses a language it does not have", False, "returned instead of raising")
+    except ValueError:
+        pass
+
+
+def check_english_reaches_the_profile_page(module, check) -> None:
+    """--language en reaches the first page a new traveller sees, through --detach, and the
+    server refuses a tokenless request in English too -- that refusal is also a page."""
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = Path(tmp) / WORKSPACE_NAME
+        record = None
+        try:
+            record = detached_link(module, workspace, ["--language", "en"], check, "--language en")
+            if not record:
+                return
+            command = record.get("command") or []
+            check("--detach passes --language to the server it starts",
+                  "--language" in command and command[command.index("--language") + 1] == "en", str(command))
+            status, body = fetch(record["url"])
+            config = page_config(body, "TRAVEL_BUDDY_PROFILE_INTAKE")
+            check("the profile page is told to speak English", status == 200 and config.get("language") == "en",
+                  f"{status} {config}")
+            bare = record["url"].split("?", 1)[0]
+            status, body = fetch(bare)
+            check("a request without the token is refused", status == 403, f"{status} {body[:200]}")
+            check("and the refusal is in English", not has_cjk(body), body[:200])
+        finally:
+            if record:
+                stop_detached(record.get("pid"))
+                stop_detached(record.get("watcher_pid"))
+
+
+def check_the_profile_preference_chooses_the_trip_language(module, check) -> None:
+    """With no flag, a saved profile that asks for English gets an English trip page; the flag
+    still overrides it. This is the value that was collected and dropped."""
+    for argv, expected, label in [([], "en", "profile prefers English, no flag"),
+                                  (["--language", "zh"], "zh", "the flag overrides the profile")]:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / WORKSPACE_NAME
+            path = write_profile(workspace, "alice")
+            profile = json.loads(path.read_text(encoding="utf-8"))
+            profile["identity_and_language"]["preferred_response_language"] = "English"
+            path.write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+            record = None
+            try:
+                record = detached_link(module, workspace, argv, check, label)
+                if not record:
+                    continue
+                status, body = fetch(record["url"])
+                config = page_config(body, "TRAVEL_BUDDY_TRIP_INTAKE")
+                check(f"{label}: the trip page speaks {expected}", config.get("language") == expected,
+                      f"{status} {config.get('language')!r}")
+            finally:
+                if record:
+                    stop_detached(record.get("pid"))
+                    stop_detached(record.get("watcher_pid"))
+
+
+def check_the_saved_intake_carries_the_language(module, check) -> None:
+    """A submission is answered in the language of the page that sent it, and the saved intake
+    records that language and the traveller's preferred output language for the steps after it."""
+    intake = json.loads(FORM_INTAKE.read_text(encoding="utf-8"))
+    for preference, header, form_language, output_language in [
+        ("中文和 English", "en", "en", "en"),   # bilingual preference: the page language decides
+        ("English", "zh", "zh", "en"),          # switched to Chinese on the page, still wants English
+    ]:
+        label = f"preference {preference!r}, page {header}"
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / WORKSPACE_NAME
+            path = write_profile(workspace, "alice")
+            profile = json.loads(path.read_text(encoding="utf-8"))
+            profile["identity_and_language"]["preferred_response_language"] = preference
+            path.write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+            record = None
+            try:
+                record = detached_link(module, workspace, ["--language", "en"], check, label)
+                if not record:
+                    continue
+                status, body = fetch(record["url"])
+                submit = urllib.parse.urljoin(record["url"], page_config(body, "TRAVEL_BUDDY_TRIP_INTAKE").get("submit_url", ""))
+                broken = json.loads(json.dumps(intake))
+                broken["party"]["traveler_count"] = 0
+                status, body = fetch(submit, broken, {LANGUAGE_HEADER: header})
+                check(f"{label}: an invalid submission is refused", status == 422, f"{status} {body[:200]}")
+                check(f"{label}: in the language of the page that sent it", has_cjk(body) == (header == "zh"), body[:300])
+                status, body = fetch(submit, intake, {LANGUAGE_HEADER: header})
+                check(f"{label}: a valid submission is saved", status == 201, f"{status} {body[:300]}")
+                if status != 201:
+                    continue
+                saved = json.loads(Path(json.loads(body)["intake_path"]).read_text(encoding="utf-8"))
+                check(f"{label}: the intake records the form language", saved.get("form_language") == form_language,
+                      repr(saved.get("form_language")))
+                check(f"{label}: and the preferred output language", saved.get("preferred_output_language") == output_language,
+                      repr(saved.get("preferred_output_language")))
+            finally:
+                if record:
+                    stop_detached(record.get("pid"))
+                    stop_detached(record.get("watcher_pid"))
+
+
+def check_the_profile_server_speaks_and_hands_over(module, check) -> None:
+    """The profile server refuses in the page's language -- including the one refusal a traveller
+    can cause by typing a passport number into a note -- and opens the trip form in the resolved
+    language: the flag if there was one, else what the new profile asks for."""
+    for argv, preference, expected, label in [
+        (["--language", "en"], "中文", "en", "flag en, profile prefers Chinese"),
+        ([], "English", "en", "no flag, new profile prefers English"),
+        ([], None, "zh", "no flag, no preference"),
+    ]:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / WORKSPACE_NAME
+            record = None
+            try:
+                record = detached_link(module, workspace, argv, check, label)
+                if not record:
+                    continue
+                status, body = fetch(record["url"])
+                submit = urllib.parse.urljoin(record["url"], page_config(body, "TRAVEL_BUDDY_PROFILE_INTAKE").get("submit_url", ""))
+                page_language = expected if argv else "zh"
+                leaky = valid_profile("bob")
+                leaky["home_and_logistics"]["notes"] = "passport number: E12345678"
+                status, body = fetch(submit, leaky, {LANGUAGE_HEADER: page_language})
+                check(f"{label}: a profile carrying a passport number is refused", status == 422, f"{status} {body[:200]}")
+                check(f"{label}: in the page's language", has_cjk(json.loads(body).get("error", "")) == (page_language == "zh"),
+                      body[:300])
+                profile = valid_profile("bob")
+                if preference:
+                    profile["identity_and_language"]["preferred_response_language"] = preference
+                status, body = fetch(submit, profile, {LANGUAGE_HEADER: page_language})
+                check(f"{label}: the profile is saved", status == 201, f"{status} {body[:300]}")
+                if status != 201:
+                    continue
+                next_url = json.loads(body).get("next_url") or ""
+                status, body = fetch(next_url)
+                config = page_config(body, "TRAVEL_BUDDY_TRIP_INTAKE")
+                check(f"{label}: the trip form it opens speaks {expected}", config.get("language") == expected,
+                      f"{status} {config.get('language')!r}")
+            finally:
+                if record:
+                    stop_detached(record.get("pid"))
+                    stop_detached(record.get("watcher_pid"))
+
+
 def main() -> int:
     module = load_workflow()
     failures: list[str] = []
@@ -903,6 +1128,11 @@ def main() -> int:
     check_a_link_file_does_not_outlive_its_server(module, check)
     check_a_reader_can_tell_a_live_link_from_a_dead_one(module, check)
     check_a_blocking_run_tells_a_weaker_agent_what_to_do(module, check)
+    check_language_module(check)
+    check_english_reaches_the_profile_page(module, check)
+    check_the_profile_preference_chooses_the_trip_language(module, check)
+    check_the_saved_intake_carries_the_language(module, check)
+    check_the_profile_server_speaks_and_hands_over(module, check)
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)

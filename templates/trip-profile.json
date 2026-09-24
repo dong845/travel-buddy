@@ -2,6 +2,8 @@
   "profile_version": "1.0",
   "mode": "discovery",
   "intake_status": "partial",
+  "form_language": null,
+  "preferred_output_language": null,
   "trip_purpose": null,
   "origin": {
     "home_city": null,

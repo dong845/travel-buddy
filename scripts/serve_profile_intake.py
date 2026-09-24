@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Serve a loopback-only Travel Buddy profile form and save one submitted profile.
 
-Usage: python serve_profile_intake.py [--workspace PATH] [--port PORT] [--overwrite] [--next-trip]
+Usage: python serve_profile_intake.py [--workspace PATH] [--port PORT] [--overwrite] [--next-trip] [--language zh|en]
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from intake_language import pick, resolve_form_language
 from serve_trip_intake import blocking_advice, IntakeRequestGuard, TripIntakeServer, mint_token, profile_defaults_from_profile, request_route
 from travel_workspace import DEFAULT_WORKSPACE, profile_filename, validate_profile
 
@@ -23,9 +24,15 @@ MAX_BODY_BYTES = 256 * 1024
 
 
 class IntakeServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], workspace: Path, overwrite: bool, next_trip: bool, assistant_mode: str, existing_profile: dict | None = None) -> None:
+    def __init__(self, address: tuple[str, int], workspace: Path, overwrite: bool, next_trip: bool, assistant_mode: str, existing_profile: dict | None = None, cli_language: str | None = None) -> None:
         super().__init__(address, IntakeHandler)
         self.existing_profile = existing_profile
+        # The flag is kept apart from the page language because it decides twice: this page opens
+        # in the flag's language, else in the preference of the profile being edited; the trip
+        # form it hands over to opens in the flag's language, else in the preference of the
+        # profile just SUBMITTED -- which a first-time traveller has only now stated.
+        self.cli_language = cli_language
+        self.language = resolve_form_language(cli_language, existing_profile)
         self.workspace = workspace
         self.overwrite = overwrite
         self.next_trip = next_trip
@@ -64,7 +71,7 @@ class IntakeHandler(IntakeRequestGuard, BaseHTTPRequestHandler):
         if not self.get_is_allowed():
             return
         page = FORM.read_text(encoding="utf-8")
-        startup = json.dumps({"submit_url": f"/submit?token={self.server.token}", "next_trip": self.server.next_trip, "existing_profile": self.server.existing_profile}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+        startup = json.dumps({"submit_url": f"/submit?token={self.server.token}", "next_trip": self.server.next_trip, "existing_profile": self.server.existing_profile, "language": self.server.language}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
         page = page.replace("<head>", f'<head><script>window.TRAVEL_BUDDY_PROFILE_INTAKE={startup};</script>', 1)
         body = page.encode("utf-8")
         self.send_response(HTTPStatus.OK)
@@ -80,22 +87,26 @@ class IntakeHandler(IntakeRequestGuard, BaseHTTPRequestHandler):
             return
         if not self.post_is_allowed():
             return
+        lang = self.request_language()
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length < 1 or length > MAX_BODY_BYTES:
-                raise ValueError("提交内容大小无效。")
+                raise ValueError(pick(lang, "提交内容大小无效。", "The submission is empty or too large."))
             profile = json.loads(self.rfile.read(length).decode("utf-8"))
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": f"档案内容无法解析：{exc}"})
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": pick(lang, f"档案内容无法解析：{exc}", f"The profile could not be read: {exc}")})
             return
         next_url: str | None = None
         # As in the trip server: claim the single submission before anything is written or any
         # second port is bound, and leave the slot open when this submission is refused.
         with self.server.submit_lock:
             if self.server.submitted:
-                self.send_json(HTTPStatus.CONFLICT, {"error": "本次表单只接受一次提交，已经保存过一份旅行档案。如需修改，请回到终端用 --edit 重新打开档案。"})
+                self.send_json(HTTPStatus.CONFLICT, {"error": pick(
+                    lang, "本次表单只接受一次提交，已经保存过一份旅行档案。如需修改，请回到终端用 --edit 重新打开档案。",
+                    "This form accepts one submission, and a profile has already been saved. To change it, "
+                    "reopen the profile from the terminal with --edit.")})
                 return
-            errors = validate_profile(profile)
+            errors = validate_profile(profile, lang)
             if errors:
                 self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": " ".join(errors)})
                 return
@@ -104,7 +115,10 @@ class IntakeHandler(IntakeRequestGuard, BaseHTTPRequestHandler):
                 destination = self.server.workspace / "profiles" / profile_filename(str(profile["profile_id"]))
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if destination.exists() and not self.server.overwrite:
-                    self.send_json(HTTPStatus.CONFLICT, {"error": "已存在同名的旅行档案。请换一个档案名称后重新提交；如需覆盖，请在终端用 --overwrite 重新启动。"})
+                    self.send_json(HTTPStatus.CONFLICT, {"error": pick(
+                        lang, "已存在同名的旅行档案。请换一个档案名称后重新提交；如需覆盖，请在终端用 --overwrite 重新启动。",
+                        "A travel profile with this name already exists. Choose another name and submit again, or "
+                        "restart from the terminal with --overwrite to replace it.")})
                     return
                 if self.server.next_trip:
                     defaults = profile_defaults_from_profile(profile)
@@ -114,17 +128,20 @@ class IntakeHandler(IntakeRequestGuard, BaseHTTPRequestHandler):
                         destination.resolve(),
                         defaults,
                         self.server.assistant_mode,
+                        language=resolve_form_language(self.server.cli_language, profile),
                     )
                 destination.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             except OSError as exc:
                 if next_server:
                     next_server.server_close()
-                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"无法在本机保存旅行档案：{exc}"})
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": pick(
+                    lang, f"无法在本机保存旅行档案：{exc}", f"Could not save the travel profile on this computer: {exc}")})
                 return
             except ValueError as exc:
                 if next_server:
                     next_server.server_close()
-                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": f"无法准备本次行程填写页：{exc}"})
+                self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": pick(
+                    lang, f"无法准备本次行程填写页：{exc}", f"Could not prepare this trip's form: {exc}")})
                 return
             self.server.submitted = True
             self.server.saved_profile_path = destination
@@ -155,6 +172,7 @@ def main() -> int:
     parser.add_argument("--next-trip", action="store_true", help="After a saved profile, automatically start the current-trip intake form")
     parser.add_argument("--edit", default=None, help="Existing profile JSON to load into the form for review and editing")
     parser.add_argument("--assistant", choices=("auto", "codex", "claude", "none"), default="auto", help="Assistant to start automatically after the current-trip form submits")
+    parser.add_argument("--language", choices=("zh", "en"), default=None, help="Language both forms open in; default: the edited profile's preference (then the new profile's, for the trip form), else zh")
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
@@ -167,12 +185,13 @@ def main() -> int:
             print(f"ERROR: Could not read the profile to edit: {exc}", file=sys.stderr)
             return 2
     try:
-        server = IntakeServer(("127.0.0.1", args.port), workspace, args.overwrite, args.next_trip, args.assistant, existing)
+        server = IntakeServer(("127.0.0.1", args.port), workspace, args.overwrite, args.next_trip, args.assistant, existing, args.language)
     except OSError as exc:
         print(f"ERROR: Could not start local intake server: {exc}", file=sys.stderr)
         return 2
     host, port = server.server_address
     print(f"OPEN THIS LOCAL LINK: http://{host}:{port}/?token={server.token}", flush=True)
+    print(f"FORM LANGUAGE: {server.language} (the page has a switch)", flush=True)
     print("WAITING FOR ONE PROFILE SUBMISSION. The server accepts only this computer's loopback requests, and only through the whole link above: the token in it is what proves the page is the one this terminal opened. Copy the link in full.", flush=True)
     advice = blocking_advice()
     if advice:

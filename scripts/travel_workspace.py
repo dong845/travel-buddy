@@ -114,7 +114,7 @@ def find_sensitive_values(value: object, path: str = "") -> list[str]:
     return findings
 
 
-def validate_profile(profile: object) -> list[str]:
+def validate_profile(profile: object, lang: str = "en") -> list[str]:
     if not isinstance(profile, dict):
         return ["Profile must be a JSON object."]
     errors: list[str] = []
@@ -152,12 +152,17 @@ def validate_profile(profile: object) -> list[str]:
         for key in ("visited_places", "wish_list", "excluded_places"):
             if not isinstance(history.get(key), list):
                 errors.append(f"travel_history.{key} must be a list.")
+    # The two refusals a traveller can cause from the form -- a passport number or a password typed
+    # into a note -- are answered in the page's language; the rest name JSON paths the form cannot
+    # produce, and stay in English for whoever is debugging the file.
     sensitive = find_sensitive_keys(profile)
     if sensitive:
-        errors.append("Profile contains prohibited sensitive fields: " + ", ".join(sensitive) + ".")
+        errors.append("档案包含不应保存的敏感字段：" + "、".join(sensitive) + "。" if lang == "zh"
+                      else "Profile contains prohibited sensitive fields: " + ", ".join(sensitive) + ".")
     sensitive_values = find_sensitive_values(profile)
     if sensitive_values:
-        errors.append("Profile appears to contain prohibited sensitive values at: " + ", ".join(sensitive_values) + ".")
+        errors.append("档案内容疑似包含证件/支付/密码等敏感值，位置：" + "、".join(sensitive_values) + "。" if lang == "zh"
+                      else "Profile appears to contain prohibited sensitive values at: " + ", ".join(sensitive_values) + ".")
     return errors
 
 

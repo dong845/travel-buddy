@@ -14,7 +14,8 @@ const fs = require("fs");
 
 // `config` is what the local server injects as window.TRAVEL_BUDDY_TRIP_INTAKE -- the display
 // language among it -- so a test can load the same page the way an English traveller gets it.
-module.exports = function load(htmlPath, config = {}) {
+// `options.fetch` replaces the network, so a test can see what a submission actually sends.
+module.exports = function load(htmlPath, config = {}, options = {}) {
   const html = fs.readFileSync(htmlPath, "utf8");
   // Only JavaScript is executed; the zh/en dictionary is a JSON <script> the page reads by id.
   const scripts = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)];
@@ -98,7 +99,7 @@ module.exports = function load(htmlPath, config = {}) {
     window: { TRAVEL_BUDDY_TRIP_INTAKE: config, addEventListener() {}, setTimeout, clearTimeout,
               location: { search: "", href: "http://127.0.0.1/" } },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
-    fetch: async () => ({ ok: true, json: async () => ({}), text: async () => "" }),
+    fetch: options.fetch || (async () => ({ ok: true, json: async () => ({}), text: async () => "" })),
     navigator: { language: "zh-CN" },
     location: { search: "", href: "http://127.0.0.1/" },
     alert() {},

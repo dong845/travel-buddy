@@ -37,7 +37,7 @@ const ids = [...new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]))];
 
 // One instance of the page per call, so the same answers can be given to the Chinese page and the
 // English one. `config` is what serve_profile_intake.py injects as TRAVEL_BUDDY_PROFILE_INTAKE.
-function loadForm(config = {}) {
+function loadForm(config = {}, options = {}) {
   const el = (id) => ({
     id, value: "", checked: false, hidden: false, textContent: "", innerHTML: "",
     style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
@@ -80,7 +80,7 @@ function loadForm(config = {}) {
     },
     window: { TRAVEL_BUDDY_PROFILE_INTAKE: config, addEventListener() {}, location: { href: "" },
               setTimeout, clearTimeout },
-    fetch: async () => ({ ok: true, json: async () => ({}) }),
+    fetch: options.fetch || (async () => ({ ok: true, json: async () => ({}) })),
     console, JSON, Date, Number, String, Array, Object, Math, parseInt, parseFloat, isNaN, Error, RegExp,
   };
 
@@ -368,9 +368,30 @@ for (const [field, written, key, expected] of [
   }
 }
 
-if (failures.length) {
-  console.error(`PROFILE FORM FAILED (${failures.length}):`);
-  failures.forEach((f) => console.error(`--- ${f}\n`));
-  process.exit(1);
+// 11. A submission says which language its page was in when it was sent, after a switch too, so
+//     the server answers a refusal in the language on screen.
+async function languageHeaderCases() {
+  for (const [lang, switchTo, expected] of [["zh", null, "zh"], ["en", null, "en"], ["zh", "en", "en"]]) {
+    const sent = [];
+    const f = loadForm({ language: lang, submit_url: "/submit?token=t" },
+                       { fetch: async (url, init) => { sent.push(init); return { ok: true, json: async () => ({}) }; } });
+    f.store["profile-id"].value = "someone";
+    f.store.consent.checked = true;
+    if (switchTo && f.api.applyLanguage) f.api.applyLanguage(switchTo);
+    for (const handler of f.store["profile-form"].listeners.submit || []) {
+      await handler({ type: "submit", preventDefault() {} });
+    }
+    const header = sent.length ? (sent[0].headers || {})["X-Travel-Buddy-Language"] : undefined;
+    check(`a ${lang} profile page${switchTo ? ` switched to ${switchTo}` : ""} submits with language ${expected}`,
+          header === expected, `sent: ${JSON.stringify(sent.map((init) => init.headers))}`);
+  }
 }
-console.log("all profile-form cases passed");
+
+languageHeaderCases().then(() => {
+  if (failures.length) {
+    console.error(`PROFILE FORM FAILED (${failures.length}):`);
+    failures.forEach((f) => console.error(`--- ${f}\n`));
+    process.exit(1);
+  }
+  console.log("all profile-form cases passed");
+});

@@ -1418,7 +1418,8 @@
           if (!endpoint) throw fieldError(null, "msg.open-from-terminal");
           status.className = "status";
           say(status, "msg.sending");
-          const response = await fetch(endpoint, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data) });
+          // The page's CURRENT language, so the server answers in it and the intake records it.
+          const response = await fetch(endpoint, { method:"POST", headers:{"Content-Type":"application/json", "X-Travel-Buddy-Language":LANG}, body:JSON.stringify(data) });
           const result = await response.json();
           if (!response.ok) throw new Error(result.error || t("msg.submit-failed"));
           try { localStorage.removeItem(DRAFT_KEY); } catch (error) { /* nothing to clean up */ }

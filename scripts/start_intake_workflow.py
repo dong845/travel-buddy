@@ -5,7 +5,7 @@ Use this entry point for a new Travel Buddy request. It starts the one-time
 reusable-profile form when no valid local profile exists; otherwise it starts
 the current-trip form with the selected profile's stable defaults.
 
-Usage: python start_intake_workflow.py [--workspace PATH] [--profile PROFILE_ID] [--assistant auto|codex|claude|none] [--detach]
+Usage: python start_intake_workflow.py [--workspace PATH] [--profile PROFILE_ID] [--assistant auto|codex|claude|none] [--language zh|en] [--detach]
 """
 
 from __future__ import annotations
@@ -720,10 +720,17 @@ def main(argv: list[str] | None = None) -> int:
              "Use this when the harness has no way to run a command in the background; the "
              "server's output, including TRAVEL BUDDY TRIP INPUT, streams to "
              "<workspace>/.intake-<port>.log for you to poll.")
+    parser.add_argument(
+        "--language", choices=("zh", "en"), default=None,
+        help="Language the forms open in. Default: the saved profile's preferred output language, "
+             "else zh; a first-time traveller's trip form follows the profile they just saved.")
     # argv is a parameter so the tests can drive this the way a caller does, through main(),
     # instead of asserting on internals that a caller never touches. A --detach path proved by
     # calling run_detached() directly would not prove the flag reaches it.
     args = parser.parse_args(argv)
+    # Passed on only when given: each server resolves the rest from the profile it holds, and the
+    # profile server must be able to tell "the traveller asked for zh" from "nobody said".
+    language = ["--language", args.language] if args.language else []
     workspace = Path(args.workspace).expanduser()
     profiles = valid_profiles(workspace)
 
@@ -738,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     elif not profiles:
         print("NO REUSABLE PROFILE FOUND: starting the one-time local profile form.", flush=True)
-        return start([sys.executable, str(PROFILE_INTAKE_SERVER), "--workspace", str(workspace), "--next-trip", "--assistant", args.assistant],
+        return start([sys.executable, str(PROFILE_INTAKE_SERVER), "--workspace", str(workspace), "--next-trip", "--assistant", args.assistant, *language],
                      detach=args.detach, workspace=workspace)
     elif len(profiles) == 1:
         selected = profiles[0]
@@ -753,10 +760,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.edit_profile:
         print("REOPENING THE SAVED PROFILE FOR EDITING; the current-trip form follows automatically.", flush=True)
         return start([sys.executable, str(PROFILE_INTAKE_SERVER), "--workspace", str(workspace),
-                      "--next-trip", "--overwrite", "--edit", str(selected), "--assistant", args.assistant],
+                      "--next-trip", "--overwrite", "--edit", str(selected), "--assistant", args.assistant, *language],
                      detach=args.detach, workspace=workspace)
     print("STARTING CURRENT-TRIP INTAKE WITH SAVED STABLE DEFAULTS", flush=True)
-    return start([sys.executable, str(TRIP_INTAKE_SERVER), "--workspace", str(workspace), "--profile", str(selected), "--assistant", args.assistant],
+    return start([sys.executable, str(TRIP_INTAKE_SERVER), "--workspace", str(workspace), "--profile", str(selected), "--assistant", args.assistant, *language],
                  detach=args.detach, workspace=workspace)
 
 

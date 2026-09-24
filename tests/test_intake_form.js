@@ -20,8 +20,8 @@ const check = (label, cond, detail) => { if (!cond) failures.push(label + (detai
 
 // A minimally valid submission. Each test starts from this and breaks exactly one thing, so a
 // refusal can only be about the thing that was broken.
-function fresh(config) {
-  const f = load(FORM, config);
+function fresh(config, options) {
+  const f = load(FORM, config, options);
   check("the form's own JS runs without error", !f.topLevelError, f.topLevelError);
   check("build() is reachable", !!f.build);
   const base = {
@@ -393,9 +393,30 @@ for (const lang of ["zh", "en"]) {
   }
 }
 
-if (failures.length) {
-  console.error(`INTAKE FORM FAILED (${failures.length}):`);
-  for (const failure of failures) console.error(`--- ${failure}\n`);
-  process.exit(1);
+// 13. A submission says which language its page was in when it was sent -- after a switch, too --
+//     so the server answers in that language and the intake records the language actually used.
+//     Driven through the page's own submit handler with the network replaced, which is the only
+//     way to see what a browser would send.
+async function languageHeaderCases() {
+  for (const [lang, switchTo, expected] of [["zh", null, "zh"], ["en", null, "en"], ["zh", "en", "en"], ["en", "zh", "zh"]]) {
+    const sent = [];
+    const f = fresh({ language: lang, submit_url: "/submit?token=t" },
+                    { fetch: async (url, init) => { sent.push(init); return { ok: true, json: async () => ({}) }; } });
+    if (switchTo && f.api.applyLanguage) f.api.applyLanguage(switchTo);
+    for (const handler of f.store["trip-form"].listeners.submit || []) {
+      await handler({ type: "submit", preventDefault() {} });
+    }
+    const header = sent.length ? (sent[0].headers || {})["X-Travel-Buddy-Language"] : undefined;
+    check(`a ${lang} page${switchTo ? ` switched to ${switchTo}` : ""} submits with language ${expected}`,
+          header === expected, `sent: ${JSON.stringify(sent.map((init) => init.headers))}`);
+  }
 }
-console.log("all intake-form cases passed");
+
+languageHeaderCases().then(() => {
+  if (failures.length) {
+    console.error(`INTAKE FORM FAILED (${failures.length}):`);
+    for (const failure of failures) console.error(`--- ${failure}\n`);
+    process.exit(1);
+  }
+  console.log("all intake-form cases passed");
+});

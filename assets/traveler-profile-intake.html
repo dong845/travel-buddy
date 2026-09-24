@@ -578,7 +578,8 @@
           if (!submitEndpoint) throw keyedError("msg.open-from-service");
           status.className = "status";
           say(status, "msg.saving");
-          const response = await fetch(submitEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(profile) });
+          // The page's CURRENT language, so a refusal comes back in the language on screen.
+          const response = await fetch(submitEndpoint, { method: "POST", headers: { "Content-Type": "application/json", "X-Travel-Buddy-Language": LANG }, body: JSON.stringify(profile) });
           const result = await response.json();
           if (!response.ok) throw new Error(result.error || t("msg.save-failed"));
           if (result.next_trip && result.next_url) {
