@@ -452,6 +452,8 @@ CHECK_REFERENCES: dict[str, str] = {
     # A multi-stop trip is a sequence of stays, and the one arithmetic mistake it makes that
     # every per-day check passes is paying for two hotels on one night.
     "check_entry_covers_every_jurisdiction": "booking-html-output.md#multi-stop-trips",
+    # Settling the entry answer is the entry domain's job, stated with the verification domains.
+    "check_verified_plan_entry_answer": "verification.md#verify-domains",
     "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
     "check_routes": "booking-html-output.md#day-route-burden",
     "check_implied_speed": "booking-html-output.md#day-route-burden",
@@ -618,6 +620,13 @@ RULE_REFERENCES: dict[str, str] = {
     # question before it is a final-plan-contract one: the fix is to pick the market's provider,
     # not to add an attribute to the page.
     "market.unreachable_provider": "regional-service-routing.md#routing-policy",
+    # The intake cross-check's default home is the experience taxonomy, which is right for a
+    # dropped must-have. A dropped allergy, walking limit, party size or cap is the other half of
+    # the form: the values the interview has to produce in machine-readable shape.
+    "intake.constraints": "initial-intake.md#machine-readable-values",
+    # Whether the traveller may enter is settled by the entry domain of the verification pass, and
+    # that is where the rule that a verified plan cannot leave it open is stated.
+    "entry.answer": "verification.md#verify-domains",
 }
 
 
@@ -1274,6 +1283,40 @@ def check_entry_covers_every_jurisdiction(plan: dict, errors: list[str], notes: 
             f"the single-jurisdiction form has always required (status, summary, traveler_basis, "
             f"source_url, checked_at). A record that names a country and cites nothing reads on "
             f"the page as an answer that was checked.")
+
+
+def unverified_entry_answers(plan: dict) -> list[str]:
+    """Every entry answer the plan still marks `unverified` -- the flat one and each jurisdiction's."""
+    entry = _obj(plan.get("entry_context"))
+    found = ["entry_context"] if str(entry.get("status") or "") == "unverified" else []
+    for index, record in enumerate(_seq(entry.get("per_jurisdiction"))):
+        if str(_obj(record).get("status") or "") == "unverified":
+            found.append(f"entry_context.per_jurisdiction[{index}] "
+                         f"({_obj(record).get('jurisdiction')})")
+    return found
+
+
+def _unverified_entry_message(open_answers: list[str]) -> str:
+    return (f"this plan is marked verified while its entry answer is still unverified: "
+            f"{', '.join(open_answers)}. Whether the traveller may enter is the one answer that "
+            f"decides whether they board; settle it (it is the entry domain's job), or save with "
+            f"--unverified so the page says so.")
+
+
+@cites
+def check_verified_plan_entry_answer(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A plan that calls itself verified cannot leave open the answer that decides boarding.
+
+    Measured 2026-09-24 against v2.7.0: a Netherlands-to-US plan saved as verified with
+    `entry_context.status: unverified` produced 0 findings and a page with no banner. A plan that
+    says it is unverified already carries the banner, so only the verified claim is tested here;
+    check_verification refuses the same thing on the way in, before the claim is written.
+    """
+    if str(plan.get("verification_status") or "") != "verified":
+        return
+    open_answers = unverified_entry_answers(plan)
+    if open_answers:
+        errors.append(_unverified_entry_message(open_answers))
 
 
 @cites
@@ -2284,6 +2327,17 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
         errors.append(
             "verification found defects that were never resolved in the plan:\n    - "
             + "\n    - ".join(unresolved))
+    # A report certifies the plan it is handed, and it cannot certify one whose entry answer is
+    # still open, whatever its domains found -- that answer is the entry domain's whole subject.
+    # A re-save of a plan already marked verified meets check_verified_plan_entry_answer first,
+    # so the second saying of the same fact is skipped.
+    open_answers = unverified_entry_answers(_obj(plan)) if plan else []
+    if open_answers and not any("entry answer is still unverified" in e for e in errors):
+        errors.append(cite(
+            "entry.answer",
+            f"this report cannot certify the plan while its entry answer is still unverified: "
+            f"{', '.join(open_answers)}. Settle the entry answer in the plan -- it decides whether "
+            f"the traveller boards -- or save with --unverified so the page says so."))
     cited = {p.strip() for block in domains + audits for p in _seq(block.get("claims_checked"))
              if isinstance(p, str) and p.strip()}
     notes.append(
@@ -4408,21 +4462,23 @@ def _intake_constraint_findings(intake: dict, plan: dict, errors: list[str],
         carried = {_fold(v) for v in _seq(_intake_path_value(plan, target)) if isinstance(v, str)}
         dropped = [v for v in collected if _fold(v) not in carried and not excused(field, v)]
         if dropped:
-            errors.append(
+            errors.append(cite(
+                "intake.constraints",
                 f"the intake recorded {field} {', '.join(repr(v) for v in dropped)} and the plan "
                 f"does not carry it at {'.'.join(target)}. This is the traveller's own statement of "
                 f"what can hurt them; copy it in (new_plan_skeleton.py --from-intake does), or, "
                 f"when they changed it after the form, record that in trip.intake_changes with "
-                f"their reason.")
+                f"their reason."))
 
     source, target = INTAKE_CONSTRAINT_FIELDS["traveler_count"]
     wanted, have = _intake_path_value(intake, source), _intake_path_value(plan, target)
     if isinstance(wanted, int) and not isinstance(wanted, bool) and wanted > 0 \
             and have != wanted and not excused("traveler_count"):
-        errors.append(
+        errors.append(cite(
+            "intake.constraints",
             f"the intake says {wanted} traveller(s) and trip.traveler_count is {have!r}. Rooms, "
             f"fares and every per-person figure follow this number; fix it, or record the change "
-            f"in trip.intake_changes with the reason.")
+            f"in trip.intake_changes with the reason."))
 
     source, target = INTAKE_CONSTRAINT_FIELDS["cap_per_person"]
     cap = _intake_path_value(intake, source)
@@ -4435,12 +4491,37 @@ def _intake_constraint_findings(intake: dict, plan: dict, errors: list[str],
                 f"{plan_currency.upper()}, so budget.cap_per_person was not compared with it.")
         elif abs(_num(_intake_path_value(plan, target)) - float(cap)) > 0.005 \
                 and not excused("cap_per_person"):
-            errors.append(
+            errors.append(cite(
+                "intake.constraints",
                 f"the intake's per-person cap is {cap:g} and budget.cap_per_person is "
                 f"{_intake_path_value(plan, target)!r}. The cap is what the over-budget check "
-                f"compares against; carry it, or record the change in trip.intake_changes.")
+                f"compares against; carry it, or record the change in trip.intake_changes."))
 
 
+def _intake_entry_findings(intake: dict, plan: dict, errors: list[str]) -> None:
+    """The intake knows whether this trip leaves the country; the plan alone cannot say.
+
+    The template tells a domestic trip to delete entry_context, so an absent block reads the same
+    as a block nobody wrote. The form separates the two: a traveller staying home answers
+    `not_applicable_domestic` for passport validity, and one who has to apply for a visa sets
+    entry_assessment_required. Either other answer means a border, and a border means the page owes
+    the traveller its entry conclusion.
+    """
+    feasibility = _obj(intake.get("feasibility"))
+    passport = str(feasibility.get("passport_validity_status") or "").strip()
+    leaves = feasibility.get("entry_assessment_required") is True or \
+        bool(passport and passport != "not_applicable_domestic")
+    if leaves and not isinstance(plan.get("entry_context"), dict):
+        errors.append(cite(
+            "entry.answer",
+            f"the intake says this trip leaves the traveller's country of residence "
+            f"(passport_validity_status={passport or None!r}, entry_assessment_required="
+            f"{feasibility.get('entry_assessment_required')!r}) and the plan carries no "
+            f"entry_context. The entry conclusion is what decides whether they board; put it on "
+            f"the page with its basis, source and date."))
+
+
+@cites
 def check_preferences_came_from_the_intake(plan: dict, errors: list[str],
                                            notes: list[str]) -> None:
     """What the form collected must reach the plan, checked against the form's own file.
@@ -4537,6 +4618,7 @@ def check_preferences_came_from_the_intake(plan: dict, errors: list[str],
     # The must-haves used to be the whole of this check, and it returned as soon as they were
     # settled -- so the constraints below have to run whatever the must-haves said.
     _intake_constraint_findings(intake, plan, errors, notes)
+    _intake_entry_findings(intake, plan, errors)
 
 
 
@@ -4632,6 +4714,7 @@ def check_dates_agree_with_the_gates_that_ran(plan: dict, errors: list[str],
 
 PLAN_CHECKS = (
     check_entry_covers_every_jurisdiction,
+    check_verified_plan_entry_answer,
     check_stay_groups_do_not_overlap,
     check_verification_tier_is_stated,
     check_dates_agree_with_the_gates_that_ran,
