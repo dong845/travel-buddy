@@ -376,6 +376,13 @@ Two provider limits are worth knowing before you build a button rather than afte
   can take.** A day map whose `travelmode` is `walking` fails above 15 km. One plan's departure-day
   button asked Google to walk 25 km from the seafront to the airport — and Google answers that, with
   a five-hour route the traveller was never going to take.
+- <a id="map-modes"></a>**Each segment's button opens its own leg's mode.** A walking leg gets walking
+  directions, a taxi, ride-hail or self-drive leg gets driving, and a bus, metro, train or ferry leg
+  gets public transport (Google `travelmode`, Amap `mode`, Apple `dirflg`). The author's workspace
+  held 20 taxi legs whose Amap buttons were in bus mode. A leg whose words are ambiguous
+  (「公共交通或网约车」) is not judged — write one primary mode instead. Its speed is judged too:
+  above 130 km/h door to door for a car, 110 for a bus, 350 for rail or 80 for a ferry, one of its two
+  numbers belongs to another leg; on a self-drive trip a leg whose words name no mode is a road leg.
 
 <a id="day-route-burden"></a>
 Build a route in chronological, geographically coherent order. Keep the day’s actual travel burden visible: start/end, one researched primary transport mode, route logic, distance or stop count, transfers, walking, duration, fare/range and fare source, service caveat, and a fallback for closures or bad weather. Never use a choice-list such as “metro/bus/taxi (choose one)” as the route: choose the primary recommendation and state alternatives only in the fallback.

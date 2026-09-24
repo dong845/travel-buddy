@@ -465,6 +465,7 @@ CHECK_REFERENCES: dict[str, str] = {
     "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
     "check_routes": "booking-html-output.md#day-route-burden",
     "check_implied_speed": "booking-html-output.md#day-route-burden",
+    "check_map_link_modes": "booking-html-output.md#map-modes",
     "check_clock_closure": "booking-html-output.md#day-route-burden",
     "check_day_internals": "booking-html-output.md#day-route-burden",
     # The walking cap is a number the interview has to produce, and this check is the reason it
@@ -692,6 +693,61 @@ def activity_on_foot_minutes(day: dict) -> int:
     return total
 
 
+# A leg's mode is free text -- 31 spellings across the author's workspace, most of them Chinese --
+# so it is classified by the words it contains, and only when they name ONE class. An ambiguous leg
+# ("公共交通或网约车", "metro/bus/taxi (choose one)") is not guessed at: SKILL.md already asks for one
+# primary mode, and a check that picked one on the author's behalf would be arguing with a sentence.
+_MODE_WORDS = {
+    "air": (r"航班", r"飞机", r"\bflights?\b", r"\bplanes?\b"),
+    "ferry": (r"渡轮", r"轮渡", r"渡船", r"水上", r"游船", r"\bferr(?:y|ies)\b", r"\bboats?\b",
+              r"\bwater ?(?:bus|taxi)\b"),
+    "rail": (r"地铁", r"轻轨", r"电车", r"有轨", r"火车", r"高铁", r"动车", r"铁路", r"城铁", r"单轨",
+             r"轨道", r"新干线", r"\bmetro\b", r"\bsubway\b", r"\bunderground\b", r"\btrams?\b",
+             r"\btrains?\b", r"\brail\b", r"\b[su]-bahn\b", r"\bice\b", r"\btgv\b",
+             r"\bshinkansen\b"),
+    "bus": (r"公交", r"巴士", r"大巴", r"班车", r"\bbus(?:es)?\b", r"\bcoach(?:es)?\b",
+            r"\bshuttle\b"),
+    "car": (r"网约车", r"出租", r"打车", r"驾车", r"自驾", r"开车", r"租车", r"包车", r"\btaxi\b",
+            r"\bcab\b", r"\buber\b", r"\blyft\b", r"\bbolt\b", r"\bgrab\b", r"\bcar\b",
+            r"\bdriv(?:e|ing)\b"),
+    "walk": (r"步行", r"徒步", r"\bwalk(?:ing)?\b", r"\bon foot\b"),
+    "transit": (r"公共交通", r"\bpublic transport\b", r"\btransit\b"),
+}
+# Average speeds no leg of that kind reaches door to door, so a figure above one is a duration or a
+# distance borrowed from another leg. Deliberately generous: a rule tight enough to argue with is a
+# rule people learn to route around.
+MODE_SPEED_CEILINGS = {"car": 130.0, "bus": 110.0, "rail": 350.0, "ferry": 80.0}
+
+
+def _mode_class(mode: str) -> str | None:
+    """walk | car | bus | rail | ferry | air | transit, "mixed" for more than one, None for none."""
+    text = str(mode or "").casefold()
+    found = {cls for cls, patterns in _MODE_WORDS.items()
+             if any(re.search(pattern, text) for pattern in patterns)}
+    if "ferry" in found:
+        found.discard("bus")          # 水上巴士, a water bus, is a boat
+    if len(found) == 1:
+        return found.pop()
+    return "mixed" if found else None
+
+
+def _url_travel_mode(url: str) -> str | None:
+    """The travel mode a directions URL asks for: Google travelmode, Amap mode, Apple dirflg."""
+    try:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(str(url or "")).query)
+    except ValueError:
+        return None
+    value = (query.get("travelmode") or query.get("mode") or query.get("dirflg") or [""])[0]
+    return {"walking": "walk", "walk": "walk", "w": "walk", "driving": "car", "car": "car",
+            "d": "car", "taxi": "car", "transit": "transit", "bus": "transit", "r": "transit",
+            "train": "transit", "subway": "transit", "bicycling": "bike",
+            "ride": "bike"}.get(value.casefold())
+
+
+def _self_drive(plan: dict) -> bool:
+    return str(_obj(plan.get("transport_preference")).get("mode") or "") == "self-drive"
+
+
 @cites
 def check_implied_speed(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A leg's distance and its duration have to be survivable by the mode that connects them.
@@ -706,6 +762,7 @@ def check_implied_speed(plan: dict, errors: list[str], notes: list[str]) -> None
     therefore only fires on numbers that cannot describe a bus at all. A rule tight enough to
     argue with is a rule people learn to route around.
     """
+    self_drive = _self_drive(plan)
     for day in [_obj(d) for d in _seq(plan.get("days"))]:
         number = day.get("number")
         for index, seg in enumerate(_segments(day), start=1):
@@ -727,6 +784,50 @@ def check_implied_speed(plan: dict, errors: list[str], notes: list[str]) -> None
                     f"day {number} segment {index}: {km:g} km by {mode or 'transit'} in "
                     f"{minutes:g} minutes is {kmh:.1f} km/h, slower than walking. Either the "
                     f"duration or the distance belongs to a different leg.")
+            if not walking:
+                # A ceiling as well as a floor. Only walking had one, so a 118 km drive claimed in
+                # 20 minutes -- 354 km/h -- passed every gate on the kind of trip whose days are
+                # planned around the drive. On a self-drive trip a leg whose words name no class
+                # is a road leg; on any other trip it is left alone rather than guessed.
+                cls = _mode_class(mode) or ("car" if self_drive else None)
+                ceiling = MODE_SPEED_CEILINGS.get(cls or "")
+                if ceiling and kmh > ceiling:
+                    errors.append(
+                        f"day {number} segment {index}: {km:g} km by {mode or cls} in "
+                        f"{minutes:g} minutes is {kmh:.0f} km/h, faster than a {cls} averages "
+                        f"door to door. One of the two numbers belongs to another leg -- and on "
+                        f"a self-drive day this is the time the whole day is planned around.")
+
+
+@cites
+def check_map_link_modes(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A segment's button opens directions in the segment's own mode.
+
+    Nothing compared the two. A walking leg whose button asked for driving directions passed, and
+    the author's workspace held 20 taxi and ride-hail legs whose Amap buttons were in bus mode --
+    the traveller pressing "open this leg" got a bus route for a taxi ride. Judged only when both
+    sides are unambiguous: the leg's words name one class and the URL names a mode.
+    """
+    self_drive = _self_drive(plan)
+    expected_for = {"walk": "walk", "car": "car", "bus": "transit", "rail": "transit",
+                    "ferry": "transit", "transit": "transit"}
+    for day in [_obj(d) for d in _seq(plan.get("days"))]:
+        number = day.get("number")
+        for index, seg in enumerate(_segments(day), start=1):
+            url = str(seg.get("verified_map_url") or "")
+            got = _url_travel_mode(url)
+            if got not in {"walk", "car", "transit"}:
+                continue
+            leg = _mode_class(str(seg.get("mode") or ""))
+            if leg is None and self_drive:
+                leg = "car"
+            expected = expected_for.get(leg or "")
+            if expected and got != expected:
+                words = {"walk": "walking", "car": "driving", "transit": "public-transport"}
+                errors.append(
+                    f"day {number} segment {index}: the leg is {seg.get('mode')!r} and its button "
+                    f"opens {words[got]} directions. Set the button's travel mode to "
+                    f"{words[expected]} -- the traveller follows the button, not the label.")
 
 
 @cites
@@ -4990,6 +5091,7 @@ PLAN_CHECKS = (
     check_routes,
     check_walking_budget,
     check_implied_speed,
+    check_map_link_modes,
     check_clock_closure,
     check_day_internals,
     check_cross_references,

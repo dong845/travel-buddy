@@ -3941,6 +3941,9 @@ def main() -> int:
     # the detour rather than the checker guessing at it.
     p = copy.deepcopy(base)
     seg = day(p, 1)["route"]["segments"][0]
+    # A drive, said as one: the fixture's leg is a metro ride, and a metro leg with a driving button
+    # is its own finding now (check_map_link_modes) -- this case is about the detour, not the mode.
+    seg["mode"] = "驾车"
     seg["distance_km"] = 350.0
     seg["duration_minutes"] = 270
     seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=30.5723,104.0665"
@@ -3961,6 +3964,7 @@ def main() -> int:
     # switch the rule off rather than to answer it.
     p = copy.deepcopy(base)
     seg = day(p, 1)["route"]["segments"][0]
+    seg["mode"] = "驾车"
     seg["distance_km"] = 350.0
     seg["duration_minutes"] = 270
     seg["verified_map_url"] = ("https://www.google.com/maps/dir/?api=1&origin=30.5723,104.0665"
