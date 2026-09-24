@@ -2527,6 +2527,56 @@ def _property_key(name: str) -> str:
     return _fold(_BRACKETED.sub("", name or ""))
 
 
+def _prefill_pattern(form: str, *, date: bool = False) -> str:
+    """The boundary a prefilled value must have inside one discrete part of a search URL.
+
+    A number may sit against a letter (`1adults`) but never against another digit, so the `4` in
+    `14:30` or `2026-10-14` is not a party of four -- the loose match used to find exactly that and
+    call it "free text". A code like `AMS` must not run into more letters. A date may run straight
+    into its own time (`2026-10-17T08:00:00`): that is ISO 8601, still one field, and refusing it
+    as free text is what a real Trainline URL got.
+    """
+    if form.isdigit():
+        return r"(?<![0-9])" + re.escape(form) + r"(?![0-9])"
+    tail = r"(?:(?![0-9a-z])|t\d)" if date else r"(?![0-9a-z])"
+    return r"(?<![0-9a-z])" + re.escape(form) + tail
+
+
+_ADULT_KEY = re.compile(r"adult", re.I)
+_CHILD_KEY = re.compile(r"child|kid|infant|youth", re.I)
+
+
+def _party_sizes_in_url(url: str) -> set[int]:
+    """The party a search URL states as adults plus children, however the provider spells it.
+
+    No provider states the total: Booking writes group_adults=2&group_children=2 (and one age=
+    per child), Airbnb adults=2&children=2, Expedia children=1_7,1_10, Skyscanner
+    childrenv2=7|10, KAYAK /2adults/children-7-10. Demanding the total as one value meant a family
+    could never declare its party prefilled, and the only URL that passed searched for four adults,
+    which hides the family rooms it was booking for.
+    """
+    parsed = urllib.parse.urlparse(url)
+    query = urllib.parse.parse_qs(parsed.query)
+    adults = sum(int(v) for k, vs in query.items() if _ADULT_KEY.search(k) for v in vs if v.isdigit())
+    children = 0
+    for segment in (urllib.parse.unquote(s) for s in parsed.path.split("/") if s):
+        if match := re.fullmatch(r"(\d+)adults?", segment, re.I):
+            adults += int(match.group(1))
+        if match := re.fullmatch(r"children((?:-\d{1,2})+)", segment, re.I):
+            children += len(match.group(1).strip("-").split("-"))
+    child_keys = [k for k in query if _CHILD_KEY.search(k)]
+    for key in child_keys:
+        values = query[key]
+        for value in values:
+            if value.isdigit() and len(values) == 1:
+                children += int(value)
+            else:
+                children += len([part for part in re.split(r"[|,;]", value) if part.strip()])
+    if not child_keys:
+        children += len(query.get("age", []))
+    return {adults + children} if adults else set()
+
+
 @cites
 def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A comparison link that opens a city is not a link to the thing being compared.
@@ -2693,33 +2743,53 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                     parts.add(value.casefold())
         return parts
 
-    def _declared_fields_in_url(url: str, declared: list, wanted: dict, where: str) -> None:
+    def _whole_values(url: str) -> set[str]:
+        """Every path segment and every whole query value, folded -- spaces allowed.
+
+        The whitespace rule above keeps a sentence typed into a search box from counting as
+        fields. A whole value that EQUALS the declared field is not a sentence, though: SBB writes
+        `von=Zürich HB`, one station, one field. Excluding it meant a multi-word station could
+        never be carried at all.
+        """
+        parsed = urllib.parse.urlparse(url)
+        values = {_fold(urllib.parse.unquote_plus(segment)) for segment in parsed.path.split("/")
+                  if segment}
+        for found in urllib.parse.parse_qs(parsed.query).values():
+            values.update(_fold(value) for value in found if value)
+        return values - {""}
+
+    def _declared_fields_in_url(url: str, declared: list, wanted: dict, where: str,
+                                ids: dict | None = None) -> None:
         if not url or not declared:
             return
         parts = _discrete_parts(url)
+        whole = _whole_values(url)
         haystack = urllib.parse.unquote_plus(url).casefold()
         for field in [str(d) for d in declared]:
             value = wanted.get(field)
             if value in (None, ""):
                 continue
+            is_date = field.endswith("_date") or field in ("check_in", "check_out")
             forms = [str(value).casefold()]
-            if field.endswith("_date") or field in ("check_in", "check_out"):
+            if is_date:
                 forms = [f.casefold() for f in _date_forms(str(value))] or forms
             # Inside a discrete part, not equal to it: a provider may pack two fields into one
             # segment (KAYAK writes the pair as `AMS-HKG`) or decorate one (`1adults`), and both
-            # are still structured. Boundaries are checked so `1` does not match the `1` inside a
-            # date, and they differ by value shape: a number may sit against a letter (`1adults`)
-            # but never against another digit, while a code like `AMS` must not run into more
-            # letters.
-            def _present(form: str) -> bool:
-                if form.isdigit():
-                    pattern = r"(?<![0-9])" + re.escape(form) + r"(?![0-9])"
-                else:
-                    pattern = r"(?<![0-9a-z])" + re.escape(form) + r"(?![0-9a-z])"
-                return any(re.search(pattern, part) for part in parts)
-            if any(_present(f) for f in forms):
+            # are still structured. _prefill_pattern holds the boundaries.
+            if any(re.search(_prefill_pattern(f, date=is_date), part) for f in forms for part in parts):
                 continue
-            loose = any(f in haystack for f in forms)
+            if field in ("guests", "travellers") and isinstance(value, int) \
+                    and not isinstance(value, bool) and value in _party_sizes_in_url(url):
+                continue
+            if field in ("origin", "destination"):
+                if _fold(str(value)) in whole:
+                    continue
+                # A provider that keys stations by its own id (Trainline's urn:trainline:...)
+                # never names them; the card declares the id it saw, and the id is what is asked.
+                station_id = (ids or {}).get(field)
+                if isinstance(station_id, str) and station_id.strip() and _fold(station_id) in whole:
+                    continue
+            loose = any(re.search(_prefill_pattern(f, date=is_date), haystack) for f in forms)
             errors.append(
                 f"{where}: it declares {field!r} prefilled, but the URL "
                 + (f"carries {value!r} only inside a free-text parameter, which is a search box "
@@ -2739,12 +2809,17 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
             _declared_fields_in_url(
                 str(option.get("round_trip_search_url") or ""),
                 _seq(option.get("round_trip_prefilled_fields")),
-                {"origin": option.get("origin_airport"),
-                 "destination": option.get("destination_airport"),
+                # A rail card names stations, not airports. Reading origin_airport here meant a rail
+                # search's stations were never compared at all: remove both from the URL and every
+                # gate passed.
+                {"origin": option.get("origin_airport") or option.get("origin_station"),
+                 "destination": option.get("destination_airport") or option.get("destination_station"),
                  "outbound_date": option.get("outbound_date"),
                  "return_date": option.get("return_date"),
                  "travellers": travellers},
-                f"{kind} '{label}' round-trip search")
+                f"{kind} '{label}' round-trip search",
+                ids={"origin": option.get("origin_station_id"),
+                     "destination": option.get("destination_station_id")})
     for option in [_obj(o) for o in _seq(options.get("accommodations"))]:
         label = str(option.get("property_name") or option.get("id") or "?")
         if _unfilled(label, option.get("review_url")):
@@ -2756,6 +2831,44 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                 {"check_in": option.get("check_in"), "check_out": option.get("check_out"),
                  "guests": option.get("guest_count"), "rooms": option.get("room_count")},
                 f"accommodation '{label}' comparison search")
+
+    # A rental search declared its pickup and return prefilled and nothing ever read the URL: both
+    # car links pointed at bare home pages, still declaring every field, and every gate passed.
+    # Dates are compared -- as one discrete date, or as the separate day/month/year integers some
+    # providers use. Locations are not: rental providers key a desk by their own location id, so
+    # the place name never appears, and asking for it would refuse every honest link.
+    def _date_carried_in_url(url: str, value: object) -> bool:
+        forms = [f.casefold() for f in _date_forms(str(value or ""))]
+        if not forms:
+            return True                      # a malformed time is the time checks' to report
+        if any(re.search(_prefill_pattern(f, date=True), part) for f in forms
+               for part in _discrete_parts(url)):
+            return True
+        day = dt.date.fromisoformat(str(value)[:10])
+        integers = {int(v) for vs in urllib.parse.parse_qs(urllib.parse.urlparse(url).query).values()
+                    for v in vs if v.isdigit()}
+        return {day.day, day.month, day.year} <= integers
+
+    for option in [_obj(o) for o in _seq(options.get("rental_cars"))]:
+        label = str(option.get("provider") or option.get("id") or "?")
+        url = str(option.get("review_url") or "")
+        declared = [str(d) for d in _seq(option.get("rental_search_prefilled_fields"))]
+        if not url or not declared or _unfilled(label, url):
+            continue
+        parsed = urllib.parse.urlparse(url)
+        if not parsed.path.strip("/") and not parsed.query:
+            errors.append(
+                f"rental car '{label}': it declares {', '.join(declared)} prefilled, but its search "
+                f"link is the provider's bare home page, which carries none of them. Run the search "
+                f"with the pickup and return and store the URL it produces.")
+            continue
+        for field in ("pickup_time", "dropoff_time"):
+            if field in declared and not _date_carried_in_url(url, option.get(field)):
+                errors.append(
+                    f"rental car '{label}': it declares {field!r} prefilled, but the URL does not "
+                    f"carry the date of {option.get(field)!r}. Run the search with the trip's own "
+                    f"pickup and return and store the URL it produces, or drop {field!r} from the "
+                    f"declaration.")
 
     # Two "competing" options that open the same page are one option shown twice. The rule was
     # written for hotels and the same defect shipped on flights: both candidates in a delivered
