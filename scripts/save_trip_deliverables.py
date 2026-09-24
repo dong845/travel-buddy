@@ -40,6 +40,7 @@ from fetch_plan_imagery import (
 from plan_flags import PlanFlagsError, derive_html_flags
 from render_final_trip_html import intake_context_errors, read_json, render, validate_plan
 from validate_trip_html import validate as validate_html
+from verification_sections import section_digests
 
 
 DEFAULT_WORKSPACE = Path.home() / "Travel Buddy"
@@ -189,6 +190,21 @@ def main() -> int:
         for error in consistency_errors:
             print(f"- {error}", file=sys.stderr)
         return 1
+    # The receipt binds this verification to the CONTENT it covered, section by section: each day
+    # by its date, each booking option by its id, each other block by name. A later save against
+    # the same report compares against it and asks for a recheck of exactly the sections that
+    # moved (check_verification). Stamped here -- after every check passed, before the page is
+    # rendered -- so the page can say which parts were rechecked, and because nothing below this
+    # line changes the plan's content: the imagery sidecar name and the report's file name are
+    # script-written keys the fingerprint leaves out.
+    if args.verification:
+        plan["verification_receipt"] = {
+            "report_checked_at": str(report.get("checked_at") or ""),
+            "sections": section_digests(plan),
+            "rechecked": {str(entry.get("section")): str(entry.get("checked_at"))
+                          for entry in (report.get("rechecks") or [])
+                          if isinstance(entry, dict) and entry.get("section")},
+        }
     # A shallow copy carrying the photographs, so the page is rendered with every image while the
     # object about to be serialized keeps none of them. The two used to be the same dict, which is
     # exactly why a delivered plan was 96% base64.

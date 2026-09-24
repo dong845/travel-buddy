@@ -49,6 +49,8 @@ import re
 import sys
 from pathlib import Path
 
+from verification_sections import changed_sections, section_of_pointer
+
 # Route totals are authored in round numbers; allow a little slack before failing.
 DURATION_TOLERANCE_MIN = 5
 DISTANCE_TOLERANCE_KM = 1.0
@@ -627,6 +629,8 @@ RULE_REFERENCES: dict[str, str] = {
     # Whether the traveller may enter is settled by the entry domain of the verification pass, and
     # that is where the rule that a verified plan cannot leave it open is stated.
     "entry.answer": "verification.md#verify-domains",
+    # An edit after verification is rechecked by section, and the report records each recheck.
+    "verification.rechecks": "verification.md#rechecks",
 }
 
 
@@ -2380,6 +2384,32 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
             f"this report cannot certify the plan while its entry answer is still unverified: "
             f"{', '.join(open_answers)}. Settle the entry answer in the plan -- it decides whether "
             f"the traveller boards -- or save with --unverified so the page says so."))
+    # The receipt a verified save stamped binds this report to the content it covered. When the
+    # plan has moved since, only the sections that moved need a recheck -- a day re-timed, one
+    # hotel swapped -- and the report records each as an entry in `rechecks`. A receipt stamped
+    # against a different report date belongs to an earlier verification and binds nothing here:
+    # a fresh full report is a fresh verification.
+    receipt = _obj(_obj(plan).get("verification_receipt")) if plan else {}
+    if receipt and str(receipt.get("report_checked_at") or "") == checked_at:
+        changed, removed = changed_sections(_obj(receipt.get("sections")), _obj(plan))
+        recheck_unresolved: list[str] = []
+        covered = _valid_rechecks(report, _obj(plan), checked_at, errors, recheck_unresolved)
+        if recheck_unresolved:
+            errors.append("a recheck found defects that were never resolved in the plan:\n    - "
+                          + "\n    - ".join(recheck_unresolved))
+        uncovered = [section for section in changed if section not in covered]
+        if uncovered:
+            errors.append(cite(
+                "verification.rechecks",
+                f"these parts of the plan changed after it was verified on {checked_at}, and the "
+                f"report has no recheck for them: {', '.join(uncovered)}. Re-verify only those "
+                f"parts and append one `rechecks` entry each -- python "
+                f"scripts/new_verification_report.py --recheck --from-plan <plan.json> --report "
+                f"<report.json> writes them for you to fill -- or save with --unverified so the "
+                f"page says so. Every other part keeps its verification."))
+        if removed:
+            notes.append(f"note: removed since verification (nothing to recheck): "
+                         f"{', '.join(removed)}")
     cited = {p.strip() for block in domains + audits for p in _seq(block.get("claims_checked"))
              if isinstance(p, str) and p.strip()}
     notes.append(
@@ -2389,6 +2419,63 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
     # actually changed the plan, and a pointer that resolves proves the field exists, not that
     # anyone read it. Code cannot diff an edit it never saw. That one relies on the
     # resolution string a reader can check by eye.
+
+
+def _valid_rechecks(report: dict, plan: dict, checked_at: str, errors: list[str],
+                    unresolved: list[str]) -> dict[str, dict]:
+    """Each recheck the report carries, validated; returns {section: entry} for the sound ones.
+
+    A recheck is held to what a verification block is held to, scoped to one section: it says
+    when and why, it cites pointers that resolve and that all fall inside the section it claims,
+    and its findings follow the same closing rule. A recheck citing another section's fields is
+    not a recheck of this one.
+    """
+    kept: dict[str, dict] = {}
+    today = dt.date.today().isoformat()
+    for position, raw in enumerate(_seq(report.get("rechecks"))):
+        entry = _obj(raw)
+        section = str(entry.get("section") or "").strip()
+        when = str(entry.get("checked_at") or "")
+        where = f"verification recheck {position} ({section or 'no section'})"
+        if not section:
+            errors.append(f"{where} names no section.")
+            continue
+        if not re.match(r"^\d{4}-\d{2}-\d{2}", when):
+            errors.append(f"{where} needs an ISO checked_at date.")
+            continue
+        if when[:10] < checked_at[:10]:
+            errors.append(f"{where} is dated {when[:10]}, before the report it amends "
+                          f"({checked_at[:10]}).")
+            continue
+        if when[:10] > today:
+            errors.append(f"{where} is dated {when[:10]}, which is in the future.")
+            continue
+        reason = entry.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(f"{where} gives no reason -- say what changed and why it was rechecked.")
+            continue
+        claims = [c for c in _seq(entry.get("claims_checked")) if isinstance(c, str) and c.strip()]
+        if not claims:
+            errors.append(f"{where} checked nothing: claims_checked is empty.")
+            continue
+        broken = [c for c in claims if not resolve_pointer(plan, c)]
+        if broken:
+            errors.append(f"{where}: claims_checked pointer(s) do not resolve against the plan: "
+                          f"{', '.join(broken[:5])}.")
+            continue
+        outside = [c for c in claims if section_of_pointer(plan, c) != section]
+        if outside:
+            errors.append(f"{where}: claims_checked points outside {section}: "
+                          f"{', '.join(outside[:5])}.")
+            continue
+        for finding in [_obj(f) for f in _seq(entry.get("findings"))]:
+            verdict = str(finding.get("verdict") or "").lower()
+            if verdict not in VERDICTS:
+                errors.append(f"{where} has a finding with invalid verdict '{verdict}'.")
+                continue
+            _finding_errors(finding, where, errors, unresolved)
+        kept[section] = entry
+    return kept
 
 
 PLACEHOLDER_MARKERS = ("TODO:", "example.invalid")

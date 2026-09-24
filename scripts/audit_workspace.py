@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from check_plan_consistency import PLAN_CHECKS  # noqa: E402
 from render_final_trip_html import validate_plan  # noqa: E402
+from verification_sections import changed_sections  # noqa: E402
 
 DEFAULT_WORKSPACE = Path.home() / "Travel Buddy"
 
@@ -50,6 +51,23 @@ def _report_missing(plan: dict, path) -> str | None:
     if not candidate.is_absolute():
         candidate = path.parent / pointer
     return None if candidate.exists() else pointer
+
+
+def _changed_since_verified(plan: dict) -> list[str]:
+    """Sections of a `verified` plan that moved after the save that verified it.
+
+    The receipt is stamped by save_trip_deliverables.py on every verified save; a plan edited in
+    the workspace afterwards still says verified, and its page still carries no banner, until the
+    changed sections are rechecked and the plan re-saved. Plans saved before receipts existed carry
+    none and are left alone -- they cannot say what their report covered.
+    """
+    if str(plan.get("verification_status") or "") != "verified":
+        return []
+    receipt = plan.get("verification_receipt")
+    if not isinstance(receipt, dict) or not isinstance(receipt.get("sections"), dict):
+        return []
+    changed, _ = changed_sections(receipt["sections"], plan)
+    return changed
 
 
 NON_PLAN_PREFIXES = ("intake-", "next-action-", "verification-", "replan-",
@@ -162,6 +180,9 @@ def audit_plan(path: Path) -> dict:
         # scratchpad deleted when the session ended. This is the one claim on the page that cannot
         # be re-derived from the plan, so it is the one worth chasing to disk.
         "report_missing": _report_missing(plan, path),
+        # And the evidence can still exist while no longer covering the plan: a verified plan
+        # edited afterwards is carried under a report that never saw the edit.
+        "changed_since_verified": _changed_since_verified(plan),
         # How many checks existed when this plan was saved, against how many exist now. The gap
         # is the only honest way to read a finding count: 40 findings against 19 checks that all
         # existed at save time means the plan was wrong, while 40 against 8 means most of them
@@ -386,6 +407,11 @@ def main() -> int:
             print(f"        ! claims verified, but its report {result['report_missing']!r} is not "
                   f"there. The page renders with no banner, so this reads as an authority "
                   f"nobody — including the traveller — can check.")
+        if result.get("changed_since_verified"):
+            changed = result["changed_since_verified"]
+            print(f"        ! claims verified, but {len(changed)} part(s) changed after the save that "
+                  f"verified it and were not rechecked: {', '.join(changed[:6])}"
+                  f"{' ...' if len(changed) > 6 else ''}. The page still carries no banner.")
         if args.verbose and result["total"]:
             for error in result["structure_errors"] + result["consistency_errors"]:
                 print(f"        - {error.splitlines()[0][:160]}")

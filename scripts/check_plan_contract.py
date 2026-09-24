@@ -43,6 +43,7 @@ CONTRACT = SCRIPT_DIR.parent / "templates" / "final-trip-plan.json"
 # excuse the next misspelling that happens to.
 ADDED_BY_SCRIPTS = {
     "gates_passed",            # check_plan_consistency.gates_stamp, via save_trip_deliverables
+    "verification_receipt",    # save_trip_deliverables, on a verified save
     "imagery",                 # fetch_plan_imagery, pre-sidecar plans
     "imagery_sidecar",         # fetch_plan_imagery
     "replan_context",          # replan_trip

@@ -252,6 +252,28 @@ has its backstop.
 The checker also rejects a report dated before the plan's `generated_at`, since it cannot have
 inspected a plan that did not exist.
 
+<a id="rechecks"></a>
+### Rechecking after a change
+
+A verified save stamps a `verification_receipt` into the plan: a fingerprint for every section it
+covered — each day by its date, each booking option by its id, and each other content block by
+name. Keys the scripts write (the verification status, the gate stamp, the sidecar name, the
+receipt itself) are not content and are left out. When the plan is saved again against the same
+report, `check_verification` compares the plan with its receipt and names every section that
+changed or was added. Each of those needs a `rechecks` entry in the report —
+`{section, checked_at, reason, claims_checked, findings}` — dated no earlier than the report, citing
+pointers that resolve and stay inside that section, with findings held to the rules above.
+`python scripts/new_verification_report.py --recheck --from-plan <plan.json> --report <report.json>`
+appends one TODO entry per changed section for you to fill; the placeholder rule refuses it until
+someone has re-opened those parts. The page then lists which parts were rechecked, and when.
+
+Why by section and not by file: until 2026-09-24 the report bound a plan by file name and date only,
+so a day moved from 13:30 to 14:00 after verification re-saved as verified with no banner. A
+whole-file fingerprint would have closed that by making every edit cost the full seven-block pass
+again — the price of swapping one dinner. Per section, only the part that moved is rechecked and
+every other part keeps its verification. A receipt stamped against a different report date binds
+nothing: a fresh full report is a fresh verification.
+
 **What none of this can prove:** that a finding marked `resolved` was actually fixed. Code cannot
 diff an edit it never saw. That is why every resolved finding carries a `resolution` string
 naming the change — it is checkable by a human reading the report against the plan, and it is

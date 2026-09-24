@@ -40,6 +40,7 @@ from check_plan_consistency import (  # noqa: E402
     required_domains_for,
     resolve_pointer,
 )
+from verification_sections import changed_sections, section_pointers  # noqa: E402
 
 TODO = "TODO: "
 
@@ -153,11 +154,51 @@ def build(plan: dict, plan_path: Path) -> tuple[dict, list[str]]:
     return report, notes
 
 
+def recheck_entries(plan: dict, report: dict) -> tuple[list[dict], list[str], str | None]:
+    """One TODO recheck per section changed since the plan's verified save, or a refusal.
+
+    The receipt the save stamped is the only record of what the report covered, so without one
+    for THIS report there is nothing to recheck against -- the honest next step is a full pass,
+    and the refusal says so rather than guessing which parts moved.
+    """
+    receipt = plan.get("verification_receipt") if isinstance(plan.get("verification_receipt"), dict) else {}
+    if not receipt or str(receipt.get("report_checked_at") or "") != str(report.get("checked_at") or ""):
+        return [], [], ("this plan carries no verification receipt for a report checked on "
+                        f"{report.get('checked_at')!r}, so there is nothing to recheck against. "
+                        "Run a full verification: python scripts/new_verification_report.py "
+                        "--from-plan <plan.json> --out <report.json>.")
+    changed, removed = changed_sections(receipt.get("sections") or {}, plan)
+    today = dt.date.today().isoformat()
+    entries = [{
+        "section": section,
+        "checked_at": today,
+        "reason": TODO + "what changed in this part, and at whose request",
+        "claims_checked": section_pointers(plan, section),
+        "findings": [{"claim": TODO + "what the recheck actually opened, in one sentence",
+                      "verdict": TODO + "confirmed / wrong / misleading / unverifiable",
+                      "correction": None,
+                      "severity": TODO + "critical / major / minor (wrong or misleading findings)",
+                      "evidence_url": TODO + "the page you opened",
+                      "resolved": False, "resolution": None}],
+    } for section in changed]
+    notes = [f"{len(changed)} section(s) changed since the verified save: "
+             + (", ".join(changed) or "none")]
+    if removed:
+        notes.append("removed since the verified save (nothing to recheck): " + ", ".join(removed))
+    return entries, notes, None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--from-plan", required=True, help="The plan this report will vouch for")
     parser.add_argument("--out", default="-", help="Write here instead of standard output")
+    parser.add_argument("--recheck", action="store_true",
+                        help="Append one recheck entry per section the plan changed since its "
+                             "verified save, to the report named by --report")
+    parser.add_argument("--report", help="With --recheck: the verification report to amend")
     args = parser.parse_args()
+    if args.recheck:
+        return run_recheck(args)
 
     path = Path(args.from_plan)
     try:
@@ -183,6 +224,42 @@ def main() -> int:
           "looked. The pointers say WHERE to look; they are not evidence that anyone did.",
           file=sys.stderr)
     print(f"NEXT: fill it in, then python scripts/check_plan_consistency.py {args.from_plan} "
+          f"--verification {args.out if args.out != '-' else '<report.json>'}", file=sys.stderr)
+    return 0
+
+
+def run_recheck(args: argparse.Namespace) -> int:
+    if not args.report:
+        print("ERROR: --recheck amends an existing report; name it with --report <report.json>.",
+              file=sys.stderr)
+        return 2
+    try:
+        plan = json.loads(Path(args.from_plan).read_text(encoding="utf-8"))
+        report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: could not read the plan or the report: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(plan, dict) or not isinstance(report, dict):
+        print("ERROR: the plan and the report must both be JSON objects.", file=sys.stderr)
+        return 2
+    entries, notes, refusal = recheck_entries(plan, report)
+    if refusal:
+        print(f"ERROR: {refusal}", file=sys.stderr)
+        return 2
+    amended = dict(report)
+    amended["rechecks"] = list(report.get("rechecks") or []) + entries
+    body = json.dumps(amended, ensure_ascii=False, indent=2) + "\n"
+    if args.out == "-":
+        sys.stdout.write(body)
+    else:
+        Path(args.out).write_text(body, encoding="utf-8")
+        print(f"Verification report with rechecks: {args.out}")
+    for note in notes:
+        print(f"  {note}", file=sys.stderr)
+    print("Each new recheck is a TODO on purpose: check_verification refuses placeholder text, so "
+          "the amended report cannot certify the plan until somebody has re-opened those parts.",
+          file=sys.stderr)
+    print(f"NEXT: fill them in, then python scripts/check_plan_consistency.py {args.from_plan} "
           f"--verification {args.out if args.out != '-' else '<report.json>'}", file=sys.stderr)
     return 0
 
