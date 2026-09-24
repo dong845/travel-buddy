@@ -990,10 +990,52 @@ def localize_enum_values(page: str, labels: dict[str, str]) -> str:
     return page
 
 
+# English words for the renderer's machine tokens. English markup is already English, so an English
+# page needs no label set -- but its enum VALUES were printed raw: 'rental_car: £56–82',
+# 'fuel_tolls_parking', 'rail_or_ground · available' on a synthetic English road trip (2026-09-24).
+# Every key localize_enum_values and localize_access_tokens read is here, and
+# tests/test_render_localization.py derives the list from the enum constants, so a new value
+# without a word fails a test rather than printing raw.
+ENGLISH_ENUM_LABELS = {
+    **{f"state_{v}": v.capitalize() for v in BOOKING_STATES},
+    **{f"meal_{v}": v.capitalize() for v in MEAL_TYPES},
+    **{f"arrival_{v}": v.capitalize() for v in ARRIVAL_MODES},
+    "mode_self_drive": "Self-drive", "mode_public_transit": "Public transport",
+    "cat_flight": "Flights", "cat_rail": "Rail", "cat_intercity_bus": "Intercity bus",
+    "cat_ferry": "Ferry", "cat_rental_car": "Rental car",
+    "cat_fuel_tolls_parking": "Fuel, tolls and parking", "cat_accommodation": "Accommodation",
+    "cat_food": "Food", "cat_local_transport": "Local transport", "cat_attractions": "Attractions",
+    "cat_tours_and_activities": "Tours and activities", "cat_insurance": "Insurance",
+    "cat_visa_and_entry": "Visa and entry", "cat_shopping_and_misc": "Shopping and other",
+    "cat_contingency": "Contingency",
+    **{f"confidence_{v}": v.capitalize() for v in SOURCE_CONFIDENCE_LEVELS},
+    "severity_none": "None", "severity_preference": "Preference",
+    "severity_intolerance": "Intolerance", "severity_severe": "Severe (can be life-threatening)",
+    "entry_no_visa_required": "No visa required", "entry_visa_required": "Visa required",
+    "entry_unverified": "Unverified", "entry_not_required": "No visa required",
+    "entry_required_held": "Visa required — already held",
+    "entry_required_to_apply": "Visa required — not yet applied for",
+    "access_flight": "Flights", "access_accommodation": "Accommodation",
+    "access_attraction_ticket": "Attraction tickets", "access_rental_car": "Rental car",
+    "access_rail_or_ground": "Rail and ground transport", "access_available": "Available",
+    "access_limited": "Limited", "access_unknown": "Unknown",
+    "availability": "Availability: ",
+}
+
+
+def _is_english_page(language: object) -> bool:
+    normalized = str(language or "").casefold()
+    return normalized.startswith("en") or "english" in normalized
+
+
 def localize_static_page(page: str, language: object, custom_labels: object = None) -> str:
     """Localize standard renderer copy; user content remains escaped throughout rendering."""
     labels = labels_for(language, custom_labels)
     if not labels:
+        if _is_english_page(language):
+            # The markup is already English; only the machine tokens need words.
+            return localize_access_tokens(localize_enum_values(page, ENGLISH_ENUM_LABELS),
+                                          ENGLISH_ENUM_LABELS)
         return page
 
     page = localize_enum_values(page, labels)
@@ -1249,6 +1291,34 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
     return replacements
 
 
+def localize_access_tokens(page: str, labels: dict[str, str]) -> str:
+    """The booking-access categories and statuses, printed as words. Shared by the translated
+    path and the English one, because both have to turn `rail_or_ground · available` into text."""
+    access_categories = {
+        "flight": labels["access_flight"],
+        "accommodation": labels["access_accommodation"],
+        "attraction_ticket": labels["access_attraction_ticket"],
+        "rental_car": labels["access_rental_car"],
+        "rail_or_ground": labels["access_rail_or_ground"],
+    }
+    access_statuses = {
+        "available": labels["access_available"],
+        "limited": labels["access_limited"],
+        "unknown": labels["access_unknown"],
+    }
+    page = re.sub(
+        r'(<strong>)(flight|accommodation|attraction_ticket|rental_car|rail_or_ground) · (available|limited|unknown)(</strong>)',
+        lambda match: f"{match.group(1)}{access_categories[match.group(2)]} · {access_statuses[match.group(3)]}{match.group(4)}",
+        page,
+    )
+    page = re.sub(
+        rf'(<strong>{re.escape(labels["availability"])}</strong>)(available|limited|unknown)',
+        lambda match: f"{match.group(1)}{access_statuses[match.group(2)]}",
+        page,
+    )
+    return page
+
+
 def _apply_replacements(page: str, replacements: dict[str, str], labels: dict[str, str]) -> str:
     for source, target in replacements.items():
         page = page.replace(source, target)
@@ -1420,28 +1490,7 @@ def _apply_replacements(page: str, replacements: dict[str, str], labels: dict[st
         lambda match: ">" + labels["dining_map"].replace("{provider}", match.group(1)) + "<",
         page,
     )
-    access_categories = {
-        "flight": labels["access_flight"],
-        "accommodation": labels["access_accommodation"],
-        "attraction_ticket": labels["access_attraction_ticket"],
-        "rental_car": labels["access_rental_car"],
-        "rail_or_ground": labels["access_rail_or_ground"],
-    }
-    access_statuses = {
-        "available": labels["access_available"],
-        "limited": labels["access_limited"],
-        "unknown": labels["access_unknown"],
-    }
-    page = re.sub(
-        r'(<strong>)(flight|accommodation|attraction_ticket|rental_car|rail_or_ground) · (available|limited|unknown)(</strong>)',
-        lambda match: f"{match.group(1)}{access_categories[match.group(2)]} · {access_statuses[match.group(3)]}{match.group(4)}",
-        page,
-    )
-    page = re.sub(
-        rf'(<strong>{re.escape(labels["availability"])}</strong>)(available|limited|unknown)',
-        lambda match: f"{match.group(1)}{access_statuses[match.group(2)]}",
-        page,
-    )
+    page = localize_access_tokens(page, labels)
     page = page.replace('<h4>Route by segment</h4>', f'<h4>{labels["route_by_segment"]}</h4>')
     page = page.replace('<h3>Tickets and recheck</h3>', f'<h3>{labels["tickets"]}</h3>')
     page = page.replace('<time>Flexible</time><div><strong>Free time</strong>', f'<time>{labels["flexible_time"]}</time><div><strong>{labels["free_time"]}</strong>')

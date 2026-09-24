@@ -772,9 +772,11 @@ def machine_identifiers(readable: str) -> list[str]:
     printed, named, and left decidable, and the day those fields become closed enums it should be
     promoted to an error and this paragraph deleted.
 
-    Runs only on non-English pages, and that is not an oversight: an English page prints
-    `local_transport` as its budget category ON PURPOSE, because English has no label set and the
-    localization pass is skipped entirely. tests/test_render_localization.py asserts that.
+    Runs on English pages too, since 2026-09-24. It used to skip them, because an English page
+    printed `local_transport` as its budget category on purpose -- English had no label set and the
+    localization pass never ran. English pages now get words for every renderer enum
+    (render_final_trip_html.ENGLISH_ENUM_LABELS), so an underscored token left on one is the
+    author's free text, exactly as on a Chinese page.
     """
     # A URL or file name that reached visible text is a different defect, and reporting it as an
     # untranslated enum would send the reader hunting for a translation that does not exist.
@@ -793,15 +795,15 @@ def machine_identifiers(readable: str) -> list[str]:
 
 
 def machine_identifier_notes(content: str) -> list[str]:
-    """The advisory form of machine_identifiers(), for a page declared non-English."""
+    """The advisory form of machine_identifiers(), for any page that declares its language."""
     language = re.search(r"<html[^>]*\blang=[\"']([^\"']+)[\"']", content, re.IGNORECASE)
-    if not language or language.group(1).casefold().startswith("en"):
+    if not language:
         return []
     tokens = machine_identifiers(visible_text(content))
     if not tokens:
         return []
     return [
-        "machine identifier(s) printed as visible text on a non-English page: "
+        "machine identifier(s) printed as visible text: "
         + ", ".join(tokens[:8])
         + ("; …" if len(tokens) > 8 else "")
         + ". These come from free-text plan fields the renderer prints verbatim "

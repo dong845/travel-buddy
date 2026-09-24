@@ -16,6 +16,8 @@ Network-free by construction.
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -194,10 +196,12 @@ def check_source_confidence(render, check) -> None:
               for level in render.SOURCE_CONFIDENCE_LEVELS),
           str([level for level in render.SOURCE_CONFIDENCE_LEVELS
                if f'data-source-confidence="{level}">{level}<' in rendered(confidence=level)]))
-    check("an English page still prints the English token",
-          '<span class="source-confidence" data-source-confidence="high">high</span>'
+    # English has no label set, and until 2026-09-24 that meant the token printed raw. An English
+    # page now gets a word from ENGLISH_ENUM_LABELS, while the attribute keeps the token.
+    check("an English page prints the confidence as an English word",
+          '<span class="source-confidence" data-source-confidence="high">High</span>'
           in rendered(language="en"),
-          "English has no label set, so the localization pass must not run at all")
+          "the English page printed the machine token")
 
     # The plan-side constraint. SKILL.md's rule is that a visible-text field is a CLOSED ENUM
     # precisely because an arbitrary string cannot be translated; confidence was the one visible
@@ -618,7 +622,8 @@ def check_structural_i18n_gate(render, check) -> None:
           str(validate_html.untranslated_renderer_text(zh_page())))
     check("an English page is not judged at all",
           not validate_html.untranslated_renderer_text(renderer.render(copy.deepcopy(base))),
-          "English legitimately prints local_transport; the localization pass never runs")
+          "an English page is not judged for untranslated renderer text; its enum tokens get "
+          "English words from ENGLISH_ENUM_LABELS instead")
 
     # The delivered-artifact case: pages saved before enum_cell existed carry no attribute to
     # compare against, so the check that catches them cannot depend on the markup at all.
@@ -766,10 +771,14 @@ def check_structural_i18n_gate(render, check) -> None:
     check("a placeholder's own scaffolding is not reported as a defect",
           not validate_html.machine_identifier_notes(scaffold),
           "SKILL.md's rule: an error about a problem that does not exist costs a round trip")
-    check("an English page is not judged for machine identifiers either",
-          not validate_html.machine_identifier_notes(
-              renderer.render(copy.deepcopy(base)).replace(
-                  "</main>", '<p class="meta">basis: member_state_residence_permit</p></main>')))
+    # English pages used to be skipped, because they printed renderer enums raw on purpose. They
+    # get words now, so an underscored token left on one is author text, as on a Chinese page.
+    check("an English page's author text is checked for machine identifiers too",
+          any("member_state_residence_permit" in note
+              for note in validate_html.machine_identifier_notes(
+                  renderer.render(copy.deepcopy(base)).replace(
+                      "</main>", '<p class="meta">basis: member_state_residence_permit</p></main>'))),
+          "an English page's machine identifiers went unreported")
 
     # The gate must not be able to disappear quietly. It reads the renderer at runtime, so a moved
     # or broken renderer would otherwise turn this check off while the report still says VALID --
@@ -791,6 +800,49 @@ def check_structural_i18n_gate(render, check) -> None:
         validate_html.renderer_enum_reflection.cache_clear()
 
 
+def check_english_enum_words(render, check) -> None:
+    """An English page prints words, not machine tokens.
+
+    English had no label set, so the localisation pass never ran on an English page and every
+    underscored enum reached the reader raw: 'rental_car: £56–82', 'fuel_tolls_parking',
+    'rail_or_ground · available' -- measured on a synthetic English road trip, 2026-09-24. The
+    English markup is already English; only the tokens need words, from a table that has to cover
+    every value of every enum the renderer prints, or the next value added prints raw again.
+    """
+    table = getattr(render, "ENGLISH_ENUM_LABELS", None)
+    check("the renderer has an English word for its enum tokens", isinstance(table, dict),
+          repr(type(table)))
+    if not isinstance(table, dict):
+        return
+    wanted = ([f"state_{v}" for v in render.BOOKING_STATES]
+              + [f"meal_{v}" for v in render.MEAL_TYPES]
+              + [f"arrival_{v}" for v in render.ARRIVAL_MODES]
+              + [f"cat_{v}" for v in render.BUDGET_CATEGORIES]
+              + [f"confidence_{v}" for v in render.SOURCE_CONFIDENCE_LEVELS]
+              + [f"severity_{v}" for v in render.ALLERGY_SEVERITIES]
+              + [f"entry_{v}" for v in render.ENTRY_STATUSES]
+              + ["mode_self_drive", "mode_public_transit"]
+              + [f"access_{v}" for v in ("flight", "accommodation", "attraction_ticket",
+                                         "rental_car", "rail_or_ground", "available", "limited",
+                                         "unknown")])
+    missing = [key for key in wanted if not str(table.get(key) or "").strip()]
+    check("every enum value has an English word", not missing, str(missing))
+
+    fixture = json.loads((ROOT / "tests" / "self-drive-fixture.json").read_text(encoding="utf-8"))
+    fixture["entry_context"] = {"status": "not_required", "summary": "Domestic trip.",
+                                "traveler_basis": "UK residents travelling in the UK",
+                                "source_url": "https://www.gov.uk/", "checked_at": "2026-09-12"}
+    page = render.render(fixture)
+    visible = re.sub(r"<script.*?</script>|<style.*?</style>", " ", page, flags=re.S)
+    visible = re.sub(r"<[^>]+>", " ", visible)
+    raw = [token for token in ("rental_car", "fuel_tolls_parking", "local_transport",
+                               "rail_or_ground", "not_required", "public-transit")
+           if re.search(rf"(?<![\w/=.-]){re.escape(token)}(?![\w-])", visible)]
+    check("an English page prints no machine token as visible text", not raw, str(raw))
+    check("an English page says the category in words", "Rental car" in visible,
+          "no 'Rental car' on the page")
+
+
 def main() -> int:
     render = load("render_final_trip_html")
     failures: list[str] = []
@@ -806,6 +858,7 @@ def main() -> int:
     check_enum_reflection_property(render, check)
     check_structural_i18n_gate(render, check)
     check_page_age_element(render, check)
+    check_english_enum_words(render, check)
 
     labels = render.labels_for("zh")
     page = render.localize_enum_values(PROSE + BUDGET_FIGURE + MACHINE, labels)
@@ -832,11 +885,11 @@ def main() -> int:
           not any(f'>{value} ' in figure or f': {value} ' in figure or f'; {value} ' in figure
                   for value in render.BUDGET_CATEGORIES), figure)
 
-    # An English page keeps `local_transport` as its visible text, and the mechanism that
-    # guarantees it is that English has no label set at all -- so the caller skips this pass
-    # rather than running it with a dictionary of identities. Asserting the empty label set is
-    # asserting that skip; calling localize_enum_values("en") directly would raise, correctly.
-    check("English has no label overrides, so the pass never runs on it",
+    # English still has no label OVERRIDES: labels_for("en") stays empty, so the zh/custom label
+    # path -- static replacements and all -- never runs on an English page. What changed on
+    # 2026-09-24 is that English pages no longer print raw enum tokens: they get a separate,
+    # tokens-only pass with render.ENGLISH_ENUM_LABELS (check_english_enum_words above).
+    check("English has no label overrides, so the zh label pass never runs on it",
           not render.labels_for("en"), repr(render.labels_for("en")))
 
     if failures:

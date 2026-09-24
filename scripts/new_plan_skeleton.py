@@ -207,13 +207,24 @@ def stop_name(day_number: int, index: int, total: int, day_type: str) -> str:
     return f"{TODO}day {day_number} stop {index + 1}"
 
 
-def segment(origin: str, destination: str) -> dict:
-    """Walking legs still need service_or_line; the renderer rejects an empty one."""
+def english_plan(language: object) -> bool:
+    return str(language or "").casefold().startswith("en")
+
+
+def segment(origin: str, destination: str, english: bool = False) -> dict:
+    """Walking legs still need service_or_line; the renderer rejects an empty one.
+
+    In the plan's own language. They were always written 「步行」, and an English page then
+    printed 「步行 · 步行（无线路）」 with both gates calling it VALID -- the i18n gate looks for
+    English on a Chinese page, never the reverse.
+    """
     return {
         "from": origin,
         "to": destination,
-        "mode": "步行",
-        "service_or_line": f"{TODO}line or operator (write 步行（无线路） for a walking leg)",
+        "mode": "walk" if english else "步行",
+        "service_or_line": (f'{TODO}line or operator (write "Walk (no line)" for a walking leg)'
+                            if english else
+                            f"{TODO}line or operator (write 步行（无线路） for a walking leg)"),
         "duration_minutes": 0,
         "distance_km": 0,
         "walking_minutes": 0,
@@ -278,10 +289,11 @@ def dining_card(meal: str, anchor: str) -> dict:
     }
 
 
-def build_day(number: int, date: dt.date, day_type: str, stops_per_day: int, mode: str) -> dict:
+def build_day(number: int, date: dt.date, day_type: str, stops_per_day: int, mode: str,
+              english: bool = False) -> dict:
     total = max(2, stops_per_day)
     stops = [stop_name(number, i, total, day_type) for i in range(total)]
-    segments = [segment(stops[i], stops[i + 1]) for i in range(total - 1)]
+    segments = [segment(stops[i], stops[i + 1], english) for i in range(total - 1)]
 
     meals = {"arrival": ["dinner"], "departure": ["breakfast", "lunch"]}.get(day_type, ["lunch", "dinner"])
     return {
@@ -670,7 +682,8 @@ def main() -> int:
     for offset in range(span):
         date = start + dt.timedelta(days=offset)
         day_type = "arrival" if offset == 0 else "departure" if offset == span - 1 else "full"
-        days.append(build_day(offset + 1, date, day_type, args.stops_per_day, args.mode))
+        days.append(build_day(offset + 1, date, day_type, args.stops_per_day, args.mode,
+                              english_plan(args.language)))
 
     plan = {
         "plan_status": "researched",
@@ -884,7 +897,10 @@ def main() -> int:
                  # stop on a multi-stop trip, and one jurisdiction each: a trip that enters two
                  # places needs two entry answers, and an answer for one country is wrong about
                  # the other.
-                 "jurisdiction": f"{TODO}jurisdiction (e.g. 日本 / 中国大陆 / 香港 / 申根区)", "stay_location": f"{TODO}stay area",
+                 "jurisdiction": (f"{TODO}jurisdiction (e.g. Japan / Mainland China / Hong Kong / Schengen Area)"
+                                  if english_plan(args.language) else
+                                  f"{TODO}jurisdiction (e.g. 日本 / 中国大陆 / 香港 / 申根区)"),
+                 "stay_location": f"{TODO}stay area",
                  "neighborhood": f"{TODO}neighbourhood", "address_or_location_reference": f"{TODO}location reference",
                  "property_name": f"{TODO}property {n}", "provider": f"{TODO}provider (must own review_url)",
                  "comparison_platform": f"{TODO}comparison platform", "comparison_checked_at": DATE,

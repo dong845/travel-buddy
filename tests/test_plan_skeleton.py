@@ -21,6 +21,7 @@ Run:  python tests/test_plan_skeleton.py
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -201,6 +202,22 @@ def main() -> int:
             if "--language" in args and args[args.index("--language") + 1] == "zh":
                 if "Renderer-owned text is still English" in output:
                     failures.append(f"{label}: skeleton leaks a renderer enum into Chinese prose\n{output}")
+
+    # An English plan's skeleton is English. Its walking legs used to be written 「步行」 whatever the
+    # language, and an English page then printed 「步行 · 步行（无线路）」 with both gates calling it
+    # VALID (2026-09-24): the i18n gate looks for English on Chinese pages, never the reverse.
+    with tempfile.TemporaryDirectory() as raw:
+        english = generate(Path(raw), "english.json", "--start", "2026-09-11", "--end", "2026-09-13",
+                           "--origin", "Amsterdam", "--destination", "Malaga", "--language", "en",
+                           "--stops-per-day", "3")
+        text = english.read_text(encoding="utf-8")
+        cjk = sorted(set(re.findall(r"[\u3000-\u9fff\uff00-\uffef]+", text)))
+        if cjk:
+            failures.append(f"an English skeleton carries CJK text: {cjk[:8]}")
+        modes = {segment.get("mode") for day in json.loads(text)["days"]
+                 for segment in day["route"]["segments"]}
+        if "walk" not in modes:
+            failures.append(f"an English skeleton's walking legs are not 'walk': {sorted(map(str, modes))}")
 
     # The skeleton and the data contract have to agree on which fields exist, or a required one
     # is discovered by failing a gate at the end instead of by filling a blank at the start.
