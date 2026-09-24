@@ -12,21 +12,27 @@
 "use strict";
 const fs = require("fs");
 
-module.exports = function load(htmlPath) {
+// `config` is what the local server injects as window.TRAVEL_BUDDY_TRIP_INTAKE -- the display
+// language among it -- so a test can load the same page the way an English traveller gets it.
+module.exports = function load(htmlPath, config = {}) {
   const html = fs.readFileSync(htmlPath, "utf8");
-  const js = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
+  // Only JavaScript is executed; the zh/en dictionary is a JSON <script> the page reads by id.
+  const scripts = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)];
+  const js = scripts.filter((m) => !/type="application\/json"/.test(m[1])).map((m) => m[2]).join("\n");
   const ids = [...new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]))];
   const opts = {};
   for (const m of html.matchAll(/<select id="([^"]+)"([\s\S]*?)<\/select>/g)) {
-    opts[m[1]] = [...m[2].matchAll(/<option(?: value="([^"]*)")?[^>]*>([^<]*)</g)]
-      .map((o) => (o[1] !== undefined ? o[1] : o[2]));
+    opts[m[1]] = [...m[2].matchAll(/<option\b([^>]*)>([^<]*)</g)]
+      .map((o) => { const v = o[1].match(/\bvalue="([^"]*)"/); return v ? v[1] : o[2]; });
   }
 
   const el = (id) => ({
     id, value: "", hidden: false, textContent: "", innerHTML: "", checked: false, disabled: false,
     style: {}, dataset: {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    options: opts[id] || null,
-    addEventListener() {}, removeEventListener() {}, focus() {}, scrollIntoView() {},
+    options: opts[id] ? opts[id].map((v) => ({ value: v, text: v })) : null,
+    listeners: {},
+    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+    removeEventListener() {}, focus() {}, scrollIntoView() {},
     setAttribute() {}, getAttribute: () => null, removeAttribute() {}, appendChild() {},
     querySelectorAll: () => [], querySelector: () => null, closest: () => null,
     insertAdjacentHTML() {}, reset() {}, checkValidity: () => true, remove() {},
@@ -35,6 +41,24 @@ module.exports = function load(htmlPath) {
 
   const store = {};
   ids.forEach((i) => { store[i] = el(i); });
+  for (const m of scripts) {
+    const id = (m[1].match(/\bid="([^"]+)"/) || [])[1];
+    if (id && store[id]) store[id].textContent = m[2];
+  }
+  // A real <select> assigned a value it does not offer ends up with NO value -- it does not keep
+  // the string. The stub used to keep it, which is how the example button could set a scope the
+  // page had stopped offering while every test still passed. Selects whose markup declares their
+  // options behave the real way; the ones the script builds at runtime (budget-range, the two
+  // ranking lists) cannot be known from the markup and keep whatever they are given.
+  for (const [id, values] of Object.entries(opts)) {
+    if (!store[id] || !values.filter(Boolean).length) continue;
+    let current = values.includes("") ? "" : values[0];
+    Object.defineProperty(store[id], "value", {
+      get: () => current,
+      set: (next) => { current = values.includes(String(next)) ? String(next) : ""; },
+      enumerable: true,
+    });
+  }
 
   // Checkbox and radio groups, built from the markup, so `checked("natural")` returns what the
   // page would return. Without these the transport-mode check refuses every submission and the
@@ -55,17 +79,24 @@ module.exports = function load(htmlPath) {
       getElementById: (i) => store[i] || null,
       querySelectorAll: (sel) => {
         const out = [];
+        if (/input\[type="checkbox"\]/.test(String(sel))) {
+          for (const nodes of Object.values(groups)) out.push(...nodes.filter((n) => n.type === "checkbox"));
+        }
         for (const m of String(sel).matchAll(/input\[name="([^"]+)"\](:checked)?/g)) {
           const nodes = groups[m[1]] || [];
           out.push(...(m[2] ? nodes.filter((n) => n.checked) : nodes));
         }
         return out;
       },
-      querySelector: () => null,
+      querySelector: (sel) => {
+        const m = String(sel).match(/^input\[name="([^"]+)"\]\[value="([^"]+)"\]$/);
+        return m ? (groups[m[1]] || []).find((n) => n.value === m[2]) || null : null;
+      },
       createElement: () => el("created"), body: el("body"),
       documentElement: el("html"), addEventListener() {},
     },
-    window: { addEventListener() {}, location: { search: "", href: "http://127.0.0.1/" } },
+    window: { TRAVEL_BUDDY_TRIP_INTAKE: config, addEventListener() {}, setTimeout, clearTimeout,
+              location: { search: "", href: "http://127.0.0.1/" } },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     fetch: async () => ({ ok: true, json: async () => ({}), text: async () => "" }),
     navigator: { language: "zh-CN" },
@@ -90,7 +121,8 @@ module.exports = function load(htmlPath) {
     throw new Error("form_shim: could not find the form's closing IIFE; the probe was not "
       + "injected, so nothing would have been tested. Update the anchor.");
   }
-  const probed = `${js.slice(0, at)}\n__probe({ build, text, $, updateConditionalPanels });\n`
+  const probed = `${js.slice(0, at)}\n__probe({ build, text, $, updateConditionalPanels, `
+    + `applyLanguage: typeof applyLanguage === "function" ? applyLanguage : null });\n`
     + js.slice(at);
 
   let captured = null;
@@ -125,6 +157,13 @@ module.exports = function load(htmlPath) {
     const hit = values.filter((v) => !nodes.some((n) => n.value === v));
     if (hit.length) throw new Error(`no such value in ${name}: ${hit.join(", ")}`);
   };
-  return { store, opts, ids, groups, tick, build, topLevelError, set, api: captured,
+  // Runs the page's own listeners for `type` on element `id`, the way a click would.
+  const fire = (id, type) => {
+    if (!store[id]) throw new Error(`no such element: ${id}`);
+    const handlers = store[id].listeners[type] || [];
+    if (!handlers.length) throw new Error(`${id} has no ${type} listener`);
+    for (const handler of handlers) handler({ type, preventDefault() {}, target: store[id] });
+  };
+  return { store, opts, ids, groups, tick, build, topLevelError, set, fire, api: captured,
            get: (id) => (store[id] ? store[id].value : null) };
 };

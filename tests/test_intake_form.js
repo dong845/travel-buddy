@@ -20,8 +20,8 @@ const check = (label, cond, detail) => { if (!cond) failures.push(label + (detai
 
 // A minimally valid submission. Each test starts from this and breaks exactly one thing, so a
 // refusal can only be about the thing that was broken.
-function fresh() {
-  const f = load(FORM);
+function fresh(config) {
+  const f = load(FORM, config);
   check("the form's own JS runs without error", !f.topLevelError, f.topLevelError);
   check("build() is reachable", !!f.build);
   const base = {
@@ -168,6 +168,40 @@ function submits(f) {
   check("and hides again", f.store["booked-detail-wrap"].hidden === true);
 }
 
+// 4b. Every follow-up panel opens from its OWN question's change event -- the path a traveller
+//     takes -- not from a direct call to updateConditionalPanels(). The multi-stop bounds had no
+//     listener at all: choosing "several stops" revealed nothing, which went unseen only because a
+//     CSS rule was also showing every hidden panel. Fixing the CSS alone would have hidden two
+//     REQUIRED fields behind a question that could never open them.
+{
+  const panels = [
+    ["booked-already", "transport", "nothing", ["booked-detail-wrap"]],
+    ["trip-shape", "multi_city", "single_base", ["multi-stop-wrap"]],
+    ["trip-shape", "planner_decides", "single_base", ["multi-stop-wrap"]],
+    ["currency", "OTHER", "EUR", ["custom-currency-wrap"]],
+    ["budget-range", "custom", "300|500", ["custom-budget-wrap"]],
+    ["travel-scope", "no_new_visa_needed", "any_including_visa", ["held-visa-wrap", "held-passport-wrap"]],
+    ["travel-scope", "any_including_visa", "no_new_visa_needed", ["visa-effort-wrap", "entry-requirements"]],
+  ];
+  // A question nothing listens to is recorded as a failure, not thrown: one missing listener must
+  // not stop the other panels from being checked.
+  const change = (f, id) => { try { f.fire(id, "change"); return ""; } catch (err) { return err.message; } };
+  for (const [question, opens, closes, wraps] of panels) {
+    const f = fresh();
+    f.set(question, closes);
+    let missing = change(f, question);
+    for (const wrap of wraps) {
+      check(`${wrap} is hidden while ${question} = ${closes}`, !missing && f.store[wrap].hidden === true, missing);
+    }
+    f.set(question, opens);
+    missing = change(f, question);
+    for (const wrap of wraps) {
+      check(`answering ${question} = ${opens} opens ${wrap}`, !missing && f.store[wrap].hidden === false,
+            missing || `nothing listening to ${question} reveals it`);
+    }
+  }
+}
+
 // 5. The same branch pair for entry, which is where the first defect lived. Both wraps move
 //    together, so a fix to one that misses the other is caught.
 {
@@ -227,6 +261,135 @@ function submits(f) {
     for (const id of ids) {
       check(`rule 1 disqualifier "${what}" has a field (${id})`, !!f.store[id]);
     }
+  }
+}
+
+// 9. One page, two languages, ONE intake. The form now speaks English as well as Chinese, and the
+//    promise that makes that safe is that only the words on screen change: every value the intake
+//    stores is identical, so nothing downstream has to know which language the traveller read.
+//    The same answers go in both ways -- with the status words typed the way each hint teaches --
+//    and the two payloads must be the same object.
+const CJK = /[　-〿㐀-鿿＀-￯]/;
+function everyAnswer(lang) {
+  const f = fresh({ language: lang });
+  const answers = {
+    "start-date": "2027-04-10", "end-date": "2027-04-15", "month": "", "days": "",
+    "flexibility": "± 1–2 天", "composition": "情侣/两人", "comfort": "舒适中档",
+    "travel-time": "不超过 10 小时", "pace": "适中", "intensity": "短距离步行",
+    "stay-location": "邻近地铁/车站", "breakfast": "最好含早", "cancellation": "优先可取消",
+    "rail-preference": "高铁/动车优先", "bus-comfort": "仅短途接驳（约 3 小时内）",
+    "cabin": "经济舱优先", "baggage": "每人 1 件托运行李", "flight-time": "优先白天起降",
+    "purpose": "sightseeing", "transport-priority": "fewest_transfers", "room-count": "1",
+    "travel-scope": "any_including_visa", "visa-tolerance": "evisa_acceptable",
+    "passport-validity": "valid_through_trip", "scope": "anchored", "places": "Japan, Korea",
+    "rank-1": "美食/市场", "rank-2": "山地/徒步", "google-services-access": "available",
+  };
+  for (const [id, v] of Object.entries(answers)) f.set(id, v);
+  const status = lang === "en" ? ["EU residence permit", "EU citizen"] : ["成员国居留卡", "欧盟公民"];
+  f.set("traveler-entry", `Traveller 1 | China | Netherlands | ${status[0]}\nTraveller 2 | Netherlands | Netherlands | ${status[1]}`);
+  f.tick("natural", "山地/徒步");
+  f.tick("cultural", "美食/市场", "街区漫步");
+  f.tick("climate", "偏暖");
+  f.tick("transport-mode", "direct_flight", "connecting_flight", "high_speed_rail");
+  return submits(f);
+}
+{
+  const zh = everyAnswer("zh");
+  const en = everyAnswer("en");
+  check("the Chinese form accepts the full answer set", zh.ok, zh.message);
+  check("the English form accepts the full answer set", en.ok, en.message);
+  if (zh.ok && en.ok) {
+    check("both languages submit the identical intake",
+          JSON.stringify(zh.payload) === JSON.stringify(en.payload),
+          `zh=${JSON.stringify(zh.payload.feasibility)}\n    en=${JSON.stringify(en.payload.feasibility)}`);
+    const rows = en.payload.feasibility.traveler_entry_profiles;
+    check("an English status word is stored as the word the intake has always stored",
+          rows[0].residence_status === "成员国居留卡" && rows[1].residence_status === "欧盟公民",
+          JSON.stringify(rows));
+  }
+}
+{
+  // Only exact translations of the hint's categories are mapped. A bare "residence permit" can be
+  // any country's -- a US green card holder writes exactly that -- so filing it under the EU
+  // member-state category would hand the planner a visa-free route that does not exist.
+  const f = fresh({ language: "en" });
+  f.set("travel-scope", "any_including_visa");
+  f.set("passport-validity", "valid_through_trip");
+  f.set("traveler-entry", "A | China | United States | Residence permit\nB | China | Canada | PR card");
+  const r = submits(f);
+  check("an unrecognised status is accepted", r.ok, r.message);
+  if (r.ok) {
+    const rows = r.payload.feasibility.traveler_entry_profiles;
+    check("a bare 'residence permit' is kept as typed, not filed as an EU permit",
+          rows[0].residence_status === "Residence permit", JSON.stringify(rows[0]));
+    check("free text the hint does not list is kept as typed",
+          rows[1].residence_status === "PR card", JSON.stringify(rows[1]));
+  }
+}
+
+// 10. Every refusal an English traveller can meet is in English. A form that translates its labels
+//     and then explains a rejected submission in Chinese has failed the person at the moment they
+//     most need to understand it -- so each refusal path is driven, not one.
+{
+  const refusals = [
+    ["a missing required field", (f) => f.set("city", "")],
+    ["a missing held-entry answer", (f) => f.set("held-visas", "")],
+    ["a non-numeric traveller count", (f) => f.set("count", "0")],
+    ["an invalid custom currency", (f) => { f.set("currency", "OTHER"); f.set("custom-currency", "12"); }],
+    ["dates out of order", (f) => { f.set("start-date", "2027-04-10"); f.set("end-date", "2027-04-01"); }],
+    ["a date with no pair", (f) => f.set("start-date", "2027-04-10")],
+    ["days that contradict the dates", (f) => { f.set("start-date", "2027-04-10"); f.set("end-date", "2027-04-12"); f.set("days", "9"); }],
+    ["no dates and no month", (f) => f.set("month", "")],
+    ["no transport mode", (f) => f.tick("transport-mode")],
+    ["a climate contradiction", (f) => f.tick("climate", "无特别气候限制", "偏暖")],
+    ["a settled scope with no place", (f) => f.set("scope", "fixed")],
+    ["a one-stop multi-city trip", (f) => { f.set("trip-shape", "multi_city"); f.set("max-stops", "1"); f.set("min-nights-per-stop", "2"); f.set("return-to-first", "yes"); }],
+    ["a bad room count", (f) => f.set("room-count", "0")],
+    ["a missing entry panel", (f) => { f.set("travel-scope", "any_including_visa"); f.set("passport-validity", "valid_through_trip"); }],
+    ["a malformed entry row", (f) => { f.set("travel-scope", "any_including_visa"); f.set("passport-validity", "valid_through_trip"); f.set("traveler-entry", "only one part\nx | y | z"); }],
+    ["too few entry rows", (f) => { f.set("travel-scope", "any_including_visa"); f.set("passport-validity", "valid_through_trip"); f.set("traveler-entry", "A | China | Netherlands"); }],
+  ];
+  for (const [what, breakIt] of refusals) {
+    for (const lang of ["zh", "en"]) {
+      const f = fresh({ language: lang });
+      breakIt(f);
+      const r = submits(f);
+      check(`${lang}: ${what} is refused`, !r.ok, "accepted");
+      if (!r.ok && lang === "en") check(`en: the refusal for ${what} is in English`, !CJK.test(r.message), r.message);
+      if (!r.ok && lang === "zh") check(`zh: the refusal for ${what} is still in Chinese`, CJK.test(r.message), r.message);
+    }
+  }
+}
+
+// 11. The example button fills in a trip that can actually be submitted, in either language. It
+//     set a travel scope the page had stopped offering, so a real browser left the question blank
+//     and the example was refused for a missing answer -- the stub kept the string, so nothing saw it.
+for (const lang of ["zh", "en"]) {
+  const f = load(FORM, { language: lang });
+  f.fire("fill-example", "click");
+  const r = submits(f);
+  check(`${lang}: the filled-in example can be submitted`, r.ok, r.message);
+  if (lang === "en") {
+    const typed = ["city", "country", "dietary", "avoid", "held-visas", "preferred-map-apps",
+                   "preferred-booking-platforms", "services-to-avoid", "service-access-notes"];
+    const chinese = typed.filter((id) => CJK.test(f.get(id)));
+    check("en: the example's typed answers are in English", !chinese.length, chinese.join(", "));
+  }
+}
+
+// 12. The switch works after load, both ways: the same half-filled page explains itself in the
+//     language just chosen.
+{
+  const f = fresh({ language: "zh" });
+  check("the page exposes its language switch", !!(f.api && f.api.applyLanguage));
+  if (f.api && f.api.applyLanguage) {
+    f.set("city", "");
+    f.api.applyLanguage("en");
+    let r = submits(f);
+    check("after switching to English, a refusal is in English", !r.ok && !CJK.test(r.message), r.message);
+    f.api.applyLanguage("zh");
+    r = submits(f);
+    check("and after switching back, it is Chinese again", !r.ok && CJK.test(r.message), r.message);
   }
 }
 
