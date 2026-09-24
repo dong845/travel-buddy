@@ -49,7 +49,13 @@ import re
 import sys
 from pathlib import Path
 
-from verification_sections import changed_sections, section_of_pointer
+# The one sibling module this file reads, found beside it rather than wherever an import path
+# happens to point: tests load this file by path, and so can any caller that never put scripts/ on
+# sys.path. Without this the gate did not import at all in that case -- measured, the standalone run
+# of tests/test_plan_consistency.py died on ModuleNotFoundError while the pytest run, which shares
+# one sys.path across files, stayed green.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from verification_sections import changed_sections, section_of_pointer  # noqa: E402
 
 # Route totals are authored in round numbers; allow a little slack before failing.
 DURATION_TOLERANCE_MIN = 5
@@ -2950,11 +2956,20 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
         #
         # `unknown` stays available, because a platform really can refuse this machine -- but then
         # it is a fact about the run and the traveller has to see it, so it costs a sentence.
-        if str(option.get("guest_rating_status") or "").lower() in ("verified", "researched") \
+        #
+        # Keyed on the SCORE, not on what the card says about it. The first version read
+        # guest_rating_status, an optional field the author writes about their own card, so leaving
+        # it blank passed the same score beside the same unknown availability (measured
+        # 2026-09-24). A number on the card is the claim somebody read the page; only an explicit
+        # "none" says nobody did.
+        rating_status = str(option.get("guest_rating_status") or "").lower()
+        claims_score = rating_status in ("verified", "researched") or (
+            rating_status != "none" and _num(option.get("guest_rating_value")) > 0)
+        if claims_score \
                 and str(option.get("availability_status") or "").lower() == "unknown" \
                 and not str(option.get("availability_unknown_reason") or "").strip():
             errors.append(
-                f"accommodation '{name}': the guest score is marked verified while availability is "
+                f"accommodation '{name}': the card carries a guest score while availability is "
                 f"'unknown' and nothing says why. Those two live on the same page, so one visit "
                 f"answers both -- open the property for these dates and set availability, or write "
                 f"availability_unknown_reason saying what stopped you. A score with no sellable "
@@ -2972,8 +2987,12 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                     f"guest_rating_value is {_num(option.get('guest_rating_value')):g}. That pair "
                     f"is how a floor gets dodged rather than met.")
             continue
+        # The URL and the date are the score's citation, held to what a dining card has always owed.
+        # Optional, they were the way around the citation rule above: it runs only when a URL is
+        # there to check, so leaving it out skipped the rule written for a score lifted from a
+        # search summary.
         missing = [k for k in ("guest_rating_value", "guest_rating_scale", "guest_rating_count",
-                               "guest_rating_source")
+                               "guest_rating_source", "guest_rating_url", "guest_rating_checked_at")
                    if option.get(k) in (None, "")]
         if missing:
             errors.append(
@@ -3009,17 +3028,24 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     # the dates were sellable. A card claiming a researched price while leaving availability
     # unknown is claiming a page it did not finish reading -- and the plan that prompted all of
     # this shipped a hotel that was sold out on exactly those dates, marked unknown.
-    for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("accommodations"))]:
-        name = str(option.get("property_name") or option.get("id") or "?")
-        if _unfilled(name, option.get("review_url")):
-            continue
-        if (str(option.get("price_status") or "").lower() == "researched_current"
-                and str(option.get("availability_status") or "").lower() == "unknown"):
-            errors.append(
-                f"accommodation '{name}': price_status is 'researched_current' while "
-                f"availability_status is 'unknown'. The page that gave you today's price also "
-                f"said whether these dates are sellable -- record what it said, or mark the price "
-                f"an estimate to match what was actually read.")
+    #
+    # Every DATED search, not just hotels: a flight, a train or a car priced for these dates is read
+    # off a page that also says whether they sell, and the rule stopped at the one kind it was
+    # written for. A ticket price list is undated -- a museum's adult fare is the same every day and
+    # says nothing about a day's availability -- so tickets are left out on purpose.
+    for kind, name_key in (("accommodations", "property_name"), ("flights", "provider"),
+                           ("ground_transport", "provider"), ("rental_cars", "provider")):
+        for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get(kind))]:
+            name = str(option.get(name_key) or option.get("id") or "?")
+            if _unfilled(name, option.get("review_url")):
+                continue
+            if (str(option.get("price_status") or "").lower() == "researched_current"
+                    and str(option.get("availability_status") or "").lower() == "unknown"):
+                errors.append(
+                    f"{kind} '{name}': price_status is 'researched_current' while "
+                    f"availability_status is 'unknown'. The page that gave you today's price also "
+                    f"said whether these dates are sellable -- record what it said, or mark the "
+                    f"price an estimate to match what was actually read.")
 
     unknown = [str(o.get("property_name")) for o in
                [_obj(x) for x in _seq(_obj(plan.get("booking_options")).get("accommodations"))]

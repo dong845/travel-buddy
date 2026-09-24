@@ -82,6 +82,17 @@ def main() -> int:
     if vs is None:
         return report_failures()
 
+    # 0. The gate now reads a sibling module, and it must still load by path from anywhere --
+    #    tests and callers do that, and pytest's shared sys.path hid the first version's failure.
+    loader = ("import importlib.util, sys; "
+              f"spec = importlib.util.spec_from_file_location('gate', {str(ROOT / 'scripts' / 'check_plan_consistency.py')!r}); "
+              "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+              "print(len(module.PLAN_CHECKS))")
+    loaded = subprocess.run([sys.executable, "-c", loader], capture_output=True, text=True,
+                            cwd="/")
+    check("the gate loads by path with scripts/ off sys.path", loaded.returncode == 0,
+          loaded.stderr[-300:])
+
     # 1. Section identity: days by date, options by id, stable under reordering.
     plan = base_plan()
     digests = vs.section_digests(plan)

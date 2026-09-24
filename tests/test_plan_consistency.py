@@ -2339,10 +2339,16 @@ def check_a_review_score_is_not_cited_to_a_price_search(check_booking_identity, 
                                      "checked_at": "2026-09-12",
                                      "prefilled_fields": ["destination"]}]}]}}
 
+    # Only the citation rule's own findings. An ABSENT url is now its own finding -- the hotel
+    # score owes guest_rating_url and guest_rating_checked_at like a dining card owes its citation
+    # -- and a filter on the bare field name would count that one as this rule firing.
+    def citation_findings(errs):
+        return [e for e in errs if "guest_rating_url is " in e or "guest_rating_url carries" in e]
+
     def run(url):
         errs: list[str] = []
         check_booking_identity(plan(url), errs, [])
-        return [e for e in errs if "guest_rating_url" in e]
+        return citation_findings(errs)
 
     if not run(SEARCH):
         failures.append("rating citation: citing the score to the very same price search must be "
@@ -2358,7 +2364,7 @@ def check_a_review_score_is_not_cited_to_a_price_search(check_booking_identity, 
         return p
     errs: list[str] = []
     check_booking_identity(plan_bare(), errs, [])
-    if not [e for e in errs if "guest_rating_url" in e]:
+    if not citation_findings(errs):
         failures.append("rating citation: a comparison search with no date parameters is still a "
                         "search -- citing the score to the very same link must be refused")
 
