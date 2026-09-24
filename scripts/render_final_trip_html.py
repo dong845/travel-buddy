@@ -1689,6 +1689,9 @@ RULE_REFERENCES: dict[str, str] = {
     # How the intake happened, and why a chat_fallback record may not also name a file only the
     # form server writes.
     "intake.provenance": "initial-intake.md#conversation-design",
+    # One entry answer per jurisdiction the trip enters, each with its own evidence and printed as
+    # its own row -- the multi-country rule, where a single answer was wrong for two of three.
+    "entry.per_jurisdiction": "booking-html-output.md#per-jurisdiction",
 }
 
 
@@ -2770,6 +2773,29 @@ def validate_plan(plan: dict) -> list[str]:
                 errors.append("entry_context.source_url must be a safe HTTPS URL.")
             if entry_context.get("checked_at") and not is_iso_datestamp(entry_context["checked_at"]):
                 errors.append("entry_context.checked_at must be an ISO date or date-time.")
+            # Each jurisdiction's answer is printed exactly like the flat one, so it is held to
+            # the same vocabulary: a free-text status cannot be translated and reads to the
+            # traveller as an answer somebody checked. The template's own specimen -- a `_note`
+            # beside nulls -- is not a record anyone wrote, so it is skipped rather than refused.
+            for index, record in enumerate(as_list(entry_context.get("per_jurisdiction"))):
+                if not isinstance(record, dict):
+                    errors.append(cite("entry.per_jurisdiction",
+                                       f"entry_context.per_jurisdiction[{index}] must be an object."))
+                    continue
+                if all(value is None for key, value in record.items() if key != "_note"):
+                    continue
+                if record.get("status") not in ENTRY_STATUSES:
+                    errors.append(cite("entry.per_jurisdiction",
+                                       f"entry_context.per_jurisdiction[{index}].status must be one of: "
+                                       + ", ".join(ENTRY_STATUSES) + "."))
+                if record.get("source_url") and not is_https(record["source_url"]):
+                    errors.append(cite("entry.per_jurisdiction",
+                                       f"entry_context.per_jurisdiction[{index}].source_url must be "
+                                       f"a safe HTTPS URL."))
+                if record.get("checked_at") and not is_iso_datestamp(record["checked_at"]):
+                    errors.append(cite("entry.per_jurisdiction",
+                                       f"entry_context.per_jurisdiction[{index}].checked_at must be "
+                                       f"an ISO date or date-time."))
     trip = plan.get("trip") if isinstance(plan.get("trip"), dict) else {}
     for field in ("title", "language", "currency", "origin", "destination", "destination_type", "start_date", "end_date", "traveler_count", "pace", "budget_basis", "arrival_transport_mode"):
         if not trip.get(field):
@@ -3894,12 +3920,27 @@ def render_unlocalized(plan: dict) -> str:
         f'<section id="arrival-essentials" class="panel"><h2>Your first hour on the ground</h2>'
         f'<div class="grid">{_essential_rows}</div></section>' if _essential_rows else "")
 
+    # One row per jurisdiction the trip enters. check_entry_covers_every_jurisdiction has required
+    # these records since the multi-country work, and nothing printed them: a Thailand-Vietnam-
+    # Cambodia trip carried three researched answers and the page showed the flat one. The markup
+    # repeats the flat answer's own shape -- the entry-status span, "Basis:", "View source" -- so
+    # the localisation already written for the flat answer covers these rows too.
+    jurisdiction_rows = "".join(
+        f'<li class="entry-jurisdiction" data-entry-jurisdiction="{attr(record.get("jurisdiction"))}">'
+        f'<strong>{esc(record.get("jurisdiction"))}</strong> · '
+        f'<strong class="entry-status">{attr(record.get("status"))}</strong> — {esc(record.get("summary"))}'
+        f'<br><span class="meta"><strong>Basis: </strong>{esc(record.get("traveler_basis"))} · '
+        f'<a class="entry-source-link" href="{attr(record.get("source_url"))}" target="_blank" '
+        f'rel="noopener noreferrer">View source</a> · {stamp(record.get("checked_at"))}</span></li>'
+        for record in as_list(entry.get("per_jurisdiction"))
+        if isinstance(record, dict) and str(record.get("jurisdiction") or "").strip())
     entry_panel = (
         f'<section id="entry-context" class="panel"><h2>Entry eligibility</h2>'
         f'<p><strong class="entry-status">{attr(entry.get("status"))}</strong> — {esc(entry.get("summary"))}</p>'
         f'<p class="meta"><strong>Basis: </strong>{esc(entry.get("traveler_basis"))}</p>'
         f'<p class="meta"><a class="entry-source-link" href="{attr(entry.get("source_url"))}" target="_blank" rel="noopener noreferrer">View source</a> · {stamp(entry.get("checked_at"))}</p>'
-        "</section>"
+        + (f'<ul class="entry-jurisdictions">{jurisdiction_rows}</ul>' if jurisdiction_rows else "")
+        + "</section>"
         if entry
         else ""
     )

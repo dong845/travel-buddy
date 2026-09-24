@@ -163,6 +163,11 @@ working the moment there are two stops:
   matters is not political: Hong Kong and the mainland are one country and two entry regimes. It is
   free text, and the gate checks coverage rather than identity, so 「申根区」 for Paris and Berlin
   gives one record and 「法国」/「德国」 gives two -- both defensible readings of the same trip.
+  <a id="per-jurisdiction"></a>Each record is printed as its own row in the page's entry panel,
+  with its status in the page's language, its basis and its source; `status` is the same closed
+  enum as the flat answer. The records were required and covered for three releases and printed
+  nowhere, so the traveller saw one country's answer on a three-country trip. `validate_trip_html.py
+  --plan` now refuses a page missing any jurisdiction's row.
 - **The service market is per stop, so the map rule is per day.** It used to be one page-wide flag.
   Measured: turn the last two days of a Shenzhen trip into a Hong Kong leg with Google Maps links --
   the correct provider there, since Amap is not the tool for Hong Kong transit -- and the gate

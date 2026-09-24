@@ -100,6 +100,10 @@ class HtmlFlags:
     # key an author types, so a hand-assembled plan stamps its own forgery, while every page from
     # this repo's own renderer and every already-delivered page carries no stamp at all. It stayed
     # a note in validate_trip_html.py; the comment there records the measurement.
+    # Every jurisdiction the plan answers entry for, each owed its own row on the page. Defaulted,
+    # so the manual-flag path -- which has no plan to read it from -- needs no new flag, and every
+    # caller that builds HtmlFlags without it keeps working.
+    entry_jurisdictions: tuple[str, ...] = ()
 
     def summary(self) -> str:
         """One line naming every check this plan arms, printed by the validator before it runs.
@@ -109,10 +113,13 @@ class HtmlFlags:
         and keep the silence, so the armed set is stated out loud on every run.
         """
         types = ", ".join(sorted(self.required_booking_types)) or "none"
+        entry_rows = (f"; entry rows required: {', '.join(self.entry_jurisdictions)}"
+                      if self.entry_jurisdictions else "")
         return (
             f"derived from plan: {self.expected_days} day card(s); "
             f"booking types required: {types}; transport mode: {self.transport_mode}; "
             f"unverified banner: {'required' if self.require_unverified_banner else 'not required'}"
+            f"{entry_rows}"
         )
 
 
@@ -238,12 +245,20 @@ def derive_html_flags(plan: object, plan_label: str = "plan") -> HtmlFlags:
     # one -- which is exactly how much traveller-facing warning a default-off flag was suppressing.
     require_unverified_banner = doc.get("verification_status") != "verified"
 
+    entry = doc.get("entry_context") if isinstance(doc.get("entry_context"), dict) else {}
+    records = entry.get("per_jurisdiction") if isinstance(entry.get("per_jurisdiction"), list) else []
+    entry_jurisdictions = tuple(
+        str(record["jurisdiction"]).strip() for record in records
+        if isinstance(record, dict) and isinstance(record.get("jurisdiction"), str)
+        and record["jurisdiction"].strip())
+
     return HtmlFlags(
         expected_days=expected_days,
         required_booking_types=frozenset(required),
         transport_mode=mode,
         require_unverified_banner=require_unverified_banner,
         trip_title=title,
+        entry_jurisdictions=entry_jurisdictions,
     )
 
 

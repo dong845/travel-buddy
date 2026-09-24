@@ -270,6 +270,8 @@ RULE_REFERENCES: dict[str, str] = {
     # record the market, and the provider choice that market forces.
     "market.page_attributes": "regional-service-routing.md#final-plan-contract",
     "market.provider_routing": "regional-service-routing.md#routing-policy",
+    # A trip that enters several jurisdictions owes each its own entry row on the page.
+    "entry.per_jurisdiction": "booking-html-output.md#per-jurisdiction",
 }
 
 # Empty, and deliberately spelled out rather than omitted.
@@ -1246,6 +1248,7 @@ def validate(
     transport_mode: str | None,
     notes: list[str] | None = None,
     require_unverified_banner: bool = False,
+    entry_jurisdictions: tuple[str, ...] = (),
 ) -> list[str]:
     parser = TripHTMLParser()
     parser.feed(content)
@@ -1577,9 +1580,20 @@ def validate(
             or not source.get("data-accessed-at")
             or not is_safe_https(source.get("data-source-url", ""))
         ):
-            errors.append(cite("sources.register", 
+            errors.append(cite("sources.register",
                 "Each .source-item needs data-source-type, data-accessed-at, and an HTTPS data-source-url."
             ))
+    # Armed only from a plan (--plan), because only the plan knows which jurisdictions it
+    # answered. The renderer prints one row per answer; a page missing one was assembled some other
+    # way, and it is the answer that decides whether the traveller boards in that country.
+    for jurisdiction in entry_jurisdictions:
+        marker = f'data-entry-jurisdiction="{html_module.escape(jurisdiction, quote=True)}"'
+        if marker not in content:
+            errors.append(cite(
+                "entry.per_jurisdiction",
+                f"the plan answers entry for {jurisdiction!r} and the page shows no row for it. "
+                f"Render the page from the plan rather than editing it, so every jurisdiction the "
+                f"trip enters carries its own answer, basis and source."))
     return errors
 
 
@@ -1788,6 +1802,8 @@ def main() -> int:
 
     plan_summary = ""
     plan_title: str | None = None
+    # Only a plan can say which jurisdictions it answered; the manual-flag path checks none.
+    entry_jurisdictions: tuple[str, ...] = ()
     asserted_without_plan = ""
     if args.plan:
         # A manual flag beside --plan is two answers to one question, and the failure would be
@@ -1823,6 +1839,7 @@ def main() -> int:
         require_unverified_banner = flags.require_unverified_banner
         plan_title = flags.trip_title
         plan_summary = flags.summary()
+        entry_jurisdictions = flags.entry_jurisdictions
     else:
         # Same shape as save_trip_deliverables.py's --verification/--unverified pair and
         # check_shortlist_consistency.py's --intake/--no-intake pair, and for the same reason.
@@ -1931,6 +1948,7 @@ def main() -> int:
         transport_mode,
         notes,
         require_unverified_banner=require_unverified_banner,
+        entry_jurisdictions=entry_jurisdictions,
     )
     if args.json:
         # getattr, not errors.positions: validate() returns the parser's list, and a future

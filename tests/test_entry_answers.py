@@ -27,6 +27,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_plan_consistency as cpc  # noqa: E402
 import new_verification_report as scaffold  # noqa: E402
+import plan_flags  # noqa: E402
+import render_final_trip_html as renderer  # noqa: E402
+import validate_trip_html as htmlgate  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "booking-ready-fixture.json"
 
@@ -151,6 +154,60 @@ def main() -> int:
     new = [e for e in found if e not in baseline]
     check("a report cannot certify an unverified entry answer",
           any("entry" in e and "unverified" in e for e in new), new or found)
+
+    # 6. Every jurisdiction's answer reaches the page. The multi-country fix stopped at the JSON:
+    #    per_jurisdiction was required, checked for coverage, and rendered nowhere.
+    plan = base_plan()
+    plan["entry_context"] = entry("not_required")
+    plan["entry_context"]["per_jurisdiction"] = [
+        dict(entry("not_required"), jurisdiction="泰国", summary="CANARY-A"),
+        dict(entry("required_held"), jurisdiction="越南", summary="CANARY-B")]
+    page = renderer.render(plan)
+    rows = page.split('class="entry-jurisdiction"')[1:]
+    check("each jurisdiction's answer is its own row on the page",
+          len(rows) == 2 and "CANARY-A" in rows[0] and "CANARY-B" in rows[1],
+          f"{len(rows)} row(s)")
+
+    # 7. A per-jurisdiction status is the same closed enum as the flat one.
+    bad = json.loads(json.dumps(plan))
+    bad["entry_context"]["per_jurisdiction"][1]["status"] = "maybe"
+    check("a free-text per-jurisdiction status is refused",
+          any("per_jurisdiction" in e for e in renderer.validate_plan(bad)),
+          renderer.validate_plan(bad))
+
+    # 8. A Chinese page prints the statuses in Chinese and adds no renderer English.
+    chinese = json.loads(json.dumps(plan))
+    chinese["trip"]["language"] = "zh-CN"
+    without = json.loads(json.dumps(chinese))
+    without["entry_context"].pop("per_jurisdiction")
+    def page_errors(p: dict, page_html: str) -> list[str]:
+        """The page gate armed from the plan. A missing flag or parameter is a failing case, not a
+        crash that hides the rest of this file."""
+        flags = plan_flags.derive_html_flags(p)
+        try:
+            return htmlgate.validate(page_html, flags.expected_days,
+                                     set(flags.required_booking_types), flags.transport_mode, [],
+                                     require_unverified_banner=flags.require_unverified_banner,
+                                     entry_jurisdictions=flags.entry_jurisdictions)
+        except (AttributeError, TypeError) as exc:
+            failures.append(f"the page gate cannot be armed with entry jurisdictions: {exc}")
+            return []
+    zh_page = renderer.render(chinese)
+    zh_rows = "".join(zh_page.split('class="entry-jurisdiction"')[1:])
+    check("a Chinese page translates the per-jurisdiction statuses",
+          "not_required" not in zh_rows and "required_held" not in zh_rows, zh_rows[:300])
+    added = [e for e in page_errors(chinese, zh_page)
+             if e not in page_errors(without, renderer.render(without))]
+    check("the rows add no renderer English to a Chinese page", not added, added)
+
+    # 9. The page gate, armed from the plan, notices a jurisdiction the page does not show.
+    torn = page.replace('data-entry-jurisdiction="越南"', 'data-entry-removed="越南"')
+    errors = page_errors(plan, torn)
+    check("a page missing a jurisdiction's row is refused under --plan",
+          any("越南" in e for e in errors), errors)
+    check("the intact page raises no jurisdiction finding",
+          not [e for e in page_errors(plan, page) if "jurisdiction" in e],
+          [e for e in page_errors(plan, page) if "jurisdiction" in e])
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
