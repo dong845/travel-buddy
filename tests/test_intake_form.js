@@ -393,6 +393,33 @@ for (const lang of ["zh", "en"]) {
   }
 }
 
+// 14. The saved-profile note quotes the profile's self-drive answer in the page's language. The
+//     profile stores the Chinese option VALUE (stored values never change with the language), and
+//     the note printed it raw -- "Self-drive preference: 可接受自驾" on an English page, seen in the
+//     real-browser run and missed by every check here, because none loaded a profile in English.
+{
+  const note = (lang, value) => load(FORM, { language: lang, profile_defaults: { profile_id: "p", self_drive_preference: value } })
+    .store["saved-profile-note"].textContent;
+  const en = note("en", "可接受自驾");
+  check("en: the profile note names the self-drive answer in English",
+        /Driving is fine/.test(en) && !CJK.test(en), en);
+  const zh = note("zh", "可接受自驾");
+  check("zh: the profile note still quotes it the way it always did", zh.includes("自驾偏好：可接受自驾"), zh);
+  // Every answer the profile form can store has a label here, so an option added there is noticed
+  // here instead of printing raw.
+  const profileHtml = require("fs").readFileSync(path.join(__dirname, "..", "assets", "traveler-profile-intake.html"), "utf8");
+  const select = (profileHtml.match(/<select id="self-drive">([\s\S]*?)<\/select>/) || ["", ""])[1];
+  const offered = [...select.matchAll(/value="([^"]+)"/g)].map((m) => m[1]);
+  check("the profile form's self-drive options are readable here", offered.length >= 4, JSON.stringify(offered));
+  for (const value of offered) {
+    const text = note("en", value);
+    check(`en: the self-drive answer ${value} is named in English`, !CJK.test(text), text);
+  }
+  // A value no form offers (a hand-edited profile) is still shown as written rather than dropped.
+  check("an unknown self-drive answer is shown as written", note("en", "Only on weekends").includes("Only on weekends"),
+        note("en", "Only on weekends"));
+}
+
 // 13. A submission says which language its page was in when it was sent -- after a switch, too --
 //     so the server answers in that language and the intake records the language actually used.
 //     Driven through the page's own submit handler with the network replaced, which is the only

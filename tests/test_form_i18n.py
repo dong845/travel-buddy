@@ -57,8 +57,9 @@ STORED_VALUE_LITERALS = {
     # feasibility.residence_status: the words the Chinese hint offers are what the intake has
     # always stored, so an English "EU citizen" is stored as the same word, not as a new value.
     "欧盟公民", "成员国居留卡", "欧盟长期居留", "短期签证", "其他", "不确定",
-    # The profile example selects the self-drive option VALUE.
-    "可接受自驾",
+    # The profile's self-drive option VALUES: its example selects one, and the trip form maps each to
+    # a label when it quotes the saved profile.
+    "优先公共交通", "可接受自驾", "偏好自驾", "不自驾",
 }
 # Words a traveller may TYPE into the profile's list columns (scope, would-you-go-back, strength).
 # The form recognises them and stores a code; it never displays them except as a suggestion, and a

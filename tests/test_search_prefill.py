@@ -127,6 +127,24 @@ def main() -> int:
         "https://www.booking.com/searchresults.html?ss=Fixture&checkin=2026-09-28"
         "&checkout=2026-09-29&group_adults=2&no_rooms=1"), "'guests'") if "Hotel A" in e]
     check("two adults are not a party of four", found, "a partial party passed")
+    # One party stated twice is still one party. A Booking link copied from the results carries the
+    # party in two families -- group_* and req_* -- and summing every adult and child key counted a
+    # family of four as eight, refusing the correct link. Expedia's multi-room list (adults=2,2) is
+    # two rooms of two, which the digit test used to read as no party at all.
+    for provider, url in (
+            ("Booking, two parameter families", "https://www.booking.com/searchresults.html"
+             "?ss=Fixture+Hotel+A&checkin=2026-09-28&checkout=2026-09-29&group_adults=2"
+             "&group_children=2&age=7&age=10&no_rooms=1&req_adults=2&req_children=2&req_age=7"
+             "&req_age=10"),
+            ("Expedia, two rooms", "https://www.expedia.com/Hotel-Search?destination=Fixture"
+             "&startDate=2026-09-28&endDate=2026-09-29&adults=2%2C2&rooms=2")):
+        found = [e for e in findings(with_hotel_search(url), "'guests'") if "Hotel A" in e]
+        check(f"{provider}: the party of four is read once", not found, found)
+    found = [e for e in findings(with_hotel_search(
+        "https://www.booking.com/searchresults.html?ss=Fixture&checkin=2026-09-28"
+        "&checkout=2026-09-29&group_adults=2&req_adults=2&no_rooms=1"), "'guests'") if "Hotel A" in e]
+    check("two families each saying two adults are not a party of four", found,
+          "the two statements were added together")
 
     # ISO date-times are one field.
     url = ("https://www.thetrainline.com/book/results?origin=Montreux&destination=Bern"

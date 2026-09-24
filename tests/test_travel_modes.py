@@ -73,7 +73,10 @@ def main() -> int:
                                 ("self-drive", "car"), ("机场巴士", "bus"), ("水上巴士", "ferry"),
                                 ("古董电车与火车", "rail"), ("metro", "rail"),
                                 ("地铁/机场巴士/网约车（择一）", "mixed"),
-                                ("公共交通或网约车", "mixed"), ("直飞航班", "air"), ("缆车", None)):
+                                ("公共交通或网约车", "mixed"), ("直飞航班", "air"),
+                                # its own class, which names no map mode: still never judged, and
+                                # no longer a road leg on a self-drive trip the way None made it
+                                ("缆车", "lift")):
             check(f"{words!r} is classified {expected!r}", classify(words) == expected,
                   classify(words))
 
@@ -106,6 +109,38 @@ def main() -> int:
     check("a self-drive leg whose button opens walking directions is refused",
           run("check_map_link_modes", with_leg("A9 north", 118, 90, url=google + "walking",
                                                self_drive=True)))
+
+    # Words one class borrows from another are not that class. `car` matched "cable car" and
+    # "street car", so a cable-car leg with a transit button was told to switch to driving; "Le
+    # Shuttle" -- the car train under the Channel -- was a bus; and a self-drive trip's vehicle ferry
+    # was told its driving directions were wrong, when driving directions are the ones that include
+    # the crossing. An aerial lift names no map mode at all, on any trip.
+    if classify is not None:
+        for words in ("Cable car to the summit", "Street car", "Sleeper car", "缆车"):
+            check(f"{words!r} is not judged as a car", classify(words) != "car", classify(words))
+    check("a cable-car leg with transit directions passes",
+          not run("check_map_link_modes", with_leg("Cable car to the summit", 2, 10,
+                                                   url=google + "transit")))
+    check("a cable-car leg on a self-drive trip is not a road leg",
+          not run("check_map_link_modes", with_leg("缆车", 2, 10, url=google + "walking",
+                                                   self_drive=True)))
+    check("Le Shuttle on a self-drive trip with driving directions passes",
+          not run("check_map_link_modes", with_leg("Eurotunnel Le Shuttle", 50, 35,
+                                                   url=google + "driving", self_drive=True)))
+    check("a vehicle ferry on a self-drive trip with driving directions passes",
+          not run("check_map_link_modes", with_leg("CalMac ferry Uig to Tarbert", 45, 100,
+                                                   url=google + "driving", self_drive=True)))
+    check("a ferry on a self-drive trip with walking directions is still refused",
+          run("check_map_link_modes", with_leg("CalMac ferry Uig to Tarbert", 45, 100,
+                                               url=google + "walking", self_drive=True)))
+    check("a foot-passenger ferry on a public-transit trip with driving directions is refused",
+          run("check_map_link_modes", with_leg("Ferry to the island", 12, 40,
+                                               url=google + "driving")))
+    check("a hire car with transit directions is still refused",
+          run("check_map_link_modes", with_leg("Hire car", 30, 30, url=google + "transit")))
+    check("an airport shuttle bus is still a bus",
+          classify is None or classify("Airport shuttle bus") == "bus",
+          classify and classify("Airport shuttle bus"))
 
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)

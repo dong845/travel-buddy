@@ -570,7 +570,11 @@
   "example.booking-platforms": "携程, Trip.com",
   "example.services-to-avoid": "需要 VPN 的服务",
   "example.service-notes": "中国大陆路线优先高德地图；海外根据目的地选择本地服务",
-  "msg.example-filled": "已填入国内旅行示例；如考虑出境，请按实际情况重新回答“这趟需要现办签证吗”。"
+  "msg.example-filled": "已填入国内旅行示例；如考虑出境，请按实际情况重新回答“这趟需要现办签证吗”。",
+  "profile.self-drive.public-first": "优先公共交通",
+  "profile.self-drive.fine": "可接受自驾",
+  "profile.self-drive.prefer": "偏好自驾",
+  "profile.self-drive.none": "不自驾"
  },
  "en": {
   "page.title": "Travel Buddy · Plan a trip",
@@ -937,7 +941,11 @@
   "example.booking-platforms": "Trip.com, Booking.com",
   "example.services-to-avoid": "services that need a VPN",
   "example.service-notes": "Amap first for mainland China routes; local services abroad, depending on the destination",
-  "msg.example-filled": "Filled in an example domestic trip. If you might go abroad, answer “Will you need to get a visa for this trip?” for your own situation."
+  "msg.example-filled": "Filled in an example domestic trip. If you might go abroad, answer “Will you need to get a visa for this trip?” for your own situation.",
+  "profile.self-drive.public-first": "Public transport first",
+  "profile.self-drive.fine": "Driving is fine",
+  "profile.self-drive.prefer": "Prefer to drive",
+  "profile.self-drive.none": "No driving"
  }
 }
   </script>
@@ -1163,6 +1171,12 @@
         document.querySelectorAll(`input[name="${name}"]`).forEach((input) => { input.checked = desired.includes(input.value); });
       }
 
+      // The profile stores its self-drive answer as the Chinese option VALUE -- stored values never
+      // change with the language -- so the note has to say it in the page's language. A value no
+      // form offers (a hand-edited profile) is shown as written.
+      const SELF_DRIVE_LABELS = { "优先公共交通":"profile.self-drive.public-first", "可接受自驾":"profile.self-drive.fine", "偏好自驾":"profile.self-drive.prefer", "不自驾":"profile.self-drive.none" };
+      function selfDriveLabel(value) { return SELF_DRIVE_LABELS[value] ? t(SELF_DRIVE_LABELS[value]) : value; }
+
       function applyProfileDefaults() {
         const locationMap = { "交通枢纽":"机场/交通枢纽便利", "景点步行范围":"景点步行可达", "安静安全":"安静、安全" };
         const naturalMap = { "海岸/海岛":"海岛/海岸", "山地徒步":"山地/徒步" };
@@ -1201,7 +1215,7 @@
           note.hidden = false;
           show(note, () => {
             const carried = [
-              profileDefaults.self_drive_preference ? t("msg.profile-self-drive", { value: profileDefaults.self_drive_preference }) : "",
+              profileDefaults.self_drive_preference ? t("msg.profile-self-drive", { value: () => selfDriveLabel(profileDefaults.self_drive_preference) }) : "",
               Array.isArray(profileDefaults.never_recommend_places) && profileDefaults.never_recommend_places.length ? t("msg.profile-never", { places: profileDefaults.never_recommend_places.join(t("sep.list")) }) : "",
               Array.isArray(profileDefaults.dietary_preferences) && profileDefaults.dietary_preferences.length ? t("msg.profile-dietary", { items: profileDefaults.dietary_preferences.join(t("sep.list")) }) : "",
             ].filter(Boolean).join(t("sep.clause"));

@@ -55,7 +55,7 @@ from pathlib import Path
 # of tests/test_plan_consistency.py died on ModuleNotFoundError while the pytest run, which shares
 # one sys.path across files, stayed green.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from verification_sections import changed_sections, section_of_pointer  # noqa: E402
+from verification_sections import changed_sections, section_digests, section_of_pointer  # noqa: E402
 
 # Route totals are authored in round numbers; allow a little slack before failing.
 DURATION_TOLERANCE_MIN = 5
@@ -717,15 +717,24 @@ _MODE_WORDS = {
     "rail": (r"地铁", r"轻轨", r"电车", r"有轨", r"火车", r"高铁", r"动车", r"铁路", r"城铁", r"单轨",
              r"轨道", r"新干线", r"\bmetro\b", r"\bsubway\b", r"\bunderground\b", r"\btrams?\b",
              r"\btrains?\b", r"\brail\b", r"\b[su]-bahn\b", r"\bice\b", r"\btgv\b",
-             r"\bshinkansen\b"),
-    "bus": (r"公交", r"巴士", r"大巴", r"班车", r"\bbus(?:es)?\b", r"\bcoach(?:es)?\b",
-            r"\bshuttle\b"),
+             r"\bshinkansen\b", r"\bfuniculars?\b", r"\bstreet ?cars?\b",
+             r"\b(?:sleeper|dining|couchette|rail) ?cars?\b"),
+    # "shuttle" is not here: an airport shuttle bus says "bus", and "Le Shuttle" is the car train
+    # under the Channel -- read as a bus, a self-drive trip's crossing was told to stop driving.
+    "bus": (r"公交", r"巴士", r"大巴", r"班车", r"\bbus(?:es)?\b", r"\bcoach(?:es)?\b"),
     "car": (r"网约车", r"出租", r"打车", r"驾车", r"自驾", r"开车", r"租车", r"包车", r"\btaxi\b",
             r"\bcab\b", r"\buber\b", r"\blyft\b", r"\bbolt\b", r"\bgrab\b", r"\bcar\b",
             r"\bdriv(?:e|ing)\b"),
     "walk": (r"步行", r"徒步", r"\bwalk(?:ing)?\b", r"\bon foot\b"),
     "transit": (r"公共交通", r"\bpublic transport\b", r"\btransit\b"),
+    # An aerial lift names no map mode -- some cities route one as transit, most do not -- so it is
+    # classified only to be left alone, and to stop a self-drive trip reading it as a road leg.
+    "lift": (r"缆车", r"索道", r"\bgondolas?\b", r"\bropeways?\b", r"\bcable ?cars?\b",
+             r"\bchair ?lifts?\b", r"\baerial tram(?:way)?s?\b"),
 }
+# "car" inside these names another vehicle: a cable car, a street car, a sleeper car. Removed before
+# the car patterns are tried, so "hire car + cable car" still names both and stays unjudged.
+_NOT_A_CAR = re.compile(r"\b(?:cable|street|sleeper|dining|couchette|rail|tram)[ -]?cars?\b")
 # Average speeds no leg of that kind reaches door to door, so a figure above one is a duration or a
 # distance borrowed from another leg. Deliberately generous: a rule tight enough to argue with is a
 # rule people learn to route around.
@@ -735,8 +744,9 @@ MODE_SPEED_CEILINGS = {"car": 130.0, "bus": 110.0, "rail": 350.0, "ferry": 80.0}
 def _mode_class(mode: str) -> str | None:
     """walk | car | bus | rail | ferry | air | transit, "mixed" for more than one, None for none."""
     text = str(mode or "").casefold()
+    car_text = _NOT_A_CAR.sub(" ", text)
     found = {cls for cls, patterns in _MODE_WORDS.items()
-             if any(re.search(pattern, text) for pattern in patterns)}
+             if any(re.search(pattern, car_text if cls == "car" else text) for pattern in patterns)}
     if "ferry" in found:
         found.discard("bus")          # 水上巴士, a water bus, is a boat
     if len(found) == 1:
@@ -835,6 +845,10 @@ def check_map_link_modes(plan: dict, errors: list[str], notes: list[str]) -> Non
             if leg is None and self_drive:
                 leg = "car"
             expected = expected_for.get(leg or "")
+            # With the car aboard, a vehicle ferry is part of the drive, and driving directions are
+            # the ones that include the crossing.
+            if expected and got == "car" and leg == "ferry" and self_drive:
+                continue
             if expected and got != expected:
                 words = {"walk": "walking", "car": "driving", "transit": "public-transport"}
                 errors.append(
@@ -2513,17 +2527,22 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
     if receipt and str(receipt.get("report_checked_at") or "") == checked_at:
         changed, removed = changed_sections(_obj(receipt.get("sections")), _obj(plan))
         recheck_unresolved: list[str] = []
-        covered = _valid_rechecks(report, _obj(plan), checked_at, errors, recheck_unresolved)
+        outdated: set[str] = set()
+        rechecked = _valid_rechecks(report, _obj(plan), checked_at, errors, recheck_unresolved,
+                                    outdated)
         if recheck_unresolved:
             errors.append("a recheck found defects that were never resolved in the plan:\n    - "
                           + "\n    - ".join(recheck_unresolved))
-        uncovered = [section for section in changed if section not in covered]
+        uncovered = [section for section in changed if section not in rechecked]
         if uncovered:
+            stale = sorted(set(uncovered) & outdated)
             errors.append(cite(
                 "verification.rechecks",
                 f"these parts of the plan changed after it was verified on {checked_at}, and the "
-                f"report has no recheck for them: {', '.join(uncovered)}. Re-verify only those "
-                f"parts and append one `rechecks` entry each -- python "
+                f"report has no recheck of them as they are now: {', '.join(uncovered)}. "
+                + (f"The report's recheck of {', '.join(stale)} checked an earlier version -- the "
+                   f"part has changed again since. " if stale else "")
+                + f"Re-verify only those parts and append one `rechecks` entry each -- python "
                 f"scripts/new_verification_report.py --recheck --from-plan <plan.json> --report "
                 f"<report.json> writes them for you to fill -- or save with --unverified so the "
                 f"page says so. Every other part keeps its verification."))
@@ -2542,15 +2561,23 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
 
 
 def _valid_rechecks(report: dict, plan: dict, checked_at: str, errors: list[str],
-                    unresolved: list[str]) -> dict[str, dict]:
+                    unresolved: list[str], outdated: set[str] | None = None) -> dict[str, dict]:
     """Each recheck the report carries, validated; returns {section: entry} for the sound ones.
 
     A recheck is held to what a verification block is held to, scoped to one section: it says
     when and why, it cites pointers that resolve and that all fall inside the section it claims,
     and its findings follow the same closing rule. A recheck citing another section's fields is
     not a recheck of this one.
+
+    It also covers only the content it checked. Each entry carries the `section_digest` of the part
+    as it was rechecked (the scaffold writes it), and counts only while the part still has that
+    digest. Without it, one recheck of a day covered every later edit of that day: a second change
+    re-saved as verified, and the page said the day had been re-checked. An entry whose part has
+    moved on is history -- skipped, not validated against content it never saw, and named in
+    `outdated` so the refusal can say why the report's recheck no longer counts.
     """
     kept: dict[str, dict] = {}
+    current = section_digests(plan)
     today = dt.date.today().isoformat()
     for position, raw in enumerate(_seq(report.get("rechecks"))):
         entry = _obj(raw)
@@ -2573,6 +2600,16 @@ def _valid_rechecks(report: dict, plan: dict, checked_at: str, errors: list[str]
         reason = entry.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             errors.append(f"{where} gives no reason -- say what changed and why it was rechecked.")
+            continue
+        digest = entry.get("section_digest")
+        if not isinstance(digest, str) or not digest.strip():
+            errors.append(f"{where} carries no section_digest, so nothing says which version of the "
+                          f"part it checked. Write rechecks with python "
+                          f"scripts/new_verification_report.py --recheck, which records it.")
+            continue
+        if digest.strip() != current.get(section):
+            if outdated is not None:
+                outdated.add(section)
             continue
         claims = [c for c in _seq(entry.get("claims_checked")) if isinstance(c, str) and c.strip()]
         if not claims:
@@ -2677,24 +2714,39 @@ def _party_sizes_in_url(url: str) -> set[int]:
     """
     parsed = urllib.parse.urlparse(url)
     query = urllib.parse.parse_qs(parsed.query)
-    adults = sum(int(v) for k, vs in query.items() if _ADULT_KEY.search(k) for v in vs if v.isdigit())
-    children = 0
-    for segment in (urllib.parse.unquote(s) for s in parsed.path.split("/") if s):
-        if match := re.fullmatch(r"(\d+)adults?", segment, re.I):
-            adults += int(match.group(1))
-        if match := re.fullmatch(r"children((?:-\d{1,2})+)", segment, re.I):
-            children += len(match.group(1).strip("-").split("-"))
+    # One total per parameter family. A Booking link copied from the results states the party
+    # twice, group_* and req_*; adding every adult and child key together read a family of four as
+    # eight -- and "2 adults" stated twice as a party of four. The family is what precedes the word.
+    families: dict[str, list[int]] = {}
+
+    def count(value: str) -> int | None:
+        parts = [part.strip() for part in re.split(r"[,;|]", value) if part.strip()]
+        # Expedia lists one figure per room (adults=2,2): the party is their sum.
+        return sum(int(part) for part in parts) if parts and all(p.isdigit() for p in parts) else None
+
+    for key, values in query.items():
+        if adult := _ADULT_KEY.search(key):
+            tally = families.setdefault(key[:adult.start()].casefold(), [0, 0])
+            tally[0] += sum(n for n in (count(v) for v in values) if n is not None)
     child_keys = [k for k in query if _CHILD_KEY.search(k)]
     for key in child_keys:
+        tally = families.setdefault(key[:_CHILD_KEY.search(key).start()].casefold(), [0, 0])
         values = query[key]
         for value in values:
             if value.isdigit() and len(values) == 1:
-                children += int(value)
+                tally[1] += int(value)
             else:
-                children += len([part for part in re.split(r"[|,;]", value) if part.strip()])
+                tally[1] += len([part for part in re.split(r"[|,;]", value) if part.strip()])
     if not child_keys:
-        children += len(query.get("age", []))
-    return {adults + children} if adults else set()
+        for tally in families.values():
+            tally[1] += len(query.get("age", []))
+    path = families.setdefault("/path/", [0, 0])
+    for segment in (urllib.parse.unquote(s) for s in parsed.path.split("/") if s):
+        if match := re.fullmatch(r"(\d+)adults?", segment, re.I):
+            path[0] += int(match.group(1))
+        if match := re.fullmatch(r"children((?:-\d{1,2})+)", segment, re.I):
+            path[1] += len(match.group(1).strip("-").split("-"))
+    return {adults + children for adults, children in families.values() if adults}
 
 
 @cites
@@ -4837,6 +4889,35 @@ def _intake_constraint_findings(intake: dict, plan: dict, errors: list[str],
             value is None or _fold(str(change.get("intake_value") or "")) == _fold(str(value)))
             for change in changes)
 
+    def figure(value: object) -> float | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            return float(str(value).strip())
+        except ValueError:
+            return None
+
+    def excused_figure(field: str, intake_value: object, plan_value: object) -> bool:
+        """A recorded change excuses a figure only while it still describes this plan: the value
+        the intake holds and the value the plan now holds. A stale entry -- 2 -> 1 recorded, the
+        plan since moved to 5 -- used to silence the check for the field outright, and the page
+        printed the recorded change beside the figure that contradicted it."""
+        return any(change.get("field") == field
+                   and figure(change.get("intake_value")) is not None
+                   and figure(change.get("plan_value")) is not None
+                   and figure(intake_value) is not None and figure(plan_value) is not None
+                   and abs(figure(change.get("intake_value")) - figure(intake_value)) <= 0.005
+                   and abs(figure(change.get("plan_value")) - figure(plan_value)) <= 0.005
+                   for change in changes)
+
+    def stale(field: str) -> str:
+        recorded = [c for c in changes if c.get("field") == field]
+        if not recorded:
+            return ""
+        return (f" trip.intake_changes records {field} "
+                f"{recorded[-1].get('intake_value')!r} -> {recorded[-1].get('plan_value')!r}, which no "
+                f"longer describes this plan; update that entry to the figures the traveller agreed.")
+
     for field in ("dietary_or_religious_needs", "mobility_notes"):
         source, target = INTAKE_CONSTRAINT_FIELDS[field]
         collected = [v.strip() for v in _seq(_intake_path_value(intake, source))
@@ -4855,12 +4936,12 @@ def _intake_constraint_findings(intake: dict, plan: dict, errors: list[str],
     source, target = INTAKE_CONSTRAINT_FIELDS["traveler_count"]
     wanted, have = _intake_path_value(intake, source), _intake_path_value(plan, target)
     if isinstance(wanted, int) and not isinstance(wanted, bool) and wanted > 0 \
-            and have != wanted and not excused("traveler_count"):
+            and have != wanted and not excused_figure("traveler_count", wanted, have):
         errors.append(cite(
             "intake.constraints",
             f"the intake says {wanted} traveller(s) and trip.traveler_count is {have!r}. Rooms, "
             f"fares and every per-person figure follow this number; fix it, or record the change "
-            f"in trip.intake_changes with the reason."))
+            f"in trip.intake_changes with the reason.{stale('traveler_count')}"))
 
     source, target = INTAKE_CONSTRAINT_FIELDS["cap_per_person"]
     cap = _intake_path_value(intake, source)
@@ -4872,12 +4953,13 @@ def _intake_constraint_findings(intake: dict, plan: dict, errors: list[str],
                 f"note: the intake's cap is in {intake_currency.upper()} and the plan is in "
                 f"{plan_currency.upper()}, so budget.cap_per_person was not compared with it.")
         elif abs(_num(_intake_path_value(plan, target)) - float(cap)) > 0.005 \
-                and not excused("cap_per_person"):
+                and not excused_figure("cap_per_person", cap, _intake_path_value(plan, target)):
             errors.append(cite(
                 "intake.constraints",
                 f"the intake's per-person cap is {cap:g} and budget.cap_per_person is "
                 f"{_intake_path_value(plan, target)!r}. The cap is what the over-budget check "
-                f"compares against; carry it, or record the change in trip.intake_changes."))
+                f"compares against; carry it, or record the change in trip.intake_changes."
+                f"{stale('cap_per_person')}"))
 
 
 def _intake_entry_findings(intake: dict, plan: dict, errors: list[str]) -> None:

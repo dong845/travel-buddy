@@ -57,6 +57,18 @@ def safe_slug(value: object) -> str:
     return normalized[:80] or "trip"
 
 
+def workspace_plan_path(plan: dict, args: argparse.Namespace) -> Path:
+    """Where this save writes the plan: <workspace>/plans/<start date>-<slug>.json.
+
+    One formula for both readers -- the write, and the receipt lookup that has to find the verified
+    copy this save would replace before any check runs.
+    """
+    trip = plan.get("trip") if isinstance(plan.get("trip"), dict) else {}
+    date_part = safe_slug(trip.get("start_date") or datetime.now().date().isoformat())
+    slug = safe_slug(args.slug or trip.get("title"))
+    return Path(args.workspace).expanduser() / "plans" / f"{date_part}-{slug}.json"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Save a validated Travel Buddy HTML and source JSON.")
     parser.add_argument("plan", help="Plan JSON path, or - to read standard input (a plan whose "
@@ -142,6 +154,15 @@ def main() -> int:
         )
         return 1
 
+    # The status this save is about to record, set before any check reads it: checks judge the page
+    # being made, not the one being replaced. A plan once saved verified, with its entry answer
+    # still open, was refused by the rule whose own message says "save with --unverified" -- while
+    # being saved --unverified. The two branches below set the same values again with their notes.
+    if args.verification:
+        plan["verification_status"] = "verified"
+    elif args.unverified:
+        plan["verification_status"] = "unverified"
+
     # Structure gates prove the page is well-formed; these prove the plan agrees with itself.
     # Both ran clean once on a plan whose "lightest walking day" was its heaviest.
     consistency_errors: list[str] = []
@@ -155,6 +176,22 @@ def main() -> int:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"ERROR: Could not read verification report: {exc}", file=sys.stderr)
             return 2
+        # The receipt is written into the delivered workspace copy, never into the file the author
+        # keeps editing. Re-saving that working file over its verified copy arrived with no receipt,
+        # read as a plan from before receipts existed, and re-stamped the edit as verified -- an
+        # edit after verification passing on the most natural in-session path. A save that
+        # replaces a delivered copy compares against that copy's receipt when it brings none.
+        if args.overwrite and not isinstance(plan.get("verification_receipt"), dict):
+            delivered_path = workspace_plan_path(plan, args)
+            try:
+                delivered = (json.loads(delivered_path.read_text(encoding="utf-8"))
+                             if delivered_path.exists() else {})
+            except (OSError, ValueError):
+                delivered = {}
+            if isinstance(delivered, dict) and isinstance(delivered.get("verification_receipt"), dict):
+                plan["verification_receipt"] = delivered["verification_receipt"]
+                notes.append(f"compared against the verification receipt of {delivered_path.name}, "
+                             f"the verified copy this save replaces.")
         check_verification(report, consistency_errors, notes, plan=plan, plan_path=args.plan)
         plan["verification_status"] = "verified"
         # The report is EVIDENCE, and evidence that lives outside the workspace is a claim with
@@ -198,12 +235,16 @@ def main() -> int:
     # line changes the plan's content: the imagery sidecar name and the report's file name are
     # script-written keys the fingerprint leaves out.
     if args.verification:
+        current = section_digests(plan)
+        # Only rechecks of a part as it is now: an entry for an earlier version of the part is
+        # history, and the page must not say the part was re-checked on its strength.
         plan["verification_receipt"] = {
             "report_checked_at": str(report.get("checked_at") or ""),
-            "sections": section_digests(plan),
+            "sections": current,
             "rechecked": {str(entry.get("section")): str(entry.get("checked_at"))
                           for entry in (report.get("rechecks") or [])
-                          if isinstance(entry, dict) and entry.get("section")},
+                          if isinstance(entry, dict) and entry.get("section")
+                          and entry.get("section_digest") == current.get(str(entry.get("section")))},
         }
     # A shallow copy carrying the photographs, so the page is rendered with every image while the
     # object about to be serialized keeps none of them. The two used to be the same dict, which is
@@ -248,15 +289,13 @@ def main() -> int:
         for error in html_errors:
             print(f"- {error}", file=sys.stderr)
         return 1
-    trip = plan["trip"]
-    date_part = safe_slug(trip.get("start_date") or datetime.now().date().isoformat())
-    slug = safe_slug(args.slug or trip.get("title"))
-    stem = f"{date_part}-{slug}"
-    workspace = Path(args.workspace).expanduser()
+    plan_path = workspace_plan_path(plan, args)
+    stem = plan_path.stem
+    workspace = plan_path.parent.parent
     plan_dir, html_dir = workspace / "plans", workspace / "html"
     plan_dir.mkdir(parents=True, exist_ok=True)
     html_dir.mkdir(parents=True, exist_ok=True)
-    plan_path, html_path = plan_dir / f"{stem}.json", html_dir / f"{stem}.html"
+    html_path = html_dir / f"{stem}.html"
     # The sidecar is a deliverable too -- it is the photographs -- so it joins the existence check
     # rather than being clobbered by a save that was refused for the other two files.
     sidecar_path = sidecar_path_for(plan_path)

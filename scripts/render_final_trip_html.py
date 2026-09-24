@@ -3604,6 +3604,14 @@ def validate_plan(plan: dict) -> list[str]:
         errors.append(cite("booking.comparison", "At least one accommodation option with an id is required."))
     if len(accommodation_ids) != len(accommodation_items):
         errors.append(cite("booking.comparison", "Accommodation options must use distinct, non-empty ids so daily stay assignments remain unambiguous."))
+    # Every kind, not only the ones days point at: the verification receipt tells booking options
+    # apart by id (scripts/verification_sections.py), so two rental cars -- or tickets -- sharing
+    # one were a single fingerprint, and an edit to the first escaped every recheck.
+    for kind, label in (("attraction_tickets", "Attraction-ticket"), ("rental_cars", "Rental-car")):
+        kind_ids = [item.get("id") for item in options.get(kind, []) if isinstance(item, dict)]
+        if any(not isinstance(identifier, str) or not identifier.strip() for identifier in kind_ids) \
+                or len({dedupe_key(identifier) for identifier in kind_ids}) != len(kind_ids):
+            errors.append(cite("booking.option_contract", f"{label} options must use distinct, non-empty string ids; days and the verification receipt tell options apart by id."))
     accommodation_counts: dict[str, int] = {}
     accommodation_windows: dict[str, tuple[date | None, date | None]] = {}
     for item in accommodation_items:
@@ -4246,8 +4254,13 @@ def render_unlocalized(plan: dict) -> str:
     # them in its receipt (scripts/verification_sections.py); printing them is what tells the
     # traveller that a changed dinner was checked again rather than carried under a verification
     # that never saw it.
+    # Only on a verified page: an --unverified save keeps the receipt, for the next verified save to
+    # compare against, and a page that says no verification is recorded cannot also say which
+    # parts were re-checked after it.
     receipt = plan.get("verification_receipt") if isinstance(plan.get("verification_receipt"), dict) else {}
     rechecked = receipt.get("rechecked") if isinstance(receipt.get("rechecked"), dict) else {}
+    if plan.get("verification_status") != "verified":
+        rechecked = {}
     recheck_items = [f'{recheck_part_label(plan, str(section))} <span class="meta">{stamp(when)}</span>'
                      for section, when in rechecked.items()]
     rechecked_line = (

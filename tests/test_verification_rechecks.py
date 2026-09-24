@@ -182,6 +182,7 @@ def main() -> int:
 
         good = copy.deepcopy(ws_report)
         good["rechecks"] = [{"section": f"days[{day0}]", "checked_at": TODAY,
+                             "section_digest": vs.section_digests(saved)[f"days[{day0}]"],
                              "reason": "The traveller asked to start the day later.",
                              "claims_checked": ["days[0].activities[0]"], "findings": []}]
         found = verify(good, saved, saved_path)
@@ -259,6 +260,132 @@ def main() -> int:
             check("a filled recheck passes",
                   not [e for e in found if "changed after" in e or "recheck" in e
                        or "placeholder" in e], found)
+
+    # 7. The way out the entry rule names has to be open. A plan once saved verified, whose entry
+    #    answer is still unverified, is refused with "or save with --unverified so the page says
+    #    so" -- and saving it --unverified was refused by the same rule, because the save ran every
+    #    check against the status of the page being replaced before recording the new one.
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        open_entry = base_plan()
+        open_entry["verification_status"] = "verified"
+        open_entry["entry_context"] = {
+            "status": "unverified", "summary": "Not yet read against the official page.",
+            "traveler_basis": "short_stay_visa_or_visa_free", "source_url": "https://esta.cbp.dhs.gov/",
+            "checked_at": "2026-09-12"}
+        source = tmp / "plan.json"
+        source.write_text(json.dumps(open_entry, ensure_ascii=False), encoding="utf-8")
+        saved = subprocess.run([sys.executable, str(SAVE), str(source), "--workspace", str(tmp / "ws"),
+                                "--slug", "trip", "--unverified"], capture_output=True, text=True)
+        check("a once-verified plan with an open entry answer can be saved --unverified",
+              saved.returncode == 0, (saved.stdout + saved.stderr)[-900:])
+
+    def save(path: Path, workspace: Path, *extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(SAVE), str(path), "--workspace", str(workspace),
+                               "--slug", "trip", *extra], capture_output=True, text=True)
+
+    # 8. An edit to the author's own working file after a verified save is still an edit. The
+    #    receipt is written into the delivered workspace copy, never into the file the author keeps
+    #    editing -- so re-saving that file over its verified copy arrived with no receipt, read as a
+    #    plan from before receipts existed, and re-stamped the edit as verified: exit 0, no banner.
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        workspace = tmp / "ws"
+        working = base_plan()
+        stem = f"{working['trip']['start_date']}-trip"
+        source = tmp / f"{stem}.json"
+        source.write_text(json.dumps(working, ensure_ascii=False), encoding="utf-8")
+        report = full_verification()
+        report["plan"] = source.name
+        report_path = tmp / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        first = save(source, workspace, "--verification", str(report_path))
+        check("the working file's verified save succeeds", first.returncode == 0,
+              (first.stdout + first.stderr)[-600:])
+        working["days"][0]["activities"][0]["time"] = "09:30"
+        source.write_text(json.dumps(working, ensure_ascii=False), encoding="utf-8")
+        again = save(source, workspace, "--overwrite", "--verification", str(report_path))
+        check("re-saving the edited working file over its verified copy asks for a recheck",
+              again.returncode != 0 and f"days[{day0}]" in again.stderr and "changed after" in again.stderr,
+              f"exit {again.returncode}: {(again.stdout + again.stderr)[-600:]}")
+
+    # 9. A recheck covers the content it checked, not its section from then on. After one recheck
+    #    of a day and a covered re-save, a second edit of that day re-saved as verified with no
+    #    banner -- and the page said the day had been "re-checked after the main verification".
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        workspace = tmp / "ws"
+        working = base_plan()
+        stem = f"{working['trip']['start_date']}-trip"
+        source = tmp / f"{stem}.json"
+        source.write_text(json.dumps(working, ensure_ascii=False), encoding="utf-8")
+        report = full_verification()
+        report["plan"] = source.name
+        report_path = tmp / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        first = save(source, workspace, "--verification", str(report_path))
+        saved_path = workspace / "plans" / f"{stem}.json"
+        ws_report = workspace / "plans" / f"{stem}-verification.json"
+        check("the second flow's verified save succeeds", first.returncode == 0,
+              (first.stdout + first.stderr)[-600:])
+        if first.returncode == 0:
+            edited = json.loads(saved_path.read_text(encoding="utf-8"))
+            edited["days"][0]["activities"][0]["time"] = "09:30"
+            saved_path.write_text(json.dumps(edited, ensure_ascii=False), encoding="utf-8")
+            amended_path = tmp / "amended.json"
+            scaffolded = subprocess.run([sys.executable, str(SCAFFOLD), "--recheck", "--from-plan",
+                                         str(saved_path), "--report", str(ws_report), "--out",
+                                         str(amended_path)], capture_output=True, text=True)
+            check("the recheck scaffold runs on the edited copy", scaffolded.returncode == 0,
+                  scaffolded.stderr[-400:])
+            amended = fill(json.loads(amended_path.read_text(encoding="utf-8")))
+            check("the scaffold binds the recheck to the content it is about",
+                  all(isinstance(r.get("section_digest"), str) and r["section_digest"]
+                      for r in amended.get("rechecks", [])), amended.get("rechecks"))
+            amended_path.write_text(json.dumps(amended, ensure_ascii=False), encoding="utf-8")
+            covered = save(saved_path, workspace, "--overwrite", "--verification", str(amended_path))
+            check("the recheck covers the edit it was written for", covered.returncode == 0,
+                  (covered.stdout + covered.stderr)[-600:])
+            page = (workspace / "html" / f"{stem}.html").read_text(encoding="utf-8")
+            check("the page names the rechecked day", 'class="meta rechecked-sections"' in page)
+            check("the gate's summary still counts the report's five domains",
+                  "verification covered 5 domains" in covered.stdout, covered.stdout[-500:])
+
+            again = json.loads(saved_path.read_text(encoding="utf-8"))
+            again["days"][0]["activities"][0]["time"] = "10:15"
+            saved_path.write_text(json.dumps(again, ensure_ascii=False), encoding="utf-8")
+            second_edit = save(saved_path, workspace, "--overwrite", "--verification", str(amended_path))
+            check("a second edit of a rechecked day asks for its own recheck",
+                  second_edit.returncode != 0 and f"days[{day0}]" in second_edit.stderr,
+                  f"exit {second_edit.returncode}: {(second_edit.stdout + second_edit.stderr)[-600:]}")
+
+            # An unverified save keeps the receipt (a later verified save compares against it) but
+            # its page claims no verification at all -- so it cannot claim a recheck either.
+            unverified = save(saved_path, workspace, "--overwrite", "--unverified")
+            check("the plan can be saved --unverified meanwhile", unverified.returncode == 0,
+                  (unverified.stdout + unverified.stderr)[-600:])
+            page = (workspace / "html" / f"{stem}.html").read_text(encoding="utf-8")
+            check("an unverified page does not say a part was re-checked",
+                  'class="meta rechecked-sections"' not in page)
+
+    # 10. Every booking option has its own id. The receipt keys an option by its id, so two rental
+    #     cars (or tickets) sharing one were a single fingerprint, and edits to the first escaped
+    #     every recheck. Flights, ground transport and hotels already required distinct ids.
+    import render_final_trip_html as renderer  # noqa: PLC0415
+    selfdrive = json.loads((ROOT / "tests" / "self-drive-fixture.json").read_text(encoding="utf-8"))
+    check("the self-drive fixture is valid as shipped", not renderer.validate_plan(selfdrive),
+          renderer.validate_plan(selfdrive)[:3])
+    twins = copy.deepcopy(selfdrive)
+    twins["booking_options"]["rental_cars"][1]["id"] = twins["booking_options"]["rental_cars"][0]["id"]
+    problems = renderer.validate_plan(twins)
+    check("two rental cars sharing an id are refused",
+          any("distinct" in p and "ental" in p for p in problems), problems[:4])
+    twins = copy.deepcopy(selfdrive)
+    twins["booking_options"]["attraction_tickets"].append(copy.deepcopy(
+        twins["booking_options"]["attraction_tickets"][0]))
+    problems = renderer.validate_plan(twins)
+    check("two tickets sharing an id are refused",
+          any("distinct" in p and "icket" in p for p in problems), problems[:4])
 
     # 4. A plan saved before receipts existed is not asked for rechecks.
     legacy = base_plan()

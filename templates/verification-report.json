@@ -42,9 +42,11 @@
     "rechecks is OPTIONAL and empty on a first verification. After a verified save, the plan",
     "carries a receipt fingerprinting each day, booking option and block; a later save against",
     "this report must recheck exactly the sections that changed, one entry each: {section,",
-    "checked_at, reason, claims_checked, findings}. claims_checked must resolve and stay inside",
-    "the section; findings follow the rules above. `python scripts/new_verification_report.py",
-    "--recheck --from-plan <plan.json> --report <report.json>` writes them for you to fill.",
+    "section_digest, checked_at, reason, claims_checked, findings}. claims_checked must resolve and",
+    "stay inside the section; findings follow the rules above. section_digest binds the entry to",
+    "the version of the part it checked -- edit the part again and it needs a new entry.",
+    "`python scripts/new_verification_report.py --recheck --from-plan <plan.json> --report",
+    "<report.json>` writes them, digest included, for you to fill.",
 
     "Delete this _contract key before saving the real report."
   ],

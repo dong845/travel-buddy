@@ -40,7 +40,7 @@ from check_plan_consistency import (  # noqa: E402
     required_domains_for,
     resolve_pointer,
 )
-from verification_sections import changed_sections, section_pointers  # noqa: E402
+from verification_sections import changed_sections, section_digests, section_pointers  # noqa: E402
 
 TODO = "TODO: "
 
@@ -168,9 +168,17 @@ def recheck_entries(plan: dict, report: dict) -> tuple[list[dict], list[str], st
                         "Run a full verification: python scripts/new_verification_report.py "
                         "--from-plan <plan.json> --out <report.json>.")
     changed, removed = changed_sections(receipt.get("sections") or {}, plan)
+    # A recheck covers the part as it was when checked, so each entry records that version's
+    # digest; check_verification counts it only while the part still has it. A part the report
+    # already rechecked at its current version needs no second entry.
+    current = section_digests(plan)
+    done = {(str(r.get("section")), str(r.get("section_digest")))
+            for r in report.get("rechecks") or [] if isinstance(r, dict)}
+    changed = [section for section in changed if (section, current.get(section)) not in done]
     today = dt.date.today().isoformat()
     entries = [{
         "section": section,
+        "section_digest": current.get(section),
         "checked_at": today,
         "reason": TODO + "what changed in this part, and at whose request",
         "claims_checked": section_pointers(plan, section),

@@ -122,6 +122,29 @@ def main() -> int:
         errors, _ = run(build(tmp, intake(budget__hard_cap_amount=750), cap=750))
         check("a carried cap passes", not errors, errors)
 
+        # 5b. A recorded change excuses a figure only while it still describes the plan. A stale
+        #     entry -- 2 -> 1 recorded, the plan since moved to 5 -- used to silence the check for
+        #     that field entirely, and the page printed "Party size: 2 -> 1" beside "5 traveller(s)".
+        errors, _ = run(build(tmp, intake(), count=5, changes=[
+            {"field": "traveler_count", "intake_value": 2, "plan_value": 1,
+             "reason": "Their friend cancelled (chat, 2026-09-20)."}]))
+        check("a stale party-size change does not excuse a different party size",
+              any("traveler_count" in e for e in errors), errors)
+        errors, _ = run(build(tmp, intake(budget__hard_cap_amount=750), cap=5000, changes=[
+            {"field": "cap_per_person", "intake_value": 750, "plan_value": 1300,
+             "reason": "Raised at the checkpoint for the lake hotel."}]))
+        check("a stale cap change does not excuse a different cap",
+              any("cap_per_person" in e for e in errors), errors)
+        errors, _ = run(build(tmp, intake(budget__hard_cap_amount=900), cap=1300, changes=[
+            {"field": "cap_per_person", "intake_value": 750, "plan_value": 1300,
+             "reason": "Raised at the checkpoint for the lake hotel."}]))
+        check("a change from a figure the intake no longer says does not excuse",
+              any("cap_per_person" in e for e in errors), errors)
+        errors, _ = run(build(tmp, intake(budget__hard_cap_amount=750), cap=1300, changes=[
+            {"field": "cap_per_person", "intake_value": "750", "plan_value": "1300.00",
+             "reason": "Raised at the checkpoint for the lake hotel."}]))
+        check("a change written with its numbers as text still counts", not errors, errors)
+
         # 6. A cap in another currency cannot be compared: say so, never fail on it.
         errors, notes = run(build(tmp, intake(budget__hard_cap_amount=750,
                                               budget__currency="EUR"), cap=5900))

@@ -261,11 +261,24 @@ name. Keys the scripts write (the verification status, the gate stamp, the sidec
 receipt itself) are not content and are left out. When the plan is saved again against the same
 report, `check_verification` compares the plan with its receipt and names every section that
 changed or was added. Each of those needs a `rechecks` entry in the report —
-`{section, checked_at, reason, claims_checked, findings}` — dated no earlier than the report, citing
-pointers that resolve and stay inside that section, with findings held to the rules above.
-`python scripts/new_verification_report.py --recheck --from-plan <plan.json> --report <report.json>`
-appends one TODO entry per changed section for you to fill; the placeholder rule refuses it until
-someone has re-opened those parts. The page then lists which parts were rechecked, and when.
+`{section, section_digest, checked_at, reason, claims_checked, findings}` — dated no earlier than
+the report, citing pointers that resolve and stay inside that section, with findings held to the
+rules above. `python scripts/new_verification_report.py --recheck --from-plan <plan.json> --report
+<report.json>` appends one TODO entry per changed section for you to fill; the placeholder rule
+refuses it until someone has re-opened those parts. The page then lists which parts were
+rechecked, and when — on a verified page only.
+
+A recheck covers the part **as it was when rechecked**, not the part from then on. The scaffold
+records that version's `section_digest`, and an entry counts only while the part still has it: edit
+the same day again and it needs a new entry (run the scaffold again; the old one stays as history).
+Without this, one recheck of a day covered every later edit of it, and the page said the day had
+been re-checked. For the same reason, write the entries after the part's final edit — a fix made
+after scaffolding changes the digest, and the scaffold has to be run again.
+
+A save that replaces a delivered copy with `--overwrite` compares against that copy's receipt when
+the plan it is given carries none. The receipt is written into the workspace copy, never into the
+file you keep editing, so re-saving your working file over the verified copy used to arrive with no
+receipt and re-stamp the edit as verified.
 
 Why by section and not by file: until 2026-09-24 the report bound a plan by file name and date only,
 so a day moved from 13:30 to 14:00 after verification re-saved as verified with no banner. A
