@@ -83,6 +83,7 @@ from pathlib import Path
 # Python puts the script's own directory on sys.path, which is how save_trip_deliverables.py
 # imports the same module when run as `python scripts/...`.
 from check_plan_consistency import UNTYPED_CONSTRAINTS_MARKER
+from intake_language import normalize_language
 
 TODO = "TODO: "
 # Typed fields cannot hold prose, so they get type-valid sentinels instead. The URL sentinel is
@@ -363,7 +364,11 @@ def main() -> int:
     parser.add_argument("--end")
     parser.add_argument("--origin")
     parser.add_argument("--destination")
-    parser.add_argument("--language", default="zh")
+    # No argparse default, for the same reason as --currency: "the operator asked for zh" and
+    # "nobody said" must stay distinguishable, or zh would outrank the language the traveller chose.
+    parser.add_argument("--language", default=None,
+                        help="zh or en; default: the intake's preferred_output_language, else its "
+                             "form_language, else zh")
     # No argparse default: it has to stay possible to tell "the operator asked for EUR" from
     # "nobody said", or the default would silently outrank the currency the traveller stated.
     parser.add_argument("--currency", default=None,
@@ -467,6 +472,35 @@ def main() -> int:
     travellers = pick("trip.traveler_count", "party.traveler_count", args.travellers, is_count, "a positive integer")
     currency = pick("trip.currency", "budget.currency", args.currency, is_text, "a currency code")
     cap_per_person = pick("budget.cap_per_person", "budget.hard_cap_amount", None, is_amount, "a positive number")
+
+    # The plan starts in the traveller's language. Since 2026-09-24 the intake records the one they
+    # asked for (their profile's preference, else the language they filled the form in) and the
+    # form's own; before that this defaulted to zh whatever the file said -- the last place the
+    # answer was collected and then dropped. Reported like every other copied field, including
+    # when the file is too old to say.
+    language = args.language
+    if args.from_intake:
+        found = None
+        for source in ("preferred_output_language", "form_language"):
+            raw = intake.get(source) if isinstance(intake, dict) else None
+            if raw is None:
+                continue
+            code = normalize_language(raw)
+            if code is None:
+                report.append(f"  {source} -> trip.language: NOT copied, expected zh or en, found {raw!r}.")
+                continue
+            found = (source, code)
+            break
+        if found and language is not None and normalize_language(language) != found[1]:
+            report.append(f"  {found[0]} -> trip.language: NOT copied, {language!r} came from the "
+                          f"command line and wins (the intake says {found[1]!r}).")
+        elif found:
+            language = language or found[1]
+            report.append(f"  {found[0]} -> trip.language: {found[1]!r}")
+        elif language is None:
+            report.append("  trip.language: 'zh' -- the intake records no language (it predates "
+                          "2026-09-24); pass --language en for an English plan.")
+    language = language or "zh"
 
     def pick_list(field: str, source: str) -> list[str]:
         """Copy a list of free-text constraints. An empty list is silence; anything else is not.
@@ -683,7 +717,7 @@ def main() -> int:
         date = start + dt.timedelta(days=offset)
         day_type = "arrival" if offset == 0 else "departure" if offset == span - 1 else "full"
         days.append(build_day(offset + 1, date, day_type, args.stops_per_day, args.mode,
-                              english_plan(args.language)))
+                              english_plan(language)))
 
     plan = {
         "plan_status": "researched",
@@ -700,7 +734,7 @@ def main() -> int:
         **({"intake_context": intake_context} if intake_context else {}),
         "ui_labels": None,
         "trip": {
-            "title": f"{TODO}trip title", "language": args.language, "currency": currency,
+            "title": f"{TODO}trip title", "language": language, "currency": currency,
             "origin": origin, "destination": destination, "destination_type": "city",
             # Declared once so every map endpoint can be checked absolutely: a lat/lon pair
             # written in the wrong order keeps its partner the right distance away while
@@ -898,7 +932,7 @@ def main() -> int:
                  # places needs two entry answers, and an answer for one country is wrong about
                  # the other.
                  "jurisdiction": (f"{TODO}jurisdiction (e.g. Japan / Mainland China / Hong Kong / Schengen Area)"
-                                  if english_plan(args.language) else
+                                  if english_plan(language) else
                                   f"{TODO}jurisdiction (e.g. 日本 / 中国大陆 / 香港 / 申根区)"),
                  "stay_location": f"{TODO}stay area",
                  "neighborhood": f"{TODO}neighbourhood", "address_or_location_reference": f"{TODO}location reference",

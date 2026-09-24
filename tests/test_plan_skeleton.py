@@ -88,6 +88,59 @@ def size_limit_cases(failures: list[str]) -> None:
 
 
 
+def check_plan_language_follows_the_intake(failures: list[str]) -> None:
+    """A plan for an English traveller started in Chinese.
+
+    The intake records `preferred_output_language` (the profile's preference, else the language
+    the form was submitted in) and `form_language`, and the skeleton defaulted to zh whatever they
+    said -- the last place the traveller's language was collected and then dropped. Order: the
+    command line, else the preference, else the form language, else zh; each outcome is printed
+    like every other copied field, and the resolved language has to reach the plan's own text too
+    (the walking legs), not only `trip.language`.
+    """
+    import json, subprocess, sys, tempfile
+    base = json.loads((ROOT / "templates" / "trip-profile.json").read_text(encoding="utf-8"))
+    base.update({"origin": {"home_city": "Leiden"},
+                 "travel_window": {"start_date": "2027-04-17", "end_date": "2027-04-19"},
+                 "party": {"traveler_count": 1}, "budget": {"currency": "EUR", "hard_cap_amount": 900},
+                 "destination_scope": {"state": "fixed", "named_places": ["Porto"]}})
+    old = {k: v for k, v in base.items() if k not in ("preferred_output_language", "form_language")}
+    cases = [
+        ("a preference in the traveller's own word", {**base, "preferred_output_language": "English", "form_language": "zh"},
+         [], "en", "preferred_output_language -> trip.language: 'en'"),
+        ("the code the server writes", {**base, "preferred_output_language": "en"}, [], "en",
+         "preferred_output_language -> trip.language: 'en'"),
+        ("no preference, the form language", {**base, "preferred_output_language": None, "form_language": "en"},
+         [], "en", "form_language -> trip.language: 'en'"),
+        ("an unreadable preference falls through, loudly", {**base, "preferred_output_language": "Klingon", "form_language": "en"},
+         [], "en", "preferred_output_language -> trip.language: NOT copied"),
+        ("the command line wins", {**base, "preferred_output_language": "en"}, ["--language", "zh"], "zh",
+         "came from the command line and wins"),
+        ("an intake from before the fields existed", old, [], "zh", "the intake records no language"),
+    ]
+    for label, intake, extra, expected, said in cases:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as handle:
+            json.dump(intake, handle, ensure_ascii=False)
+            path = handle.name
+        proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "new_plan_skeleton.py"),
+                               "--from-intake", path, "--mode", "public-transit", "--stops-per-day", "3", *extra],
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            failures.append(f"plan language, {label}: the skeleton failed: {proc.stderr[-400:]}")
+            continue
+        plan = json.loads(proc.stdout)
+        got = plan.get("trip", {}).get("language")
+        if got != expected:
+            failures.append(f"plan language, {label}: trip.language is {got!r}, expected {expected!r}")
+        if said not in proc.stderr:
+            failures.append(f"plan language, {label}: the report must say {said!r}; it said "
+                            f"{[l for l in proc.stderr.splitlines() if 'language' in l]}")
+        walking = [seg.get("mode") for day in plan.get("days", []) for seg in day.get("route", {}).get("segments", [])]
+        if expected == "en" and any(mode == "步行" for mode in walking):
+            failures.append(f"plan language, {label}: the plan should be English but its walking legs "
+                            f"are 「步行」 -- the resolved language did not reach the rest of the plan")
+
+
 def check_work_mode_question_when_the_destination_may_be_a_country(failures: list[str]) -> None:
     """A construction intake naming a whole country must be questioned, not silently built on.
 
@@ -327,6 +380,7 @@ def main() -> int:
                 failures.append(f"booking state: {_label} did not say {_want!r}")
 
     check_work_mode_question_when_the_destination_may_be_a_country(failures)
+    check_plan_language_follows_the_intake(failures)
 
     if failures:
         print("FAIL")

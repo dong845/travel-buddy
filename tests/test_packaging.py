@@ -576,6 +576,22 @@ def main() -> int:
                     f"README if a user needs it, docs/internals*.md if only a maintainer does), "
                     f"or add it to INTERNAL in this test with the reason it needs no entry.")
 
+    # 7c. Every flag the intake launcher takes is named where an agent reads. The launcher is the
+    #     skill's mandatory first step, and a flag only its --help mentions is one no run uses:
+    #     --language was added so an English conversation could open English forms, and an agent
+    #     that never reads the script's source would keep opening Chinese ones.
+    #     Matched per paragraph, beside the launcher's own name: the skeleton also has a --language,
+    #     so "the flag appears somewhere" passed before the launcher's was documented at all.
+    launcher = (ROOT / "scripts" / "start_intake_workflow.py").read_text(encoding="utf-8")
+    agent_docs = "\n".join(path.read_text(encoding="utf-8")
+                           for path in [ROOT / "SKILL.md", *sorted((ROOT / "references").glob("*.md"))])
+    launcher_paragraphs = [block for block in re.split(r"\n\s*\n", agent_docs)
+                           if "start_intake_workflow.py" in block]
+    for flag in sorted(set(re.findall(r'add_argument\(\s*"(--[a-z-]+)"', launcher))):
+        if not any(flag in block for block in launcher_paragraphs):
+            failures.append(f"start_intake_workflow.py takes {flag}, but no paragraph of SKILL.md or "
+                            f"references/*.md that names the launcher mentions it, so no run will use it.")
+
     if failures:
         print(f"PACKAGING FAILED ({len(failures)}):", file=sys.stderr)
         for failure in failures:
