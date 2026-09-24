@@ -380,7 +380,9 @@ Two provider limits are worth knowing before you build a button rather than afte
   directions, a taxi, ride-hail or self-drive leg gets driving, and a bus, metro, train or ferry leg
   gets public transport (Google `travelmode`, Amap `mode`, Apple `dirflg`). The author's workspace
   held 20 taxi legs whose Amap buttons were in bus mode. A leg whose words are ambiguous
-  (「公共交通或网约车」) is not judged — write one primary mode instead. Its speed is judged too:
+  (「公共交通或网约车」) is not judged — write one primary mode instead. The words are read in either
+  language and by system name (Tube, MRT, RER, vaporetto, 滴滴, 捷运), never by operator brand; a
+  lift or bike leg names no map mode and is never judged. Its speed is judged too:
   above 130 km/h door to door for a car, 110 for a bus, 350 for rail or 80 for a ferry, one of its two
   numbers belongs to another leg; on a self-drive trip a leg whose words name no mode is a road leg.
 

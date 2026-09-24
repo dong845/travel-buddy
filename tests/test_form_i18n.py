@@ -245,6 +245,12 @@ def main() -> int:
             sep = str(table_.get("sep.list", "")).strip()
             split = [k for k, v in table_.items() if k.startswith("req.") and sep and sep in str(v)]
             check(f"{name}: no {lang} required-field name contains the list separator", not split, split)
+        # The forms are shared by every assistant that runs the skill. The profile page told
+        # everyone to "go back to Codex" in both languages, including a traveller on Claude Code,
+        # Cursor or opencode, who has no Codex to go back to.
+        branded = [k for k, v in {**zh, **en}.items()
+                   if re.search(r"\b(?:codex|claude|chatgpt|cursor|opencode)\b", str(v), re.I)]
+        check(f"{name}: no page text names one assistant", not branded, branded[:6])
         for key in sorted(k for k in tree.i18n_keys if k in zh and k in en):
             if f'data-i18n-html="{key}"' in html:
                 check(f"{name}: {key} keeps its markup in English",

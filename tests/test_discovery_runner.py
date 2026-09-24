@@ -259,6 +259,40 @@ def main() -> int:
         check("a successful run keeps its output",
               "Shortlist ready" in text, text)
 
+    # What a detached planner is told. Checked 2026-09-24 for assistants other than the one that
+    # launched it: the prompt said "use the travel-buddy skill" and nothing more, so on a machine
+    # with two installs -- this one had codex reading a clone 112 commits old -- the child read one
+    # version's SKILL.md and ran another's scripts; and it never said which language the traveller
+    # chose, so a planner started from an English form answered in whatever language it liked.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        intake = root / "intake.json"
+        for stored, line in (
+                ({"preferred_output_language": "en", "form_language": "en"}, "in English"),
+                ({"preferred_output_language": "zh", "form_language": "en"}, "in Chinese"),
+                ({"form_language": "en"}, "in English")):
+            intake.write_text(json.dumps({"destination_scope": {"state": "open"}, **stored}),
+                              encoding="utf-8")
+            prompt = module.discovery_prompt(root, intake, None, project_root=ROOT)
+            check(f"the prompt names the traveller's language for {stored}",
+                  f"Write to the traveller {line}" in prompt, prompt[:600])
+        intake.write_text(json.dumps({"destination_scope": {"state": "open"}}), encoding="utf-8")
+        prompt = module.discovery_prompt(root, intake, None, project_root=ROOT)
+        check("an intake that records no language names none",
+              "Write to the traveller in" not in prompt, prompt[:600])
+        check("the prompt pins the SKILL.md that belongs to these scripts",
+              str(ROOT / "SKILL.md") in prompt, prompt[:600])
+        original_which = module.shutil.which
+        try:
+            module.shutil.which = lambda name: f"/usr/bin/{name}"
+            argv, _ = module.command_for("codex", ROOT, root, intake, None, root / "result.md")
+            _, stdin = module.command_for("claude", ROOT, root, intake, None, root / "result.md")
+        finally:
+            module.shutil.which = original_which
+        check("codex and claude children both get the pinned skill",
+              str(ROOT / "SKILL.md") in argv[-1] and str(ROOT / "SKILL.md") in (stdin or ""),
+              argv[-1][:300])
+
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:

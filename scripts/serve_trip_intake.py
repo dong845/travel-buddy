@@ -750,7 +750,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=0, help="Loopback port; 0 chooses an available port")
     parser.add_argument("--profile", default=None, help="Validated reusable profile to prefill stable trip fields")
     parser.add_argument("--assistant", choices=("auto", "codex", "claude", "none"), default="auto", help="Assistant to start automatically after a valid submission")
-    parser.add_argument("--language", choices=("zh", "en"), default=None, help="Language the form opens in; default: the profile's preferred output language, else zh")
+    parser.add_argument("--language", choices=("zh", "en"), default=None, help="Language the form opens in; default: the profile's preferred output language, else the language the profile was filled in, else zh")
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")

@@ -3412,6 +3412,18 @@ def main() -> int:
     report["domains"][4]["claims_checked"] = []
     expect_fail_naming("claims_checked is an empty list", copy.deepcopy(base),
                        ["seasonality", "claims_checked: []"], report)
+    # 22d-ii. The one empty block with a known cause: a plan with no entry_context gives the entry
+    # domain nothing to point at. Met on 2026-09-24 building a verified domestic UK plan -- the
+    # scaffold wrote an empty entry block, the gate refused it with "List the paths it examined",
+    # and nothing said the missing piece was the plan's own entry answer.
+    report = full_verification()
+    for block in report["domains"]:
+        if block.get("domain") == "entry" or block.get("name") == "entry":
+            block["claims_checked"] = []
+    no_entry = copy.deepcopy(base)
+    no_entry.pop("entry_context", None)
+    expect_fail_naming("an empty entry block on a plan with no entry answer says what to record",
+                       no_entry, ["entry", "claims_checked: []", "not_required"], report)
 
     # 22e. A pointer whose value is null must PASS. Opening a field and finding it empty is real
     # verification work -- single_option_reason being null is how the completeness auditor learns

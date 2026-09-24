@@ -948,7 +948,12 @@ def check_language_module(check) -> None:
         return
     for value, expected in [("English", "en"), ("en", "en"), ("英文", "en"), (" EN ", "en"),
                             ("中文", "zh"), ("zh", "zh"), ("Chinese", "zh"),
-                            ("中文和 English", None), ("其他", None), ("", None), (None, None), (5, None)]:
+                            ("中文和 English", None), ("其他", None), ("", None), (None, None), (5, None),
+                            # what a profile written in chat, by any assistant, says instead
+                            ("en_US", "en"), ("en-AU", "en"), ("English (UK)", "en"),
+                            ("Simplified Chinese", "zh"), ("zh-TW", "zh"), ("zh_Hant_HK", "zh"),
+                            ("繁體中文", "zh"), ("普通话", "zh"), ("Mandarin", "zh"),
+                            ("English and Chinese", None), ("日本語", None), ("Deutsch", None)]:
         check(f"normalize_language({value!r}) is {expected!r}", lang.normalize_language(value) == expected,
               repr(lang.normalize_language(value)))
     english = {"identity_and_language": {"preferred_response_language": "English"}}
@@ -960,6 +965,12 @@ def check_language_module(check) -> None:
         (None, both, "zh", "a bilingual preference names no single page language"),
         (None, None, "zh", "nothing said: Chinese"),
         (None, {"identity_and_language": "broken"}, "zh", "a malformed profile section is not an answer"),
+        (None, {"identity_and_language": {"preferred_response_language": "",
+                                          "profile_form_language": "en"}}, "en",
+         "no preference: the language the profile was filled in"),
+        (None, {"identity_and_language": {"preferred_response_language": "中文",
+                                          "profile_form_language": "en"}}, "zh",
+         "a stated preference beats the page the profile was filled in"),
     ]:
         check(f"resolve_form_language: {why}", lang.resolve_form_language(cli, profile) == expected,
               repr(lang.resolve_form_language(cli, profile)))
@@ -1070,10 +1081,15 @@ def check_the_profile_server_speaks_and_hands_over(module, check) -> None:
     """The profile server refuses in the page's language -- including the one refusal a traveller
     can cause by typing a passport number into a note -- and opens the trip form in the resolved
     language: the flag if there was one, else what the new profile asks for."""
-    for argv, preference, expected, label in [
-        (["--language", "en"], "中文", "en", "flag en, profile prefers Chinese"),
-        ([], "English", "en", "no flag, new profile prefers English"),
-        ([], None, "zh", "no flag, no preference"),
+    for argv, preference, page_language, expected, label in [
+        (["--language", "en"], "中文", "en", "en", "flag en, profile prefers Chinese"),
+        ([], "English", "zh", "en", "no flag, new profile prefers English"),
+        ([], None, "zh", "zh", "no flag, no preference"),
+        # The traveller switched the profile page to English and left the preference blank, or
+        # chose "other": the page they used is the answer. Both used to open the trip form in
+        # Chinese, because only a preference the dropdown could name counted.
+        ([], None, "en", "en", "no flag, no preference, profile filled in English"),
+        ([], "其他", "en", "en", "no flag, 'other', profile filled in English"),
     ]:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / WORKSPACE_NAME
@@ -1084,7 +1100,6 @@ def check_the_profile_server_speaks_and_hands_over(module, check) -> None:
                     continue
                 status, body = fetch(record["url"])
                 submit = urllib.parse.urljoin(record["url"], page_config(body, "TRAVEL_BUDDY_PROFILE_INTAKE").get("submit_url", ""))
-                page_language = expected if argv else "zh"
                 leaky = valid_profile("bob")
                 leaky["home_and_logistics"]["notes"] = "passport number: E12345678"
                 status, body = fetch(submit, leaky, {LANGUAGE_HEADER: page_language})
@@ -1103,6 +1118,13 @@ def check_the_profile_server_speaks_and_hands_over(module, check) -> None:
                 config = page_config(body, "TRAVEL_BUDDY_TRIP_INTAKE")
                 check(f"{label}: the trip form it opens speaks {expected}", config.get("language") == expected,
                       f"{status} {config.get('language')!r}")
+                # And later trips: the saved profile remembers the page it was filled in.
+                saved = [json.loads(p.read_text(encoding="utf-8"))
+                         for p in (workspace / "profiles").glob("*.json")]
+                check(f"{label}: the saved profile records the page language it was filled in",
+                      len(saved) == 1 and saved[0].get("identity_and_language", {})
+                      .get("profile_form_language") == page_language,
+                      [s.get("identity_and_language") for s in saved])
             finally:
                 if record:
                     stop_detached(record.get("pid"))

@@ -142,6 +142,36 @@ def main() -> int:
           classify is None or classify("Airport shuttle bus") == "bus",
           classify and classify("Airport shuttle bus"))
 
+    # Words a plan outside the author's Chinese workspace writes. Probed 2026-09-24 on 46 mode
+    # strings: 34 named no class, so the check was blind to London's Tube, Singapore's MRT, a
+    # vaporetto, a hike -- and 电动车 (an e-bike or e-scooter) read as rail because it contains 动车
+    # (a bullet train), which tells a scooter leg to open public-transport directions.
+    if classify is not None:
+        for words, expected in (
+                ("Tube (Piccadilly line)", "rail"), ("London Overground", "rail"), ("DLR", "rail"),
+                ("MRT (East-West line)", "rail"), ("LRT", "rail"), ("MTR Island line", "rail"),
+                ("BTS Skytrain", "rail"), ("RER B", "rail"), ("Monorail", "rail"),
+                ("Minibus", "bus"), ("Trolleybus", "bus"),
+                ("Vaporetto line 1", "ferry"), ("Catamaran", "ferry"), ("Hydrofoil", "ferry"),
+                ("Speedboat", "ferry"), ("Water taxi", "ferry"),
+                ("Hike to the viewpoint", "walk"), ("Stroll along the river", "walk"),
+                ("Rideshare", "car"), ("Minicab", "car"), ("DiDi", "car"),
+                ("滴滴", "car"), ("专车", "car"), ("拼车", "car"), ("城际列车", "rail"),
+                ("磁悬浮", "rail"), ("捷运淡水线", "rail"), ("港铁", "rail"), ("坐船", "ferry"),
+                ("快艇", "ferry"), ("散步", "walk"), ("Bike", "bike"), ("骑电动车", "bike")):
+            check(f"{words!r} is classified {expected!r}", classify(words) == expected,
+                  classify(words))
+        for words in ("电动车", "机动车道边步行", "YouTube video stop"):
+            check(f"{words!r} is not a rail leg", classify(words) != "rail", classify(words))
+    check("an e-bike leg with walking directions is not told to take public transport",
+          not run("check_map_link_modes", with_leg("电动车", 3, 12, url=amap + "walk")))
+    check("a Tube leg whose button drives is refused",
+          run("check_map_link_modes", with_leg("Tube (Piccadilly line)", 8, 25,
+                                               url=google + "driving")))
+    check("a vaporetto leg with transit directions passes",
+          not run("check_map_link_modes", with_leg("Vaporetto line 1", 3, 20,
+                                                   url=google + "transit")))
+
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:

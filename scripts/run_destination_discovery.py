@@ -16,6 +16,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from intake_language import normalize_language  # noqa: E402
+
+# The names a detached planner is told to write in, one per page language the forms speak.
+LANGUAGE_NAMES = {"en": "English", "zh": "Chinese (简体中文)"}
+
 
 ASSISTANTS = {"auto", "codex", "claude", "none"}
 
@@ -181,13 +187,38 @@ def delivery_requirement(workspace: Path, intake: Path) -> str:
     return """This is an intermediate Discovery task because the destination has not been fixed. Produce a source-backed shortlist and the one smallest decision needed to select a destination. Do not call the trip complete and do not fabricate a booking-ready final HTML from an unconfirmed destination or dates. Once the traveller selects a destination and the essential fields are confirmed, the Construction task has a mandatory final HTML delivery gate."""
 
 
-def discovery_prompt(workspace: Path, intake: Path, profile: Path | None) -> str:
+def traveller_language(intake: Path) -> str | None:
+    """The language the saved intake says the traveller reads, or None when it records none."""
+    try:
+        value = json.loads(intake.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    return (normalize_language(value.get("preferred_output_language"))
+            or normalize_language(value.get("form_language")))
+
+
+def discovery_prompt(workspace: Path, intake: Path, profile: Path | None,
+                     project_root: Path = Path(__file__).resolve().parents[1]) -> str:
+    """What the detached planner is told.
+
+    The skill is named by the SKILL.md that belongs to the scripts it will run: "use the
+    travel-buddy skill" alone let a child on a machine with two installs -- codex read one 112
+    commits old -- follow one version's instructions while running another's scripts. And the
+    traveller's language is stated, because the form they filled in is the only place it was said.
+    """
     profile_text = str(profile) if profile else "No reusable profile is attached."
-    return f"""Continue this Travel Buddy request now. Use the travel-buddy skill and read the saved current-trip intake at:
+    language = traveller_language(intake)
+    language_line = (
+        f"\n\nWrite to the traveller in {LANGUAGE_NAMES[language]} -- the language this intake "
+        f"records -- including your answer in this terminal; `new_plan_skeleton.py --from-intake` "
+        f"carries the same language into the plan." if language else "")
+    return f"""Continue this Travel Buddy request now. Use the travel-buddy skill in {project_root}: read {project_root / "SKILL.md"} before anything else and run its scripts from {project_root / "scripts"} -- another installed copy of travel-buddy may be a different version. Then read the saved current-trip intake at:
 {intake}
 
 Reusable profile (if any):
-{profile_text}
+{profile_text}{language_line}
 
 Start destination discovery immediately. The intake carries fields that are hard rules, not colour: `feasibility.dietary_or_religious_needs` constrains every meal recommendation, `destination_scope.excluded_places` is a hard filter, `travel_window.fixed_commitments` cannot be violated, `trip_purpose` shapes what a good day looks like, and `travel_window.start_date`/`end_date`, when present, are the confirmed dates rather than an approximation. Do not ask the traveller to repeat information already in those files and do not ask them to type \"continue\". Respect excluded places, regional service access, and all privacy rules. Read `trip_geography.scope`: for `domestic`, stay within the traveller’s domestic market and do not ask for or infer entry requirements; for `cross_border` or `domestic_or_cross_border`, apply the saved per-traveller entry constraints. Treat high-speed rail, conventional/night rail, intercity bus, ferry, flights, and self-drive as distinct transport modes; do not silently reduce rail/bus preferences to a flight-only search. The saved budget range uses `calculation_basis: per_person`: preserve that basis in comparisons and final HTML, and label any party total as a separate derived calculation. Use current, source-labeled research for volatile claims. Do not make purchases, log in, submit forms, or request credentials/payment/document data.
 
@@ -205,7 +236,7 @@ def command_for(
 
     The second element is None when the prompt travels as an argument.
     """
-    prompt = discovery_prompt(workspace, intake, profile)
+    prompt = discovery_prompt(workspace, intake, profile, project_root=project_root)
     if assistant == "codex":
         executable = shutil.which("codex")
         if not executable:

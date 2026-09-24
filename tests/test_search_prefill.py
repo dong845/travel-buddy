@@ -145,6 +145,26 @@ def main() -> int:
         "&checkout=2026-09-29&group_adults=2&req_adults=2&no_rooms=1"), "'guests'") if "Hotel A" in e]
     check("two families each saying two adults are not a party of four", found,
           "the two statements were added together")
+    # A count and an age list are one statement of the same children, and rooms numbered 1, 2, ...
+    # split one party. Probed 2026-09-24 on twelve providers' own formats: a link giving both the
+    # number of children and their ages (Agoda children=2&childages=7,10; Qunar childNum with
+    # childAge) read a family of four as six, and per-room parameters (Hilton's room1NumAdults /
+    # room2NumAdults) read as two parties of two. Both refused a link that was right.
+    for provider, url in (
+            ("Agoda, count and ages", "https://www.agoda.com/search?city=1&checkIn=2026-09-28"
+             "&los=1&rooms=1&adults=2&children=2&childages=7%2C10&textToSearch=Fixture+Hotel+A"),
+            ("Agoda, camelCase ages", "https://www.agoda.com/search?city=1&checkIn=2026-09-28"
+             "&los=1&rooms=1&adults=2&children=2&childAges=7%2C10&textToSearch=Fixture+Hotel+A"),
+            ("Qunar, count and ages", "https://hotel.qunar.com/cn/fixture?fromDate=2026-09-28"
+             "&toDate=2026-09-29&adultNum=2&childNum=2&childAge=7%2C10&q=Fixture+Hotel+A"),
+            ("Hilton, one party in numbered rooms", "https://www.hilton.com/en/book/reservation/"
+             "rooms/?ctyhocn=FIXHA&arrivalDate=2026-09-28&departureDate=2026-09-29"
+             "&room1NumAdults=1&room1NumChildren=1&room2NumAdults=1&room2NumChildren=1"
+             "&query=Fixture+Hotel+A"),
+            ("Airbnb, an infant is one more guest", "https://www.airbnb.com/s/Fixture-Hotel-A/"
+             "homes?checkin=2026-09-28&checkout=2026-09-29&adults=2&children=1&infants=1")):
+        found = [e for e in findings(with_hotel_search(url), "'guests'") if "Hotel A" in e]
+        check(f"{provider}: the party of four is read as four", not found, found)
 
     # ISO date-times are one field.
     url = ("https://www.thetrainline.com/book/results?origin=Montreux&destination=Bern"

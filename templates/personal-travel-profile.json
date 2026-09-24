@@ -12,6 +12,7 @@
     "residence_status": null,
     "legal_residence": null,
     "preferred_response_language": null,
+    "profile_form_language": null,
     "languages_spoken": [],
     "local_language_comfort": null
   },

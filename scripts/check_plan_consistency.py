@@ -720,31 +720,51 @@ def activity_on_foot_minutes(day: dict) -> int:
 # so it is classified by the words it contains, and only when they name ONE class. An ambiguous leg
 # ("公共交通或网约车", "metro/bus/taxi (choose one)") is not guessed at: SKILL.md already asks for one
 # primary mode, and a check that picked one on the author's behalf would be arguing with a sentence.
+#
+# The English and the rest were added after a probe on 2026-09-24 of 46 mode strings a plan outside
+# that workspace writes: 34 named no class, so the check was blind to London's Tube, Singapore's
+# MRT, a vaporetto or a hike. System names (Tube, MRT, RER, ...) are here; operator brands are not,
+# because a brand names a company, and an unclassified leg is merely unjudged.
 _MODE_WORDS = {
     "air": (r"航班", r"飞机", r"\bflights?\b", r"\bplanes?\b"),
-    "ferry": (r"渡轮", r"轮渡", r"渡船", r"水上", r"游船", r"\bferr(?:y|ies)\b", r"\bboats?\b",
-              r"\bwater ?(?:bus|taxi)\b"),
+    "ferry": (r"渡轮", r"轮渡", r"渡船", r"水上", r"游船", r"船", r"快艇", r"\bferr(?:y|ies)\b",
+              r"boats?\b", r"\bwater ?(?:bus|taxi)(?:es|s)?\b", r"\bvaporett[oi]\b",
+              r"\bcatamarans?\b", r"\bhydrofoils?\b"),
     "rail": (r"地铁", r"轻轨", r"电车", r"有轨", r"火车", r"高铁", r"动车", r"铁路", r"城铁", r"单轨",
-             r"轨道", r"新干线", r"\bmetro\b", r"\bsubway\b", r"\bunderground\b", r"\btrams?\b",
+             r"轨道", r"新干线", r"列车", r"磁悬浮", r"捷运", r"港铁", r"\bmetro\b", r"\bsubway\b",
+             r"\bunderground\b", r"\btube\b", r"\boverground\b", r"\bdlr\b", r"\b[ml]rt\b",
+             r"\bmtr\b", r"\bskytrain\b", r"\brer\b", r"\bmonorails?\b", r"\btrams?\b",
              r"\btrains?\b", r"\brail\b", r"\b[su]-bahn\b", r"\bice\b", r"\btgv\b",
              r"\bshinkansen\b", r"\bfuniculars?\b", r"\bstreet ?cars?\b",
              r"\b(?:sleeper|dining|couchette|rail) ?cars?\b"),
     # "shuttle" is not here: an airport shuttle bus says "bus", and "Le Shuttle" is the car train
     # under the Channel -- read as a bus, a self-drive trip's crossing was told to stop driving.
-    "bus": (r"公交", r"巴士", r"大巴", r"班车", r"\bbus(?:es)?\b", r"\bcoach(?:es)?\b"),
-    "car": (r"网约车", r"出租", r"打车", r"驾车", r"自驾", r"开车", r"租车", r"包车", r"\btaxi\b",
-            r"\bcab\b", r"\buber\b", r"\blyft\b", r"\bbolt\b", r"\bgrab\b", r"\bcar\b",
+    "bus": (r"公交", r"巴士", r"大巴", r"班车", r"\bbus(?:es)?\b", r"\bminibus(?:es)?\b",
+            r"\btrolley ?bus(?:es)?\b", r"\bcoach(?:es)?\b"),
+    "car": (r"网约车", r"出租", r"打车", r"驾车", r"自驾", r"开车", r"租车", r"包车", r"滴滴", r"专车",
+            r"拼车", r"\btaxi\b", r"\b(?:mini)?cabs?\b", r"\buber\b", r"\blyft\b", r"\bbolt\b",
+            r"\bgrab\b", r"\bdidi\b", r"\bride[- ]?(?:hail|share)(?:ing)?\b", r"\bcar\b",
             r"\bdriv(?:e|ing)\b"),
-    "walk": (r"步行", r"徒步", r"\bwalk(?:ing)?\b", r"\bon foot\b"),
+    "walk": (r"步行", r"徒步", r"散步", r"漫步", r"\bwalk(?:ing)?\b", r"\bon foot\b",
+             r"\bhik(?:e|es|ing)\b", r"\bstroll(?:ing)?\b"),
     "transit": (r"公共交通", r"\bpublic transport\b", r"\btransit\b"),
     # An aerial lift names no map mode -- some cities route one as transit, most do not -- so it is
     # classified only to be left alone, and to stop a self-drive trip reading it as a road leg.
     "lift": (r"缆车", r"索道", r"\bgondolas?\b", r"\bropeways?\b", r"\bcable ?cars?\b",
              r"\bchair ?lifts?\b", r"\baerial tram(?:way)?s?\b"),
+    # The same for anything pedalled or scooted: no map button this skill writes is judged for it,
+    # and a self-drive trip must not read it as a road leg.
+    "bike": (r"自行车", r"单车", r"骑行", r"电动车", r"\bbikes?\b", r"\bbicycles?\b",
+             r"\bcycl(?:e|es|ing)\b", r"\be-?scooters?\b"),
 }
-# "car" inside these names another vehicle: a cable car, a street car, a sleeper car. Removed before
-# the car patterns are tried, so "hire car + cable car" still names both and stays unjudged.
-_NOT_A_CAR = re.compile(r"\b(?:cable|street|sleeper|dining|couchette|rail|tram)[ -]?cars?\b")
+# "car" inside these names another vehicle: a cable car, a street car, a sleeper car, a water taxi.
+# Removed before the car patterns are tried, so "hire car + cable car" still names both and stays
+# unjudged.
+_NOT_A_CAR = re.compile(r"\b(?:(?:cable|street|sleeper|dining|couchette|rail|tram)[ -]?cars?"
+                        r"|water[ -]?taxis?)\b")
+# 动车 is a bullet train, and it is also the tail of 电动车 (an e-bike) and 机动车 (any motor
+# vehicle): removed before the rail patterns are tried, so a scooter leg is not told to take transit.
+_NOT_A_TRAIN = re.compile(r"电动车|机动车")
 # Average speeds no leg of that kind reaches door to door, so a figure above one is a duration or a
 # distance borrowed from another leg. Deliberately generous: a rule tight enough to argue with is a
 # rule people learn to route around.
@@ -752,11 +772,12 @@ MODE_SPEED_CEILINGS = {"car": 130.0, "bus": 110.0, "rail": 350.0, "ferry": 80.0}
 
 
 def _mode_class(mode: str) -> str | None:
-    """walk | car | bus | rail | ferry | air | transit, "mixed" for more than one, None for none."""
+    """walk | car | bus | rail | ferry | air | transit | lift | bike, "mixed" for more than one,
+    None for none."""
     text = str(mode or "").casefold()
-    car_text = _NOT_A_CAR.sub(" ", text)
+    stripped = {"car": _NOT_A_CAR.sub(" ", text), "rail": _NOT_A_TRAIN.sub(" ", text)}
     found = {cls for cls, patterns in _MODE_WORDS.items()
-             if any(re.search(pattern, car_text if cls == "car" else text) for pattern in patterns)}
+             if any(re.search(pattern, stripped.get(cls, text)) for pattern in patterns)}
     if "ferry" in found:
         found.discard("bus")          # 水上巴士, a water bus, is a boat
     if len(found) == 1:
@@ -2299,10 +2320,18 @@ def _claims_pointer_errors(label: str, checked: object, plan: object) -> list[st
             f"plan pointers naming what that block examined -- "
             f'"claims_checked": ["{example}", ...].']
     if not checked:
+        # The one empty block with a known cause: a plan with no entry answer gives the entry
+        # domain nothing to cite, and the scaffold writes it empty. Say what is missing.
+        no_entry = (label == "domain 'entry'" and isinstance(plan, dict)
+                    and not isinstance(plan.get("entry_context"), dict))
         return [
             f"verification {label} reports claims_checked: []. A block with no findings and no "
             f"pointers is indistinguishable from a block nobody ran. List the paths it examined, "
-            f'e.g. "{example}".']
+            f'e.g. "{example}".'
+            + (" This plan has no entry_context, so there is nothing for it to cite: record the "
+               "entry answer first -- a trip that stays in the travellers' own country states "
+               "status not_required, with the page that says so -- and cite entry_context.status."
+               if no_entry else "")]
 
     errors: list[str] = []
     seen: set[str] = set()
@@ -2780,14 +2809,26 @@ def _party_sizes_in_url(url: str) -> set[int]:
             tally = families.setdefault(key[:adult.start()].casefold(), [0, 0])
             tally[0] += sum(n for n in (count(v) for v in values) if n is not None)
     child_keys = [k for k in query if _CHILD_KEY.search(k)]
+    # Within one family, count keys add up (children=1&infants=1 is two people) while an age list
+    # restates the children the count already gave: Agoda writes children=2&childages=7,10, and
+    # adding both read a family of four as six. The family's children are the larger of the two.
+    counted: dict[str, int] = {}
+    aged: dict[str, int] = {}
     for key in child_keys:
-        tally = families.setdefault(key[:_CHILD_KEY.search(key).start()].casefold(), [0, 0])
+        family = key[:_CHILD_KEY.search(key).start()].casefold()
         values = query[key]
+        entries = 0
         for value in values:
-            if value.isdigit() and len(values) == 1:
-                tally[1] += int(value)
+            if value.isdigit() and len(values) == 1 and "age" not in key.casefold():
+                entries += int(value)
             else:
-                tally[1] += len([part for part in re.split(r"[|,;]", value) if part.strip()])
+                entries += len([part for part in re.split(r"[|,;]", value) if part.strip()])
+        if "age" in key.casefold():
+            aged[family] = max(aged.get(family, 0), entries)
+        else:
+            counted[family] = counted.get(family, 0) + entries
+    for family in set(counted) | set(aged):
+        families.setdefault(family, [0, 0])[1] += max(counted.get(family, 0), aged.get(family, 0))
     if not child_keys:
         for tally in families.values():
             tally[1] += len(query.get("age", []))
@@ -2797,7 +2838,14 @@ def _party_sizes_in_url(url: str) -> set[int]:
             path[0] += int(match.group(1))
         if match := re.fullmatch(r"children((?:-\d{1,2})+)", segment, re.I):
             path[1] += len(match.group(1).strip("-").split("-"))
-    return {adults + children for adults, children in families.values() if adults}
+    # Families that differ only by a number are rooms of one party (Hilton's room1NumAdults and
+    # room2NumAdults), so they are one total; group_* and req_* stay two statements of one party.
+    rooms: dict[str, list[int]] = {}
+    for family, (adults, children) in families.items():
+        tally = rooms.setdefault(re.sub(r"\d+", "#", family), [0, 0])
+        tally[0] += adults
+        tally[1] += children
+    return {adults + children for adults, children in rooms.values() if adults}
 
 
 @cites

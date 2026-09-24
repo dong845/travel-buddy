@@ -723,7 +723,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--language", choices=("zh", "en"), default=None,
         help="Language the forms open in. Default: the saved profile's preferred output language, "
-             "else zh; a first-time traveller's trip form follows the profile they just saved.")
+             "else the language that profile was filled in, else zh; a first-time traveller's trip "
+             "form follows the profile they just saved.")
     # argv is a parameter so the tests can drive this the way a caller does, through main(),
     # instead of asserting on internals that a caller never touches. A --detach path proved by
     # calling run_detached() directly would not prove the flag reaches it.

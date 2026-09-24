@@ -110,6 +110,11 @@ class IntakeHandler(IntakeRequestGuard, BaseHTTPRequestHandler):
             if errors:
                 self.send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": " ".join(errors)})
                 return
+            # The page the traveller filled this in is an answer about language when the
+            # preference names none: blank, "other", or both. Recorded, so the trip form this
+            # hands over to and every later one open in it (intake_language.resolve_form_language).
+            if isinstance(profile.get("identity_and_language"), dict):
+                profile["identity_and_language"]["profile_form_language"] = lang
             next_server: TripIntakeServer | None = None
             try:
                 destination = self.server.workspace / "profiles" / profile_filename(str(profile["profile_id"]))
