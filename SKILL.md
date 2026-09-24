@@ -290,6 +290,14 @@ demanded an answer and the page never showed the traveller it had been given. Th
 already applies to ratings: stored and never shown is the same defect as never gathered. When you
 add a field the traveller stated, check the rendered page for it rather than the JSON.
 
+The traveller's limits are held to the same file. The dietary needs, mobility notes, party size and
+per-person cap the form collected are compared with the plan by `check_plan_consistency.py`, because
+until 2026-09-24 only the must-haves were: an intake with a severe dairy allergy and a plan without
+it produced no finding at all. When the traveller changes one of those four after the form — a cap
+raised at the checkpoint, a friend who dropped out — record it in `trip.intake_changes` as
+`{field, intake_value, plan_value, reason}`; the gate accepts the difference only with a reason, and
+the page prints it beside their constraints, because it is their change and not yours.
+
 ### Write the page like a person who went there, not like a form being filled in
 
 The prose in the delivered plans is already specific and reason-led — no "vibrant tapestry", no

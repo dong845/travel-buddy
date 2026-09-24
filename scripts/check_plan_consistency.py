@@ -4331,6 +4331,116 @@ def check_ticket_sale_windows(plan: dict, errors: list[str], notes: list[str]) -
                 f"or say in the plan who buys it and from where.")
 
 
+# The limits the intake form collects, as (intake path, plan path). The same mapping
+# new_plan_skeleton.py --from-intake copies by, so what the skeleton carries is exactly what this
+# compares -- a second, drifting copy of "which field goes where" is how a check ends up guarding a
+# field nobody writes.
+INTAKE_CONSTRAINT_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "dietary_or_religious_needs": (("feasibility", "dietary_or_religious_needs"),
+                                   ("trip", "traveler_constraints", "dietary_or_religious_needs")),
+    "mobility_notes": (("party", "mobility_or_access_needs"),
+                       ("trip", "traveler_constraints", "mobility_notes")),
+    "traveler_count": (("party", "traveler_count"), ("trip", "traveler_count")),
+    "cap_per_person": (("budget", "hard_cap_amount"), ("budget", "cap_per_person")),
+}
+
+
+def _intake_path_value(node: object, path: tuple[str, ...]) -> object:
+    for key in path:
+        node = node.get(key) if isinstance(node, dict) else None
+    return node
+
+
+def _declared_intake_changes(plan: dict, errors: list[str]) -> list[dict]:
+    """trip.intake_changes, each naming a compared field and saying why it moved.
+
+    The escape exists because travellers change their minds at the checkpoint -- a real run raised
+    its cap from the form's figure to 1300 -- and a gate that refused every such plan would be
+    routed around. It costs a sentence, and the page prints the sentence, so the traveller sees
+    their own change rather than a plan that quietly disagrees with what they typed.
+    """
+    raw = _obj(plan.get("trip")).get("intake_changes")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        errors.append("trip.intake_changes must be a list of {field, intake_value, plan_value, "
+                      "reason} objects, one per constraint the traveller changed after the form.")
+        return []
+    kept = []
+    for position, entry in enumerate(raw):
+        entry = _obj(entry)
+        field, reason = entry.get("field"), entry.get("reason")
+        if field not in INTAKE_CONSTRAINT_FIELDS:
+            errors.append(
+                f"trip.intake_changes[{position}].field is {field!r}; it must be one of "
+                f"{', '.join(INTAKE_CONSTRAINT_FIELDS)}.")
+        elif not isinstance(reason, str) or not reason.strip() or _blank(reason):
+            errors.append(
+                f"trip.intake_changes[{position}] ({field}) gives no reason. A change to what the "
+                f"traveller told the form is theirs to make -- write when and why, in their words; "
+                f"the page prints it beside their constraints.")
+        else:
+            kept.append(entry)
+    return kept
+
+
+def _intake_constraint_findings(intake: dict, plan: dict, errors: list[str],
+                                notes: list[str]) -> None:
+    """The allergy, the walking limit, the party and the cap: the form's answers against the plan.
+
+    Measured 2026-09-24 against v2.7.0: an intake carrying a severe dairy allergy and a 20-minute
+    walking limit, a plan carrying neither, and 0 findings -- while the same plan missing one
+    ranked must-have produced 1. The must-haves had a cross-check; the constraints whose violation
+    is a medical or a stranding risk did not. The skeleton copies them, but a plan built from
+    flags, edited afterwards, or written by a second planner never went through the skeleton.
+    """
+    changes = _declared_intake_changes(plan, errors)
+
+    def excused(field: str, value: object = None) -> bool:
+        return any(change.get("field") == field and (
+            value is None or _fold(str(change.get("intake_value") or "")) == _fold(str(value)))
+            for change in changes)
+
+    for field in ("dietary_or_religious_needs", "mobility_notes"):
+        source, target = INTAKE_CONSTRAINT_FIELDS[field]
+        collected = [v.strip() for v in _seq(_intake_path_value(intake, source))
+                     if isinstance(v, str) and v.strip() and not _blank(v)]
+        carried = {_fold(v) for v in _seq(_intake_path_value(plan, target)) if isinstance(v, str)}
+        dropped = [v for v in collected if _fold(v) not in carried and not excused(field, v)]
+        if dropped:
+            errors.append(
+                f"the intake recorded {field} {', '.join(repr(v) for v in dropped)} and the plan "
+                f"does not carry it at {'.'.join(target)}. This is the traveller's own statement of "
+                f"what can hurt them; copy it in (new_plan_skeleton.py --from-intake does), or, "
+                f"when they changed it after the form, record that in trip.intake_changes with "
+                f"their reason.")
+
+    source, target = INTAKE_CONSTRAINT_FIELDS["traveler_count"]
+    wanted, have = _intake_path_value(intake, source), _intake_path_value(plan, target)
+    if isinstance(wanted, int) and not isinstance(wanted, bool) and wanted > 0 \
+            and have != wanted and not excused("traveler_count"):
+        errors.append(
+            f"the intake says {wanted} traveller(s) and trip.traveler_count is {have!r}. Rooms, "
+            f"fares and every per-person figure follow this number; fix it, or record the change "
+            f"in trip.intake_changes with the reason.")
+
+    source, target = INTAKE_CONSTRAINT_FIELDS["cap_per_person"]
+    cap = _intake_path_value(intake, source)
+    if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
+        intake_currency = str(_obj(intake.get("budget")).get("currency") or "").strip().casefold()
+        plan_currency = str(_obj(plan.get("trip")).get("currency") or "").strip().casefold()
+        if intake_currency and plan_currency and intake_currency != plan_currency:
+            notes.append(
+                f"note: the intake's cap is in {intake_currency.upper()} and the plan is in "
+                f"{plan_currency.upper()}, so budget.cap_per_person was not compared with it.")
+        elif abs(_num(_intake_path_value(plan, target)) - float(cap)) > 0.005 \
+                and not excused("cap_per_person"):
+            errors.append(
+                f"the intake's per-person cap is {cap:g} and budget.cap_per_person is "
+                f"{_intake_path_value(plan, target)!r}. The cap is what the over-budget check "
+                f"compares against; carry it, or record the change in trip.intake_changes.")
+
+
 def check_preferences_came_from_the_intake(plan: dict, errors: list[str],
                                            notes: list[str]) -> None:
     """What the form collected must reach the plan, checked against the form's own file.
@@ -4408,23 +4518,25 @@ def check_preferences_came_from_the_intake(plan: dict, errors: list[str],
 
     collected = [str(m).strip() for m in _seq(_obj(intake.get("experience")).get("ranked_must_haves"))
                  if isinstance(m, str) and m.strip() and not _blank(m)]
-    if not collected:
-        return
     preferences = _obj(_obj(plan.get("trip")).get("traveler_preferences"))
     carried = {_fold(str(m)) for m in _seq(preferences.get("ranked_must_haves"))
                if isinstance(m, str) and m.strip()}
     dropped = [m for m in collected if _fold(m) not in carried]
-    if not dropped:
-        return
-    errors.append(
-        f"the intake collected {len(collected)} ranked must-have(s) and the plan carries "
-        f"{len(collected) - len(dropped)}. Missing: {'; '.join(repr(m) for m in dropped)}. These "
-        f"are the traveller's own answers to what the trip is FOR, and every rule that reads them "
-        f"-- an anchor pointing at each through satisfies_preference, an unmet one carrying its "
-        f"reason -- iterates this list, so dropping an entry does not fail those rules, it deletes "
-        f"them. Copy each into trip.traveler_preferences.ranked_must_haves in the traveller's own "
-        f"words (new_plan_skeleton.py --from-intake does it), or, where the season or the place "
-        f"genuinely cannot deliver one, carry it and say so in unmet_preferences.")
+    if dropped:
+        errors.append(
+            f"the intake collected {len(collected)} ranked must-have(s) and the plan carries "
+            f"{len(collected) - len(dropped)}. Missing: {'; '.join(repr(m) for m in dropped)}. "
+            f"These are the traveller's own answers to what the trip is FOR, and every rule that "
+            f"reads them -- an anchor pointing at each through satisfies_preference, an unmet one "
+            f"carrying its reason -- iterates this list, so dropping an entry does not fail those "
+            f"rules, it deletes them. Copy each into trip.traveler_preferences.ranked_must_haves in "
+            f"the traveller's own words (new_plan_skeleton.py --from-intake does it), or, where the "
+            f"season or the place genuinely cannot deliver one, carry it and say so in "
+            f"unmet_preferences.")
+
+    # The must-haves used to be the whole of this check, and it returned as soon as they were
+    # settled -- so the constraints below have to run whatever the must-haves said.
+    _intake_constraint_findings(intake, plan, errors, notes)
 
 
 

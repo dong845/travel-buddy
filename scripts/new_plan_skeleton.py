@@ -747,6 +747,10 @@ def main() -> int:
                 ],
                 "unmet_preferences": [],
             },
+            # Empty unless the traveller changes one of their limits after the form. The four
+            # limits above are compared with the intake file, and a difference is accepted only
+            # when an entry here says what changed and why; the page prints it.
+            "intake_changes": [],
         },
         "profile_context": {"profile_id": None, "profile_last_reviewed_at": None,
                             "applied_saved_fields": [], "excluded_places_checked": []},

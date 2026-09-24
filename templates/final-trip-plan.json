@@ -265,6 +265,12 @@
     "verification tier is withheld -- an untyped constraint is an open question and never a clean",
     "bill of health. This key was live in all four of those places while this contract said nothing",
     "about it, so an author copying this file met a refusal for a key they had never seen.",
+    "trip.intake_changes -- OPTIONAL, empty unless the traveller changed something after the form.",
+    "One {field, intake_value, plan_value, reason} per change; field is dietary_or_religious_needs |",
+    "mobility_notes | traveler_count | cap_per_person, the four limits check_plan_consistency compares",
+    "with the intake file. A plan that differs from its intake on one of them without an entry here",
+    "is refused, because a dropped allergy and a legitimately raised cap look identical from the",
+    "plan alone. The reason is printed beside the traveller's constraints: it is their change.",
     "imagery_sidecar -- OPTIONAL and NOT written by hand: `python scripts/fetch_plan_imagery.py",
     "<plan.json>` sets it to the sidecar's file name, relative to the plan, and moves the photo",
     "bytes out of the plan (they cost ~576k tokens to carry inline). null or absent, as shipped",
@@ -322,7 +328,8 @@
       "avoid_list": [],
       "avoid_list_handling": [],
       "unmet_preferences": []
-    }
+    },
+    "intake_changes": []
   },
   "profile_context": {
     "profile_id": null,

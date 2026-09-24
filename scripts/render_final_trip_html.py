@@ -110,6 +110,15 @@ ENTRY_STATUSES = (
     "required_to_apply",
 )
 ALLERGY_SEVERITIES = ("none", "preference", "intolerance", "severe")
+# check_plan_consistency.INTAKE_CONSTRAINT_FIELDS names the fields a plan may change after the form
+# only by saying so in trip.intake_changes; these are the words the page uses for each. The first
+# two reuse the constraint panel's own labels so a translated page says them the same way twice.
+INTAKE_CHANGE_LABELS = {
+    "dietary_or_religious_needs": "Dietary needs",
+    "mobility_notes": "Mobility",
+    "traveler_count": "Party size",
+    "cap_per_person": "Budget cap per person",
+}
 
 # How this plan's requirements were collected. SKILL.md makes the loopback HTML form the required
 # path and the chat questionnaire a fallback the TRAVELLER chooses; until this field existed that
@@ -364,6 +373,9 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "constraints_mobility": "行动能力：",
             "constraints_walk_cap": "单段连续步行上限：",
             "constraints_card": "过敏卡 —— 到店请出示这段文字：",
+            "intake_changed_heading": "表单之后的调整：",
+            "intake_field_party": "人数：",
+            "intake_field_cap": "人均预算上限：",
             "preferences_heading": "你提出的需求",
             "preferences_direction": "体验方向：",
             "preferences_avoid": "希望避开的：",
@@ -651,6 +663,10 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "constraints_mobility",
     "constraints_walk_cap",
     "constraints_card",
+    # Added with trip.intake_changes, optional for the same reason as every key around it.
+    "intake_changed_heading",
+    "intake_field_party",
+    "intake_field_cap",
     # Added with the traveller-preferences panel, optional for the reason two comments above
     # spell out: making a new key required rejects every label set written before it existed,
     # and a rejected set drops the whole page back to English.
@@ -1144,6 +1160,9 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
         "Mobility: ": labels.get("constraints_mobility", "Mobility: "),
         "Maximum continuous walking: ": labels.get("constraints_walk_cap", "Maximum continuous walking: "),
         "Allergy card — show this to staff: ": labels.get("constraints_card", "Allergy card — show this to staff: "),
+        "Changed since your form: ": labels.get("intake_changed_heading", "Changed since your form: "),
+        "Party size: ": labels.get("intake_field_party", "Party size: "),
+        "Budget cap per person: ": labels.get("intake_field_cap", "Budget cap per person: "),
         ">What you asked for<": f">{labels.get('preferences_heading', 'What you asked for')}<",
         "Experience direction: ": labels.get("preferences_direction", "Experience direction: "),
         "Asked to avoid: ": labels.get("preferences_avoid", "Asked to avoid: "),
@@ -3941,6 +3960,22 @@ def render_unlocalized(plan: dict) -> str:
         constraint_rows.append(
             '<p><strong>Allergy card — show this to staff: </strong></p>'
             f'<blockquote class="allergy-card">{esc(card)}</blockquote>')
+    # What the traveller changed after the form, and why. check_plan_consistency lets a plan
+    # disagree with its intake only when the change is recorded in trip.intake_changes -- and a
+    # change recorded in the JSON and never shown would be the plan quietly overruling what the
+    # traveller typed, which is the defect the cross-check exists to stop.
+    changes = [c for c in as_list(trip.get("intake_changes"))
+               if isinstance(c, dict) and c.get("field") in INTAKE_CHANGE_LABELS
+               and isinstance(c.get("reason"), str) and c["reason"].strip()]
+    if changes:
+        rows = "".join(
+            f'<li class="intake-change" data-intake-change="{attr(c.get("field"))}"><strong>'
+            f'{INTAKE_CHANGE_LABELS[c["field"]]}: </strong>'
+            f'{esc(c.get("intake_value"), "—")} → {esc(c.get("plan_value"), "—")} — '
+            f'{esc(c.get("reason"))}</li>'
+            for c in changes)
+        constraint_rows.append('<p><strong>Changed since your form: </strong></p>'
+                               f'<ul class="intake-changes">{rows}</ul>')
     constraints_panel = (
         '<section id="traveller-constraints" class="panel"><h2>Your constraints</h2>'
         + "".join(constraint_rows) + "</section>"
