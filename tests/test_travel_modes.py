@@ -168,6 +168,20 @@ def main() -> int:
     check("a Tube leg whose button drives is refused",
           run("check_map_link_modes", with_leg("Tube (Piccadilly line)", 8, 25,
                                                url=google + "driving")))
+    # From the fresh review: 单车 (bike) is also the head of 单车道 (a single-lane road), and plans in
+    # Traditional Chinese were unclassified -- on a self-drive trip an unclassified leg is a road
+    # leg, so 搭捷運 with a transit button was told to switch to driving.
+    if classify is not None:
+        for words, expected in (("自驾（单车道山路）", "car"), ("單車道山路自駕", "car"),
+                                ("搭捷運", "rail"), ("地鐵", "rail"), ("高鐵", "rail"),
+                                ("公車", "bus"), ("客運", "bus"), ("計程車", "car"),
+                                ("腳踏車", "bike"), ("渡輪", "ferry"), ("纜車", "lift")):
+            check(f"{words!r} is classified {expected!r}", classify(words) == expected,
+                  classify(words))
+        check("'電動車' is not a rail leg", classify("電動車") != "rail", classify("電動車"))
+    check("a Traditional-Chinese metro leg on a self-drive trip keeps its transit button",
+          not run("check_map_link_modes", with_leg("搭捷運", 8, 25, url=google + "transit",
+                                                   self_drive=True)))
     check("a vaporetto leg with transit directions passes",
           not run("check_map_link_modes", with_leg("Vaporetto line 1", 3, 20,
                                                    url=google + "transit")))

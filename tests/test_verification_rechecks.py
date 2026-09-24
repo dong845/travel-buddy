@@ -266,6 +266,22 @@ def main() -> int:
         check("the rechecked line reads days before bookings",
               english.find("Day ") < english.find(many["booking_options"]["accommodations"][0]
                                                   ["property_name"]), english[:600])
+        # From the fresh review: groups were keyed by the whole stamp and ordered by plan position,
+        # so two times on one day made two groups and a later date could come first.
+        dated = copy.deepcopy(many)
+        dated["verification_receipt"]["rechecked"] = {
+            f"days[{day0}]": "2026-09-24", "budget": "2026-09-20T10:00:00",
+            "transport_overview": "2026-09-20T16:30:00"}
+        dated_line = renderer.render(dated).split('class="meta rechecked-sections"', 1)[-1]
+        dated_line = dated_line.split("</p>", 1)[0]
+        check("rechecks on one day form one group, and the groups read in date order",
+              dated_line.count("2026-09-20") == 1
+              and 0 <= dated_line.find("2026-09-20") < dated_line.find("2026-09-24"), dated_line[:600])
+        dated["trip"]["language"] = "zh-CN"
+        dated_zh = renderer.render(dated).split('class="meta rechecked-sections"', 1)[-1]
+        dated_zh = dated_zh.split("</p>", 1)[0]
+        check("a Chinese page separates the date groups with a Chinese semicolon",
+              "；" in dated_zh and "; " not in dated_zh, dated_zh[:600])
         many["trip"]["language"] = "zh-CN"
         chinese_line = renderer.render(many).split('class="meta rechecked-sections"', 1)[-1]
         chinese_line = chinese_line.split("</p>", 1)[0]
@@ -511,6 +527,25 @@ def main() -> int:
     check("an emptied section counts as removed, not changed",
           "assumptions" in removed and "assumptions" not in moved, (moved, removed))
 
+    # 13b. Found by the fresh review: a recheck that carries a pre-v2 digest saw its section alone,
+    #      so it cannot vouch for a section that depends on the party; an already-empty dependent
+    #      section is not "removed" by a party change; and the entry answer is about who travels.
+    stamped = copy.deepcopy(plan)
+    stamped["transport_overview"] = []
+    stamped["entry_context"] = {"status": "not_required", "summary": "Domestic trip.",
+                                "traveler_basis": "not_applicable_domestic",
+                                "source_url": "https://www.gov.uk/", "checked_at": "2026-08-03"}
+    stamps = vs.section_digests(stamped)
+    grown_again = copy.deepcopy(stamped)
+    grown_again["trip"]["traveler_count"] += 1
+    moved, removed = vs.changed_sections(stamps, grown_again)
+    check("an already-empty dependent section is not 'removed' by a party change",
+          "transport_overview" not in removed and "transport_overview" not in moved, (moved, removed))
+    check("a party change asks for the entry answer again", "entry_context" in moved, moved)
+    check("a pre-v2 recheck digest does not vouch for a party-dependent section",
+          not vs.digest_is_current(grown_again, f"days[{day0}]",
+                                   vs._digest(vs.sections(grown_again)[f"days[{day0}]"])))
+
     # 14. The recheck loop runs on the commands the scripts print, and nothing else. Walked
     #     literally on 2026-09-24: re-saving the delivered copy with --overwrite alone answered "No
     #     verification report ... run the parallel-verify stage" although SKILL.md says the edit
@@ -629,6 +664,216 @@ def main() -> int:
             check("the room check holds on an unverified save too",
                   unverified.returncode != 0 and "guest" in unverified.stderr,
                   f"exit {unverified.returncode}: {unverified.stderr[-600:]}")
+
+    # 17-20 were found by a fresh review of the fixes above (2026-09-24), each reproduced first.
+    def run_printed(text: str, script: str) -> subprocess.CompletedProcess | None:
+        command = printed_command(text, script)
+        return subprocess.run(command, capture_output=True, text=True) if command else None
+
+    # 17. A plan delivered verified before receipts existed has nothing recording what its report
+    #     covered. Adopting its report on --overwrite re-certified an edit to it: exit 0, verified,
+    #     no banner -- where the parent commit refused the same command.
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        workspace = tmp / "ws"
+        working = base_plan()
+        stem = f"{working['trip']['start_date']}-trip"
+        source = tmp / f"{stem}.json"
+        source.write_text(json.dumps(working, ensure_ascii=False), encoding="utf-8")
+        report = full_verification()
+        report["plan"] = source.name
+        report_path = tmp / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        first = save(source, workspace, "--verification", str(report_path))
+        delivered = workspace / "plans" / f"{stem}.json"
+        if first.returncode == 0:
+            legacy = json.loads(delivered.read_text(encoding="utf-8"))
+            legacy.pop("verification_receipt", None)
+            legacy["days"][0]["activities"][0]["time"] = "09:30"
+            delivered.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+            again = save(delivered, workspace, "--overwrite")
+            check("an edit to a plan delivered before receipts existed is not re-certified",
+                  again.returncode != 0 and "receipt" in again.stderr,
+                  f"exit {again.returncode}: {(again.stdout + again.stderr)[-700:]}")
+            fresh = printed_command(again.stderr, "new_verification_report.py")
+            check("and the refusal prints the command that starts a fresh report",
+                  fresh is not None and "--from-plan" in fresh and "--recheck" not in fresh,
+                  again.stderr[-700:])
+        else:
+            check("the legacy walk's verified save succeeds", False, first.stderr[-600:])
+
+    # 18. SKILL.md has the skeleton written to `plan.json`, so the report names plan.json while the
+    #     delivered copy is <start>-<slug>.json. Copied beside it unchanged, the report no longer
+    #     matched the plan it sat next to: the delivered copy could not be re-saved or checked.
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        workspace = tmp / "ws"
+        source = tmp / "plan.json"
+        source.write_text(json.dumps(base_plan(), ensure_ascii=False), encoding="utf-8")
+        report = full_verification()
+        report["plan"] = str(source)
+        report_path = tmp / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        first = save(source, workspace, "--verification", str(report_path))
+        delivered = workspace / "plans" / f"{base_plan()['trip']['start_date']}-trip.json"
+        delivered_report = delivered.with_name(delivered.stem + "-verification.json")
+        check("the plan.json walk's verified save succeeds", first.returncode == 0,
+              (first.stdout + first.stderr)[-600:])
+        if first.returncode == 0:
+            gate = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_plan_consistency.py"),
+                                   str(delivered), "--verification", str(delivered_report)],
+                                  capture_output=True, text=True)
+            check("the delivered copy checks clean against the report saved beside it",
+                  gate.returncode == 0, gate.stderr[-600:])
+            copy_of = json.loads(delivered.read_text(encoding="utf-8"))
+            copy_of["days"][0]["activities"][0]["time"] = "10:20"
+            delivered.write_text(json.dumps(copy_of, ensure_ascii=False), encoding="utf-8")
+            refused = save(delivered, workspace, "--overwrite")
+            ran = run_printed(refused.stderr, "new_verification_report.py")
+            check("the delivered copy of plan.json can start its recheck",
+                  refused.returncode != 0 and ran is not None and ran.returncode == 0,
+                  (refused.stderr + (ran.stderr if ran else ""))[-800:])
+            if ran is not None and ran.returncode == 0:
+                delivered_report.write_text(json.dumps(fill(json.loads(delivered_report.read_text(
+                    encoding="utf-8"))), ensure_ascii=False), encoding="utf-8")
+                closed = run_printed(ran.stderr, "save_trip_deliverables.py")
+                check("and finish it with the save it prints",
+                      closed is not None and closed.returncode == 0,
+                      (closed.stdout + closed.stderr)[-700:] if closed else ran.stderr[-500:])
+
+    # 19. A working copy kept inside <workspace>/plans under a name that is not dated: the printed
+    #     save dropped --slug, and the edit landed as a second plan while the delivered one stayed
+    #     verified with the old time.
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        workspace = tmp / "ws"
+        (workspace / "plans").mkdir(parents=True)
+        draft = workspace / "plans" / "draft.json"
+        draft.write_text(json.dumps(base_plan(), ensure_ascii=False), encoding="utf-8")
+        report = full_verification()
+        report["plan"] = draft.name
+        report_path = tmp / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        first = save(draft, workspace, "--verification", str(report_path))
+        if first.returncode == 0:
+            edited = json.loads(draft.read_text(encoding="utf-8"))
+            edited["days"][0]["activities"][0]["time"] = "11:40"
+            draft.write_text(json.dumps(edited, ensure_ascii=False), encoding="utf-8")
+            refused = save(draft, workspace, "--overwrite", "--verification", str(report_path))
+            ran = run_printed(refused.stderr, "new_verification_report.py")
+            if ran is not None and ran.returncode == 0:
+                report_path.write_text(json.dumps(fill(json.loads(report_path.read_text(
+                    encoding="utf-8"))), ensure_ascii=False), encoding="utf-8")
+                closed = run_printed(ran.stderr, "save_trip_deliverables.py")
+            plans = sorted(p.name for p in (workspace / "plans").glob("*.json")
+                           if not p.name.endswith("-verification.json"))
+            delivered = workspace / "plans" / f"{base_plan()['trip']['start_date']}-trip.json"
+            check("a working copy inside plans/ replaces its delivered plan rather than adding one",
+                  plans == sorted(["draft.json", delivered.name])
+                  and json.loads(delivered.read_text(encoding="utf-8"))["days"][0]["activities"][0]
+                  ["time"] == "11:40", plans)
+        else:
+            check("the draft walk's verified save succeeds", False, first.stderr[-600:])
+
+    # 21. The scaffold's other exits run as printed too, and a folder that merely happens to be
+    #     called "plans" is not a workspace.
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        workspace = tmp / "ws"
+        working = base_plan()
+        stem = f"{working['trip']['start_date']}-trip"
+        source = tmp / f"{stem}.json"
+        source.write_text(json.dumps(working, ensure_ascii=False), encoding="utf-8")
+        report = full_verification()
+        report["plan"] = source.name
+        report_path = tmp / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        first = save(source, workspace, "--verification", str(report_path))
+        delivered = workspace / "plans" / f"{stem}.json"
+        if first.returncode == 0:
+            loose = tmp / "loose"
+            loose.mkdir()
+            outside = loose / f"{stem}.json"
+            edited = json.loads(delivered.read_text(encoding="utf-8"))
+            edited["days"][0]["activities"][0]["time"] = "08:15"
+            outside.write_text(json.dumps(edited, ensure_ascii=False), encoding="utf-8")
+            loose_report = loose / "report.json"
+            loose_report.write_text(delivered.with_name(f"{stem}-verification.json").read_text(
+                encoding="utf-8"), encoding="utf-8")
+            ran = subprocess.run([sys.executable, str(SCAFFOLD), "--recheck", "--from-plan",
+                                  str(outside), "--report", str(loose_report)],
+                                 capture_output=True, text=True)
+            follow = printed_command(ran.stderr, "check_plan_consistency.py")
+            check("outside a workspace the scaffold prints a check that runs as printed",
+                  ran.returncode == 0 and follow is not None and Path(follow[0]).is_absolute()
+                  and Path(follow[1]).exists(), ran.stderr[-600:])
+            # A working file with no receipt, pointed at a "delivered copy" that has none either.
+            bare = tmp / "bare.json"
+            bare.write_text(json.dumps(base_plan(), ensure_ascii=False), encoding="utf-8")
+            unreceipted = tmp / "working-no-receipt.json"
+            unreceipted.write_text(json.dumps(base_plan(), ensure_ascii=False), encoding="utf-8")
+            no_receipt = subprocess.run([sys.executable, str(SCAFFOLD), "--recheck", "--from-plan",
+                                         str(unreceipted), "--report", str(report_path),
+                                         "--receipt-from", str(bare)], capture_output=True, text=True)
+            check("--receipt-from a plan with no receipt says so and prints a fresh start",
+                  no_receipt.returncode == 2 and "--receipt-from <" not in no_receipt.stderr
+                  and printed_command(no_receipt.stderr, "new_verification_report.py") is not None,
+                  no_receipt.stderr[-600:])
+            locked = tmp / "locked.json"
+            locked.write_text(loose_report.read_text(encoding="utf-8"), encoding="utf-8")
+            locked.chmod(0o444)
+            unwritable = subprocess.run([sys.executable, str(SCAFFOLD), "--recheck", "--from-plan",
+                                         str(outside), "--report", str(locked)],
+                                        capture_output=True, text=True)
+            locked.chmod(0o644)
+            check("a report it cannot write is an error, not a traceback",
+                  unwritable.returncode == 2 and "Traceback" not in unwritable.stderr,
+                  unwritable.stderr[-500:])
+            projects = tmp / "projects" / "plans"
+            projects.mkdir(parents=True)
+            copied = projects / delivered.name
+            copied.write_text(delivered.read_text(encoding="utf-8"), encoding="utf-8")
+            copied_report = projects / f"{stem}-verification.json"
+            copied_report.write_text(delivered.with_name(f"{stem}-verification.json").read_text(
+                encoding="utf-8"), encoding="utf-8")
+            gate = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_plan_consistency.py"),
+                                   str(copied), "--verification", str(copied_report)],
+                                  capture_output=True, text=True)
+            check("a folder named plans without a workspace around it gets no save printed",
+                  printed_command(gate.stderr, "save_trip_deliverables.py") is None,
+                  gate.stderr[-500:])
+
+    # 20. A working copy carrying the receipt of an older verification must be compared against
+    #     the receipt bound to the report in use, not skip the comparison because its own receipt
+    #     binds a different report date.
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        workspace = tmp / "ws"
+        working = base_plan()
+        stem = f"{working['trip']['start_date']}-trip"
+        source = tmp / f"{stem}.json"
+        source.write_text(json.dumps(working, ensure_ascii=False), encoding="utf-8")
+        older, newer = full_verification(), full_verification()
+        older["plan"] = newer["plan"] = source.name
+        newer["checked_at"] = "2026-08-04"
+        older_path, newer_path = tmp / "older.json", tmp / "newer.json"
+        older_path.write_text(json.dumps(older, ensure_ascii=False), encoding="utf-8")
+        newer_path.write_text(json.dumps(newer, ensure_ascii=False), encoding="utf-8")
+        first = save(source, workspace, "--verification", str(older_path))
+        delivered = workspace / "plans" / f"{stem}.json"
+        if first.returncode == 0:
+            stale_copy = json.loads(delivered.read_text(encoding="utf-8"))   # receipt of `older`
+            second = save(source, workspace, "--overwrite", "--verification", str(newer_path))
+            check("a fresh full report re-verifies the delivered plan", second.returncode == 0,
+                  second.stderr[-600:])
+            stale_copy["days"][0]["activities"][0]["time"] = "12:10"
+            stale_path = tmp / f"{stem}-old-copy.json"
+            stale_path.write_text(json.dumps(stale_copy, ensure_ascii=False), encoding="utf-8")
+            third = save(stale_path, workspace, "--slug", "trip", "--overwrite", "--verification",
+                         str(newer_path))
+            check("an old working copy's own stale receipt does not excuse its edit",
+                  third.returncode != 0 and f"days[{day0}]" in third.stderr,
+                  f"exit {third.returncode}: {(third.stdout + third.stderr)[-600:]}")
 
     return report_failures()
 

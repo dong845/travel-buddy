@@ -132,7 +132,10 @@ section that depends on them — each day, each booking option, the budget and t
 recheck of each of those sections, not of `trip` alone: a table, a family ticket and a car are all
 bought for a number of people, and a new allergy re-opens every meal. To start over instead,
 `python scripts/replan_trip.py <plan.json> --travellers N --out <new.json>` records the new party,
-flags what moves with it, and clears the verification.
+flags what moves with it, and clears the verification. Saved over its delivered copy with
+`--overwrite` alone, a replanned plan is compared against that copy's report, so every moved part
+owes a recheck; after a date shift that is nearly every part, and a fresh full verification is
+usually the shorter route.
 
 Keep what is still valid. A replan that rebuilds everything is not a replan, and it throws away
 research that was correct — the script prints a `RETAINED` block naming what it deliberately left

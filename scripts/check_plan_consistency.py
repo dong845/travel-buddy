@@ -723,15 +723,21 @@ def activity_on_foot_minutes(day: dict) -> int:
 #
 # The English and the rest were added after a probe on 2026-09-24 of 46 mode strings a plan outside
 # that workspace writes: 34 named no class, so the check was blind to London's Tube, Singapore's
-# MRT, a vaporetto or a hike. System names (Tube, MRT, RER, ...) are here; operator brands are not,
-# because a brand names a company, and an unclassified leg is merely unjudged.
+# MRT, a vaporetto or a hike. System names (Tube, MRT, RER, ...) and the ride-hail apps that name one
+# mode (Uber, Grab, 滴滴) are here; train and bus operator brands are not, because a brand names a
+# company, and an unclassified leg is merely unjudged. Traditional characters are read too: the
+# intake reads zh-TW and Cantonese as Chinese, so those plans reach this check.
 _MODE_WORDS = {
-    "air": (r"航班", r"飞机", r"\bflights?\b", r"\bplanes?\b"),
-    "ferry": (r"渡轮", r"轮渡", r"渡船", r"水上", r"游船", r"船", r"快艇", r"\bferr(?:y|ies)\b",
+    "air": (r"航班", r"飞机", r"飛機", r"\bflights?\b", r"\bplanes?\b"),
+    "ferry": (r"渡轮", r"轮渡", r"渡輪", r"輪渡", r"渡船", r"水上", r"游船", r"遊船", r"船", r"快艇",
+              r"\bferr(?:y|ies)\b",
               r"boats?\b", r"\bwater ?(?:bus|taxi)(?:es|s)?\b", r"\bvaporett[oi]\b",
               r"\bcatamarans?\b", r"\bhydrofoils?\b"),
     "rail": (r"地铁", r"轻轨", r"电车", r"有轨", r"火车", r"高铁", r"动车", r"铁路", r"城铁", r"单轨",
-             r"轨道", r"新干线", r"列车", r"磁悬浮", r"捷运", r"港铁", r"\bmetro\b", r"\bsubway\b",
+             r"轨道", r"新干线", r"列车", r"磁悬浮", r"捷运", r"港铁",
+             # the same in Traditional characters, which the intake reads as Chinese too
+             r"捷運", r"地鐵", r"輕軌", r"電車", r"火車", r"高鐵", r"動車", r"鐵路", r"城鐵", r"單軌",
+             r"軌道", r"新幹線", r"列車", r"磁浮", r"港鐵", r"\bmetro\b", r"\bsubway\b",
              r"\bunderground\b", r"\btube\b", r"\boverground\b", r"\bdlr\b", r"\b[ml]rt\b",
              r"\bmtr\b", r"\bskytrain\b", r"\brer\b", r"\bmonorails?\b", r"\btrams?\b",
              r"\btrains?\b", r"\brail\b", r"\b[su]-bahn\b", r"\bice\b", r"\btgv\b",
@@ -739,10 +745,12 @@ _MODE_WORDS = {
              r"\b(?:sleeper|dining|couchette|rail) ?cars?\b"),
     # "shuttle" is not here: an airport shuttle bus says "bus", and "Le Shuttle" is the car train
     # under the Channel -- read as a bus, a self-drive trip's crossing was told to stop driving.
-    "bus": (r"公交", r"巴士", r"大巴", r"班车", r"\bbus(?:es)?\b", r"\bminibus(?:es)?\b",
+    "bus": (r"公交", r"巴士", r"大巴", r"班车", r"班車", r"公車", r"客運", r"\bbus(?:es)?\b",
+            r"\bminibus(?:es)?\b",
             r"\btrolley ?bus(?:es)?\b", r"\bcoach(?:es)?\b"),
     "car": (r"网约车", r"出租", r"打车", r"驾车", r"自驾", r"开车", r"租车", r"包车", r"滴滴", r"专车",
-            r"拼车", r"\btaxi\b", r"\b(?:mini)?cabs?\b", r"\buber\b", r"\blyft\b", r"\bbolt\b",
+            r"拼车", r"網約車", r"計程車", r"的士", r"駕車", r"自駕", r"開車", r"租車", r"包車", r"專車",
+            r"\btaxi\b", r"\b(?:mini)?cabs?\b", r"\buber\b", r"\blyft\b", r"\bbolt\b",
             r"\bgrab\b", r"\bdidi\b", r"\bride[- ]?(?:hail|share)(?:ing)?\b", r"\bcar\b",
             r"\bdriv(?:e|ing)\b"),
     "walk": (r"步行", r"徒步", r"散步", r"漫步", r"\bwalk(?:ing)?\b", r"\bon foot\b",
@@ -750,11 +758,12 @@ _MODE_WORDS = {
     "transit": (r"公共交通", r"\bpublic transport\b", r"\btransit\b"),
     # An aerial lift names no map mode -- some cities route one as transit, most do not -- so it is
     # classified only to be left alone, and to stop a self-drive trip reading it as a road leg.
-    "lift": (r"缆车", r"索道", r"\bgondolas?\b", r"\bropeways?\b", r"\bcable ?cars?\b",
+    "lift": (r"缆车", r"纜車", r"索道", r"\bgondolas?\b", r"\bropeways?\b", r"\bcable ?cars?\b",
              r"\bchair ?lifts?\b", r"\baerial tram(?:way)?s?\b"),
     # The same for anything pedalled or scooted: no map button this skill writes is judged for it,
     # and a self-drive trip must not read it as a road leg.
-    "bike": (r"自行车", r"单车", r"骑行", r"电动车", r"\bbikes?\b", r"\bbicycles?\b",
+    "bike": (r"自行车", r"单车", r"骑行", r"电动车", r"單車", r"腳踏車", r"騎行", r"電動車",
+             r"\bbikes?\b", r"\bbicycles?\b",
              r"\bcycl(?:e|es|ing)\b", r"\be-?scooters?\b"),
 }
 # "car" inside these names another vehicle: a cable car, a street car, a sleeper car, a water taxi.
@@ -764,7 +773,9 @@ _NOT_A_CAR = re.compile(r"\b(?:(?:cable|street|sleeper|dining|couchette|rail|tra
                         r"|water[ -]?taxis?)\b")
 # 动车 is a bullet train, and it is also the tail of 电动车 (an e-bike) and 机动车 (any motor
 # vehicle): removed before the rail patterns are tried, so a scooter leg is not told to take transit.
-_NOT_A_TRAIN = re.compile(r"电动车|机动车")
+_NOT_A_TRAIN = re.compile(r"电动车|机动车|電動車|機動車")
+# 单车 is a bike, and also the head of 单车道, a single-lane road -- a drive, not a ride.
+_NOT_A_BIKE = re.compile(r"单车道|單車道")
 # Average speeds no leg of that kind reaches door to door, so a figure above one is a duration or a
 # distance borrowed from another leg. Deliberately generous: a rule tight enough to argue with is a
 # rule people learn to route around.
@@ -775,7 +786,8 @@ def _mode_class(mode: str) -> str | None:
     """walk | car | bus | rail | ferry | air | transit | lift | bike, "mixed" for more than one,
     None for none."""
     text = str(mode or "").casefold()
-    stripped = {"car": _NOT_A_CAR.sub(" ", text), "rail": _NOT_A_TRAIN.sub(" ", text)}
+    stripped = {"car": _NOT_A_CAR.sub(" ", text), "rail": _NOT_A_TRAIN.sub(" ", text),
+                "bike": _NOT_A_BIKE.sub(" ", text)}
     found = {cls for cls, patterns in _MODE_WORDS.items()
              if any(re.search(pattern, stripped.get(cls, text)) for pattern in patterns)}
     if "ferry" in found:
@@ -2431,7 +2443,8 @@ def _walk_strings(node: object, path: str = "") -> list[tuple[str, str]]:
 
 def check_verification(report: dict, errors: list[str], notes: list[str],
                        plan: dict | None = None, plan_path: str | None = None,
-                       report_path: str | None = None, receipt_from: str | None = None) -> None:
+                       report_path: str | None = None, receipt_from: str | None = None,
+                       also_binds: tuple[str, ...] = ()) -> None:
     """The report is written by the same run it vouches for, so treat it as an interested
     witness. These checks make the cheap forgeries fail; see the limitation note below for the
     one that cannot be automated."""
@@ -2486,14 +2499,22 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
                 f"checked_at records when the facts were confirmed, and a reader judges "
                 f"staleness by it.")
 
-    # Bind the report to the plan, so one report cannot silently certify every trip.
+    # Bind the report to the plan, so one report cannot silently certify every trip. Besides its
+    # own name, a report binds the delivered copy a save names for it (also_binds) and the plan it
+    # sits beside as that plan's recorded report: the save puts it there, and a report written for
+    # `plan.json` and delivered beside <start>-<slug>.json refused to check or save that copy.
     if plan_path:
         claimed = str(report.get("plan") or "")
+        names = {Path(str(plan_path)).name} | {Path(str(name)).name for name in also_binds if name}
+        own = _obj(plan).get("verification_report") if plan else None
+        beside = bool(report_path and str(plan_path) != "-" and isinstance(own, str) and own.strip()
+                      and Path(str(report_path)).expanduser().resolve()
+                      == Path(str(plan_path)).expanduser().resolve().with_name(Path(own).name))
         if not claimed:
             errors.append(
                 "verification report has no 'plan' field naming what it verified. Without it the "
                 "same report certifies any plan it is handed.")
-        elif Path(claimed).name != Path(plan_path).name:
+        elif Path(claimed).name not in names and not beside:
             errors.append(
                 f"verification report says it verified '{claimed}' but was supplied for "
                 f"'{Path(plan_path).name}'.")
@@ -2780,6 +2801,7 @@ def _prefill_pattern(form: str, *, date: bool = False) -> str:
 
 
 _ADULT_KEY = re.compile(r"adult", re.I)
+_AGE_LIST_KEYS = {"childrenv2"}
 _CHILD_KEY = re.compile(r"child|kid|infant|youth", re.I)
 
 
@@ -2812,19 +2834,22 @@ def _party_sizes_in_url(url: str) -> set[int]:
     # Within one family, count keys add up (children=1&infants=1 is two people) while an age list
     # restates the children the count already gave: Agoda writes children=2&childages=7,10, and
     # adding both read a family of four as six. The family's children are the larger of the two.
+    # Age lists kept per room (childages1, childages2) are different children, so they add up; and
+    # Skyscanner's childrenv2 is an age list even when it holds one age.
     counted: dict[str, int] = {}
     aged: dict[str, int] = {}
     for key in child_keys:
         family = key[:_CHILD_KEY.search(key).start()].casefold()
         values = query[key]
         entries = 0
+        ages = "age" in key.casefold() or key.casefold() in _AGE_LIST_KEYS
         for value in values:
-            if value.isdigit() and len(values) == 1 and "age" not in key.casefold():
+            if value.isdigit() and len(values) == 1 and not ages:
                 entries += int(value)
             else:
                 entries += len([part for part in re.split(r"[|,;]", value) if part.strip()])
-        if "age" in key.casefold():
-            aged[family] = max(aged.get(family, 0), entries)
+        if ages:
+            aged[family] = aged.get(family, 0) + entries
         else:
             counted[family] = counted.get(family, 0) + entries
     for family in set(counted) | set(aged):

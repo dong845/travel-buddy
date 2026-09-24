@@ -953,7 +953,10 @@ def check_language_module(check) -> None:
                             ("en_US", "en"), ("en-AU", "en"), ("English (UK)", "en"),
                             ("Simplified Chinese", "zh"), ("zh-TW", "zh"), ("zh_Hant_HK", "zh"),
                             ("繁體中文", "zh"), ("普通话", "zh"), ("Mandarin", "zh"),
-                            ("English and Chinese", None), ("日本語", None), ("Deutsch", None)]:
+                            ("English and Chinese", None), ("日本語", None), ("Deutsch", None),
+                            # bilingual in one word: 英文 inside 中英文 used to read as English
+                            ("中英文", None), ("中英文均可", None), ("中英双语", None),
+                            ("English/中文", None)]:
         check(f"normalize_language({value!r}) is {expected!r}", lang.normalize_language(value) == expected,
               repr(lang.normalize_language(value)))
     english = {"identity_and_language": {"preferred_response_language": "English"}}

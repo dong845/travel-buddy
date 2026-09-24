@@ -35,6 +35,7 @@ _ALIASES = {
 
 
 _TAG = re.compile(r"^(en|zh)(?:[-_][a-z0-9]+)*$")
+_BILINGUAL = re.compile(r"中英|英中|双语|雙語|bilingual")
 _NAMES = {
     "en": ("english", "英文", "英语", "英語"),
     "zh": ("chinese", "mandarin", "cantonese", "中文", "汉语", "漢語", "华语", "華語", "普通话",
@@ -54,6 +55,9 @@ def normalize_language(value: object) -> str | None:
         return _ALIASES[text]
     if match := _TAG.match(text):
         return match.group(1)
+    # Bilingual in one word: 英文 sits inside 中英文, which read as English.
+    if _BILINGUAL.search(text):
+        return None
     named = [code for code, names in _NAMES.items() if any(name in text for name in names)]
     return named[0] if len(named) == 1 else None
 

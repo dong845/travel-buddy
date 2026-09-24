@@ -165,6 +165,15 @@ def main() -> int:
              "homes?checkin=2026-09-28&checkout=2026-09-29&adults=2&children=1&infants=1")):
         found = [e for e in findings(with_hotel_search(url), "'guests'") if "Hotel A" in e]
         check(f"{provider}: the party of four is read as four", not found, found)
+    # From the fresh review: Skyscanner's childrenv2 is a list of ages even when it holds one
+    # (childrenv2=7 is one child of seven, not seven children), and age lists kept per room
+    # (childages1 / childages2) are different children, so they add up.
+    for url, party in (("https://www.skyscanner.net/transport/flights/ams/edi/261017/?adultsv2=2"
+                        "&childrenv2=7", 3),
+                       ("https://hotel.example/search?adults1=2&adults2=2&childages1=7"
+                        "&childages2=10", 6)):
+        check(f"{url[:48]}... reads a party of {party}", party in cpc._party_sizes_in_url(url),
+              cpc._party_sizes_in_url(url))
 
     # ISO date-times are one field.
     url = ("https://www.thetrainline.com/book/results?origin=Montreux&destination=Bern"

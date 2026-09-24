@@ -75,20 +75,43 @@ def workspace_plan_path(plan: dict, args: argparse.Namespace) -> Path:
     return Path(args.workspace).expanduser() / "plans" / f"{date_part}-{slug}.json"
 
 
-def delivered_report(plan: dict, args: argparse.Namespace) -> Path | None:
-    """The report beside the verified copy this save would replace, when that copy has one."""
-    path = workspace_plan_path(plan, args)
+def _read_json(path: Path) -> object:
     try:
-        delivered = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
     except (OSError, ValueError):
         return None
+
+
+def bound_receipt(receipt: object, report: object) -> bool:
+    """Whether a receipt was stamped by a save with THIS report (same checked_at)."""
+    return (isinstance(receipt, dict) and isinstance(report, dict)
+            and str(receipt.get("report_checked_at") or "") == str(report.get("checked_at") or ""))
+
+
+def delivered_report(plan: dict, args: argparse.Namespace) -> Path | None:
+    """The report beside the verified copy this save would replace -- only when that copy's receipt
+    is bound to it. A copy delivered before receipts existed records nothing about what its report
+    covered, and adopting the report re-certified any edit to it: reproduced 2026-09-24 on a copy
+    of the one real verified plan, which the parent commit had refused."""
+    path = workspace_plan_path(plan, args)
+    delivered = _read_json(path)
     if not isinstance(delivered, dict) or delivered.get("verification_status") != "verified":
         return None
     name = delivered.get("verification_report")
     if not isinstance(name, str) or not name.strip():
         return None
     report = path.with_name(Path(name).name)
-    return report if report.exists() else None
+    return report if bound_receipt(delivered.get("verification_receipt"), _read_json(report)) else None
+
+
+def delivered_before_receipts(plan: dict, args: argparse.Namespace) -> Path | None:
+    """The verified copy this save would replace, when nothing binds its report to its content."""
+    path = workspace_plan_path(plan, args)
+    delivered = _read_json(path)
+    if (isinstance(delivered, dict) and delivered.get("verification_status") == "verified"
+            and delivered_report(plan, args) is None):
+        return path
+    return None
 
 
 def main() -> int:
@@ -221,21 +244,22 @@ def main() -> int:
         # read as a plan from before receipts existed, and re-stamped the edit as verified -- an
         # edit after verification passing on the most natural in-session path. A save that
         # replaces a delivered copy compares against that copy's receipt when it brings none.
+        # The receipt that counts is the one bound to THIS report. A working copy may carry none,
+        # or one from an older verification -- which bound nothing here and so excused every edit.
         receipt_from = None
-        if args.overwrite and not isinstance(plan.get("verification_receipt"), dict):
-            delivered_path = workspace_plan_path(plan, args)
-            try:
-                delivered = (json.loads(delivered_path.read_text(encoding="utf-8"))
-                             if delivered_path.exists() else {})
-            except (OSError, ValueError):
-                delivered = {}
-            if isinstance(delivered, dict) and isinstance(delivered.get("verification_receipt"), dict):
+        delivered_path = workspace_plan_path(plan, args)
+        if args.overwrite and not bound_receipt(plan.get("verification_receipt"), report):
+            delivered = _read_json(delivered_path)
+            if isinstance(delivered, dict) and bound_receipt(delivered.get("verification_receipt"),
+                                                             report):
                 plan["verification_receipt"] = delivered["verification_receipt"]
-                receipt_from = str(delivered_path)
+                if args.plan == "-" or Path(args.plan).expanduser().resolve() != delivered_path.resolve():
+                    receipt_from = str(delivered_path)
                 notes.append(f"compared against the verification receipt of {delivered_path.name}, "
                              f"the verified copy this save replaces.")
         check_verification(report, consistency_errors, notes, plan=plan, plan_path=args.plan,
-                           report_path=args.verification, receipt_from=receipt_from)
+                           report_path=args.verification, receipt_from=receipt_from,
+                           also_binds=(delivered_path.name,))
         plan["verification_status"] = "verified"
         # The report is EVIDENCE, and evidence that lives outside the workspace is a claim with
         # nothing behind it. Measured on the author's own workspace: of six plans claiming
@@ -261,7 +285,17 @@ def main() -> int:
         )
         # The one case where a report already exists: this save would replace a verified copy.
         replaced = delivered_report(plan, args)
-        if replaced is not None and args.plan != "-":
+        before_receipts = delivered_before_receipts(plan, args)
+        if before_receipts is not None and args.plan != "-":
+            fresh = Path(args.plan).expanduser().resolve()
+            print(f"{before_receipts.name} was delivered verified before section receipts existed, "
+                  f"so nothing records which content its report covered, and an edit to it cannot "
+                  f"be rechecked part by part. Verify it afresh -- the scaffold starts the report "
+                  f"-- or save with --unverified so the page says so:", file=sys.stderr)
+            print("NEXT: " + command_line(
+                "new_verification_report.py", "--from-plan", fresh, "--out",
+                fresh.with_name(fresh.stem + "-new-verification.json")), file=sys.stderr)
+        elif replaced is not None and args.plan != "-":
             target = workspace_plan_path(plan, args)
             print(f"This plan would replace {target.name}, a verified copy whose report is "
                   f"{replaced.name}. Saving it with --overwrite compares against that report, and "
@@ -448,7 +482,9 @@ def main() -> int:
     report_path = None
     if args.verification:
         report_path = plan_path.with_name(plan_path.stem + "-verification.json")
-        write_json_atomic(report_path, report)
+        # Beside the plan it names: a report scaffolded for `plan.json` and copied here unchanged
+        # no longer matched <start>-<slug>.json, and the delivered copy could not be saved again.
+        write_json_atomic(report_path, {**report, "plan": plan_path.name})
         plan["verification_report"] = report_path.name
         # Rewritten into the plan AFTER the copy exists, and stored as a bare name relative to the
         # plan -- the same shape as imagery_sidecar, so a workspace that moves keeps resolving.

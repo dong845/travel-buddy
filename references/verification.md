@@ -273,7 +273,10 @@ save that replaces a verified copy reads that copy's report, and a delivered cop
 keeps its own name (the slug comes from the file). The refusal prints the scaffold as a whole
 command — this interpreter, absolute paths, `--receipt-from` when you edited a working copy rather
 than the delivered one — and the scaffold prints the save that finishes the loop. Run each as
-printed. Walked literally on 2026-09-24 before this existed, the same three steps sent an assistant
+printed. A report copied beside its delivered plan names that plan, so the delivered copy
+checks and saves against it. A copy delivered before receipts existed records nothing about what
+its report covered: `--overwrite` alone refuses it and prints the scaffold for a fresh report — or
+save it `--unverified` — because re-attaching its old report would re-certify any edit to it. Walked literally on 2026-09-24 before this existed, the same three steps sent an assistant
 to a full re-verification, handed it `<plan.json>` placeholders, and wrote the amended report to
 standard output where nothing read it.
 

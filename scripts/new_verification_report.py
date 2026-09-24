@@ -42,6 +42,7 @@ from check_plan_consistency import (  # noqa: E402
 )
 from verification_sections import (  # noqa: E402
     changed_sections,
+    command_line,
     digest_is_current,
     resave_command,
     section_digests,
@@ -267,19 +268,36 @@ def run_recheck(args: argparse.Namespace) -> int:
         print("ERROR: the plan and the report must both be JSON objects.", file=sys.stderr)
         return 2
     # The receipt lives in the delivered copy; an author editing their own working file has none
-    # in it, and this refused them with "run a full verification" while the save they came from
-    # was comparing against the delivered copy's receipt all along.
-    if args.receipt_from and not isinstance(plan.get("verification_receipt"), dict):
+    # in it -- or one from an older verification -- and this refused them with "run a full
+    # verification" while the save they came from was comparing against the delivered copy's
+    # receipt all along. The receipt that counts is the one bound to this report.
+    def bound(receipt: object) -> bool:
+        return (isinstance(receipt, dict)
+                and str(receipt.get("report_checked_at") or "") == str(report.get("checked_at") or ""))
+
+    plan_file = Path(args.from_plan).expanduser().resolve()
+    fresh_start = "NEXT: " + command_line("new_verification_report.py", "--from-plan", plan_file,
+                                          "--out", plan_file.with_name(plan_file.stem
+                                                                       + "-new-verification.json"))
+    if args.receipt_from and not bound(plan.get("verification_receipt")):
         try:
             delivered = json.loads(Path(args.receipt_from).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             print(f"ERROR: could not read --receipt-from: {exc}", file=sys.stderr)
             return 2
-        if isinstance(delivered, dict) and isinstance(delivered.get("verification_receipt"), dict):
-            plan["verification_receipt"] = delivered["verification_receipt"]
+        if not (isinstance(delivered, dict) and bound(delivered.get("verification_receipt"))):
+            print(f"ERROR: {args.receipt_from} carries no verification receipt for the report "
+                  f"checked on {report.get('checked_at')!r} -- it was delivered before receipts "
+                  f"existed, or by another verification -- so nothing records which parts that "
+                  f"report covered. Verify the plan afresh, or save it with --unverified so the "
+                  f"page says so:", file=sys.stderr)
+            print(fresh_start, file=sys.stderr)
+            return 2
+        plan["verification_receipt"] = delivered["verification_receipt"]
     entries, notes, refusal = recheck_entries(plan, report)
     if refusal:
         print(f"ERROR: {refusal}", file=sys.stderr)
+        print(fresh_start, file=sys.stderr)
         return 2
     amended = dict(report)
     amended["rechecks"] = list(report.get("rechecks") or []) + entries
@@ -291,7 +309,12 @@ def run_recheck(args: argparse.Namespace) -> int:
     if out == "-":
         sys.stdout.write(body)
     else:
-        Path(out).write_text(body, encoding="utf-8")
+        try:
+            Path(out).write_text(body, encoding="utf-8")
+        except OSError as exc:
+            print(f"ERROR: could not write the amended report to {out}: {exc}. Nothing was "
+                  f"changed; name a writable file with --out.", file=sys.stderr)
+            return 2
         print(f"Verification report with rechecks: {out}", file=sys.stderr)
     for note in notes:
         print(f"  {note}", file=sys.stderr)
@@ -302,9 +325,14 @@ def run_recheck(args: argparse.Namespace) -> int:
     if resave:
         print(f"Fill in every TODO in {out} with what you re-opened, then save:", file=sys.stderr)
         print(f"NEXT: {resave}", file=sys.stderr)
+    elif out != "-":
+        # Not in a workspace, so no save can be named; the check that comes before one can be.
+        print(f"Fill in every TODO in {out} with what you re-opened, then check it:", file=sys.stderr)
+        print("NEXT: " + command_line("check_plan_consistency.py", plan_file, "--verification",
+                                      Path(out).expanduser().resolve()), file=sys.stderr)
     else:
         print(f"NEXT: fill them in, then python scripts/check_plan_consistency.py {args.from_plan} "
-              f"--verification {out if out != '-' else '<report.json>'}", file=sys.stderr)
+              f"--verification <report.json>", file=sys.stderr)
     return 0
 
 

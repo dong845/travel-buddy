@@ -4283,18 +4283,23 @@ def render_unlocalized(plan: dict) -> str:
                     ids.index(option_id) if option_id in ids else len(ids))
         return (2, section)
 
+    # A group is one calendar day (two rechecks at 10:00 and 16:30 are one day's work), and the
+    # groups read oldest first.
     recheck_groups: dict[str, list[str]] = {}
     for section in sorted((str(s) for s in rechecked), key=recheck_order):
-        names = recheck_groups.setdefault(stamp(rechecked[section]), [])
+        when = str(rechecked[section] or "")
+        day = when[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", when) else when
+        names = recheck_groups.setdefault(day, [])
         if (label := recheck_part_label(plan, section)) not in names:
             names.append(label)
     trip_language = str((plan.get("trip") or {}).get("language") or "").casefold()
-    separator = ("、" if trip_language.startswith("zh") or "chinese" in trip_language
-                 or "中文" in trip_language else ", ")
+    chinese = trip_language.startswith("zh") or "chinese" in trip_language or "中文" in trip_language
+    separator, group_separator = ("、", "；") if chinese else (", ", "; ")
     rechecked_line = (
         '<p class="meta rechecked-sections"><strong>Re-checked after the main verification: </strong>'
-        + "; ".join(f'<span class="meta">{when}</span> — ' + separator.join(names)
-                    for when, names in recheck_groups.items()) + "</p>") if recheck_groups else ""
+        + group_separator.join(f'<span class="meta">{stamp(day)}</span> — ' + separator.join(names)
+                               for day, names in sorted(recheck_groups.items())) + "</p>"
+    ) if recheck_groups else ""
     regional = plan.get("regional_service_context") if isinstance(plan.get("regional_service_context"), dict) else {}
     platform_note = (
         # selection_basis is REQUIRED by validate_plan and was printed nowhere, so the page said

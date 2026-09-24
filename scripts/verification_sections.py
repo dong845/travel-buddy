@@ -42,13 +42,16 @@ BOOKING_KINDS = ("flights", "ground_transport", "accommodations", "attraction_ti
 # children. No card's own text had changed, so no card's fingerprint had either. Folding these
 # facts into the fingerprint of each section that depends on them moves that section when they
 # change, and the gate then asks for its recheck like any other edit.
-#   traveler_count        -- rooms, fares, seats, tickets and tables are bought for a number of people
+#   traveler_count        -- rooms, fares, seats, tickets and tables are bought for a number of people,
+#                            and the entry answer is about who travels: one more person is one more
+#                            passport to check
 #   traveler_constraints  -- a new allergy or walking limit re-opens every meal, walk and room
 DEPENDS_ON = {
     "days": ("traveler_count", "traveler_constraints"),
     "booking_options": ("traveler_count", "traveler_constraints"),
     "budget": ("traveler_count",),
     "transport_overview": ("traveler_count", "traveler_constraints"),
+    "entry_context": ("traveler_count",),
 }
 # Every digest names the scheme that made it. A receipt stamped before the dependencies existed
 # holds plain digests of each section alone, and is compared the way it was made (see
@@ -116,7 +119,8 @@ def sections(plan: dict) -> dict[str, object]:
 def section_digests(plan: dict) -> dict[str, str]:
     digests = {}
     for section, value in sections(plan).items():
-        context = _depends_on(plan, section)
+        # An empty section depends on nothing: there is nothing in it to have been checked.
+        context = None if _empty(value) else _depends_on(plan, section)
         body = value if context is None else {"section": value, "depends_on": context}
         digests[section] = SCHEME + _digest(body)
     return digests
@@ -130,6 +134,10 @@ def digest_is_current(plan: dict, section: str, digest: object) -> bool:
     digest = digest.strip()
     if digest.startswith(SCHEME):
         return section_digests(plan).get(section) == digest
+    # A plain digest saw the section alone, so it cannot vouch for a section that depends on the
+    # party or the constraints: those may have changed since, and nothing it recorded would show.
+    if _root(section) in DEPENDS_ON:
+        return False
     value = sections(plan).get(section)
     return value is not None and _digest(value) == digest
 
@@ -219,11 +227,17 @@ def command_line(script: str, *args: object) -> str:
 
 
 def delivered_workspace(path: object) -> Path | None:
-    """The workspace a delivered plan lives in -- <workspace>/plans/<start>-<slug>.json -- or None."""
+    """The workspace a delivered plan lives in -- <workspace>/plans/<start>-<slug>.json -- or None.
+
+    A delivered plan's workspace also holds its page in html/: any other folder that happens to be
+    called "plans" is not one, and a save printed for it would deliver a second copy there.
+    """
     if not path or str(path) == "-":
         return None
     resolved = Path(str(path)).expanduser().resolve()
-    return resolved.parent.parent if resolved.parent.name == "plans" else None
+    if resolved.parent.name != "plans" or not (resolved.parent.parent / "html").is_dir():
+        return None
+    return resolved.parent.parent
 
 
 def delivered_slug(path: object) -> str | None:
@@ -254,8 +268,10 @@ def resave_command(plan_path: object, report_path: object, receipt_from: object 
     if workspace is None:
         return ""
     args: list[object] = [plan, "--workspace", workspace]
+    # Always named when known: a working copy inside plans/ under an undated name infers no slug,
+    # and without one the save wrote the edit as a second plan beside the verified one.
     slug = delivered_slug(delivered)
-    if slug and delivered_workspace(plan) is None:
+    if slug:
         args += ["--slug", slug]
     args += ["--overwrite", "--verification", Path(str(report_path)).expanduser().resolve()]
     return command_line("save_trip_deliverables.py", *args)
