@@ -96,7 +96,8 @@ def stop_coordinates(route: dict) -> list[tuple[str, float, float]]:
             for i, (lat, lon) in sorted(points.items())]
 
 
-def day_map(route: dict, title: str, caption: str) -> str:
+def day_map(route: dict, title: str, caption: str,
+            span_label: str = "straight-line span") -> str:
     """The day's stops at their true relative positions, in visit order.
 
     The page already lists the stop names in order. What a list cannot show is the shape of the
@@ -160,7 +161,7 @@ def day_map(route: dict, title: str, caption: str) -> str:
         f'role="img" aria-label="{_esc(title)}: {_esc(legend)}" preserveAspectRatio="xMidYMid meet">'
         f'<title>{_esc(title)}</title>'
         f'<path d="{path}" class="pv-route"/>{dots}</svg>'
-        f'<figcaption>{_esc(caption)} · {furthest:.1f} km</figcaption></figure>')
+        f'<figcaption>{_esc(caption)} · {_esc(span_label)} {furthest:.1f} km</figcaption></figure>')
 
 
 def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

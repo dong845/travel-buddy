@@ -677,6 +677,19 @@ def check_routes(plan: dict, errors: list[str], notes: list[str]) -> None:
                 f"day {number}: route.cost_high={_num(route.get('cost_high')):g} but its segments sum to "
                 f"{seg_cost_high:g}.")
 
+    # On a self-drive trip the overview's distance is the whole drive, and it is the first number
+    # a traveller budgeting fuel and time reads. It was only ever used as a map bound, so an overview
+    # saying 334 km over days that add up to 366 passed (2026-09-24). Five percent of slack, because
+    # a stated overview is often rounded.
+    if _self_drive(plan):
+        overall = _num(_obj(plan.get("transport_overview")).get("overall_distance_km"))
+        days_total = sum(_num(_route(_obj(d)).get("distance_km")) for d in _seq(plan.get("days")))
+        if overall > 0 and days_total > 0 and abs(overall - days_total) > 0.05 * days_total:
+            errors.append(
+                f"transport_overview.overall_distance_km is {overall:g} km and the days' routes add "
+                f"up to {days_total:.1f} km. On a self-drive trip the overview is the whole drive; "
+                f"make it the sum, or fix the day that is wrong.")
+
 
 def activity_on_foot_minutes(day: dict) -> int:
     """Minutes on foot *inside* the day's activities, which no segment records.

@@ -384,6 +384,11 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "constraints_card": "过敏卡 —— 到店请出示这段文字：",
             "intake_changed_heading": "表单之后的调整：",
             "rechecked_heading": "主核验之后又复核过：",
+            "rental_restriction_label": "限制说明：",
+            "fig_straight_line": "直线跨度",
+            "overall_route_overview_general": "打开路线总览（每日分段见下方）",
+            "overall_route_overview_general_provider": "在 {provider} 中打开路线总览（每日分段见下方）",
+            "transport_tickets_pointer": "当天的交通票见上方的预订选项。",
             "recheck_part_entry": "入境资格",
             "recheck_part_arrival": "落地第一小时",
             "recheck_part_budget": "预算",
@@ -680,6 +685,11 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     # Added with trip.intake_changes, optional for the same reason as every key around it.
     "intake_changed_heading",
     "rechecked_heading",
+    "rental_restriction_label",
+    "fig_straight_line",
+    "overall_route_overview_general",
+    "overall_route_overview_general_provider",
+    "transport_tickets_pointer",
     "recheck_part_entry",
     "recheck_part_arrival",
     "recheck_part_budget",
@@ -1181,6 +1191,10 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
         "Allergy card — show this to staff: ": labels.get("constraints_card", "Allergy card — show this to staff: "),
         "Changed since your form: ": labels.get("intake_changed_heading", "Changed since your form: "),
         "Re-checked after the main verification: ": labels.get("rechecked_heading", "Re-checked after the main verification: "),
+        "<strong>Restrictions: </strong>": f"<strong>{labels.get('rental_restriction_label', 'Restrictions: ')}</strong>",
+        " · straight-line span ": f" · {labels.get('fig_straight_line', 'straight-line span')} ",
+        ">Open the route overview — daily segments are below<": f">{labels.get('overall_route_overview_general', 'Open the route overview — daily segments are below')}<",
+        "The transport tickets for this day are under Browse options above.": labels.get("transport_tickets_pointer", "The transport tickets for this day are under Browse options above."),
         '<span class="recheck-part">Entry eligibility</span>': f'<span class="recheck-part">{labels.get("recheck_part_entry", "Entry eligibility")}</span>',
         '<span class="recheck-part">First hour on the ground</span>': f'<span class="recheck-part">{labels.get("recheck_part_arrival", "First hour on the ground")}</span>',
         '<span class="recheck-part">Budget</span>': f'<span class="recheck-part">{labels.get("recheck_part_budget", "Budget")}</span>',
@@ -1382,6 +1396,13 @@ def _apply_replacements(page: str, replacements: dict[str, str], labels: dict[st
     page = re.sub(
         r'>Open overall route in ([^<]+)<',
         lambda match: ">" + labels["overall_route_provider"].replace("{provider}", match.group(1)) + "<",
+        page,
+    )
+    page = re.sub(
+        r'>Open the route overview in ([^<]+) — daily segments are below<',
+        lambda match: ">" + labels.get("overall_route_overview_general_provider",
+                                       "Open the route overview in {provider} — daily segments are below"
+                                       ).replace("{provider}", match.group(1)) + "<",
         page,
     )
     page = re.sub(
@@ -2146,6 +2167,12 @@ def option_detail_list(kind: str, item: dict) -> str:
             (
                 f'<li>{esc(item.get("pickup_location"))} → {esc(item.get("dropoff_location"))} · {esc(item.get("pickup_time"))} → {esc(item.get("dropoff_time"))}</li>',
                 f'<li>{esc(item.get("transmission"))} · {esc(item.get("capacity_note"))} · {esc(item.get("insurance_excess"))}</li>',
+                # Required by validate_plan and printed nowhere until 2026-09-24: ferries, other
+                # countries, driver age -- the terms that decide whether the car can go where the
+                # itinerary sends it.
+                (f'<li class="rental-restriction"><strong>Restrictions: </strong>'
+                 f'{esc(item.get("cross_border_or_restriction_note"))}</li>'
+                 if item.get("cross_border_or_restriction_note") else ""),
                 f'<li><strong>Availability: </strong>{esc(item.get("availability_status"))} · <strong>Price status: </strong>{esc(item.get("price_status"))} · <strong>Price checked: </strong>{stamp(item.get("price_checked_at"))}</li>',
             )
         )
@@ -2327,14 +2354,28 @@ def decorate_primary_map_links(page: str, plan: dict) -> str:
         page = page.replace(old, new, 1)
     overview = plan.get("transport_overview") if isinstance(plan.get("transport_overview"), dict) else {}
     overview_scope = overview.get("overall_map_scope")
-    overview_label = ("Open overall route" if overview_scope == "multi_stop"
-                      else "Open the airport transfer route — daily segments are below")
-    old_overview = f'<a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview.get("overall_map_checked_at"))}" href="{attr(overview.get("overall_route_map_url"))}" target="_blank" rel="noopener noreferrer">{overview_label}</a>'
     provider = as_text(overview.get("overall_map_provider"), "Map provider")
-    overview_provider_label = (f"Open overall route in {provider}" if overview_scope == "multi_stop"
-                               else f"Open the airport transfer route in {provider} — daily segments are below")
+    overview_label, overview_provider_label = overview_link_labels(plan, provider)
+    old_overview = f'<a class="map-link" data-map-scope="{attr(overview_scope)}" data-verified-at="{attr(overview.get("overall_map_checked_at"))}" href="{attr(overview.get("overall_route_map_url"))}" target="_blank" rel="noopener noreferrer">{overview_label}</a>'
     new_overview = map_link(provider, overview.get("overall_map_checked_at"), overview.get("overall_route_map_url"), overview_provider_label, link_kind=as_text(overview.get("map_link_kind"), "directions"), map_scope=as_text(overview_scope)) + alternative_map_links(overview.get("overall_alternative_map_links"))
     return page.replace(old_overview, new_overview, 1)
+
+
+def overview_link_labels(plan: dict, provider: str) -> tuple[str, str]:
+    """The overview button's text: plain, and with its provider.
+
+    It used to read "Open the airport transfer route" whenever the overview was not a multi-stop
+    route -- on a rail trip, on a self-drive trip, on any trip with no airport at all.
+    """
+    overview = plan.get("transport_overview") if isinstance(plan.get("transport_overview"), dict) else {}
+    trip = plan.get("trip") if isinstance(plan.get("trip"), dict) else {}
+    if overview.get("overall_map_scope") == "multi_stop":
+        return "Open overall route", f"Open overall route in {provider}"
+    if str(trip.get("arrival_transport_mode") or "") == "flight":
+        return ("Open the airport transfer route — daily segments are below",
+                f"Open the airport transfer route in {provider} — daily segments are below")
+    return ("Open the route overview — daily segments are below",
+            f"Open the route overview in {provider} — daily segments are below")
 
 
 def route_segment_links(route: dict, currency: object) -> str:
@@ -3663,6 +3704,18 @@ def render_unlocalized(plan: dict) -> str:
     _stays_by_id = {str(item.get("id")): item
                     for item in (plan.get("booking_options") or {}).get("accommodations", [])
                     if isinstance(item, dict)}
+    transport_dates: set[str] = set()
+    for kind in ("flights", "ground_transport"):
+        for item in as_list((plan.get("booking_options") or {}).get(kind)):
+            if not isinstance(item, dict):
+                continue
+            for key in ("outbound_date", "return_date"):
+                if isinstance(item.get(key), str) and item[key][:10]:
+                    transport_dates.add(item[key][:10])
+            for leg in ("outbound_itinerary", "return_itinerary"):
+                departs = str((item.get(leg) or {}).get("departure_local") or "") if isinstance(item.get(leg), dict) else ""
+                if re.match(r"^\d{4}-\d{2}-\d{2}", departs):
+                    transport_dates.add(departs[:10])
     for day in plan["days"]:
         route = day["route"]
         stay = accommodations.get(day.get("accommodation_option_id"))
@@ -3699,9 +3752,13 @@ def render_unlocalized(plan: dict) -> str:
         # member of that union: an on-site fee or a city card has no bookable option to link,
         # so the day list stays empty while the activity above it now prints a price, and the
         # old wording would have told the traveller no ticket was needed on the same screen.
-        ticket_panel = "".join(day_tickets) or (
-            "" if day_has_ticket_note else '<p>No verified ticket is required for the listed activities.</p>'
-        )
+        # ... and a fourth: the day's train or flight. Its ticket lives in the booking panel, not
+        # in attraction_tickets, so a rail day used to print "no ticket required" under a train.
+        if str(day.get("date") or "")[:10] in transport_dates:
+            empty_tickets = '<p class="transport-ticket-pointer">The transport tickets for this day are under Browse options above.</p>'
+        else:
+            empty_tickets = '<p>No verified ticket is required for the listed activities.</p>'
+        ticket_panel = "".join(day_tickets) or ("" if day_has_ticket_note else empty_tickets)
         # The day's ground mode is the same closed enum as transport_preference.mode and it opens
         # every day's route line, so it is emitted as a marked cell instead of being escaped into
         # the joined sentence. Before this it went through esc() as a bare token and every Chinese
@@ -3715,7 +3772,13 @@ def render_unlocalized(plan: dict) -> str:
         mode = route.get("mode")
         mode_cell = (enum_cell("route-mode", "route-mode", mode, "")
                      if isinstance(mode, str) and mode.strip() else esc(None))
-        transport_bits = [minutes(route.get("duration_minutes")), money(route.get("cost_low"), route.get("cost_high"), route.get("currency", trip["currency"])), as_text(route.get("fare_basis_or_fuel_toll_parking_note"), "")]
+        # A driving day's length is the number the day is planned around; validate_plan requires it
+        # on every self-drive route and the page never printed it.
+        drive_km = route.get("distance_km")
+        drive_bit = (f"{float(drive_km):g} km" if mode == "self-drive"
+                     and isinstance(drive_km, (int, float)) and not isinstance(drive_km, bool)
+                     and drive_km > 0 else "")
+        transport_bits = [minutes(route.get("duration_minutes")), drive_bit, money(route.get("cost_low"), route.get("cost_high"), route.get("currency", trip["currency"])), as_text(route.get("fare_basis_or_fuel_toll_parking_note"), "")]
         transport_line = " · ".join(bit for bit in transport_bits if bit)
         transport_html = mode_cell + (f" · {esc(transport_line)}" if transport_line else "")
         segment_links = route_segment_links(route, trip["currency"])
@@ -3740,7 +3803,8 @@ def render_unlocalized(plan: dict) -> str:
         # empty. Both return "" when their data is missing, so a thin day loses a figure rather
         # than gaining an invented one.
         day_map_caption = "Relative positions, in visit order. Use the map button to navigate."
-        day_map_figure = plan_visuals.day_map(route, day_map_caption, day_map_caption)
+        day_map_figure = plan_visuals.day_map(route, day_map_caption, day_map_caption,
+                                              span_label="straight-line span")
         timeline_entries = [("act", activity.get("time"), activity.get("name"))
                             for activity in day.get("activities") or []
                             if isinstance(activity, dict)]
@@ -3891,8 +3955,7 @@ def render_unlocalized(plan: dict) -> str:
     _ov_parts.append(money(overview.get("cost_low"), overview.get("cost_high"), trip["currency"]))
     overview_headline = " · ".join(part for part in _ov_parts if part)
 
-    overview_map_label = ("Open overall route" if overview_scope == "multi_stop"
-                          else "Open the airport transfer route — daily segments are below")
+    overview_map_label = overview_link_labels(plan, "")[0]
     # A multi-day plan is tens of thousands of pixels tall. Without in-page jumps the
     # traveller can only reach day 4 by scrolling past days 1-3 every time they look.
     nav_days = "".join(
