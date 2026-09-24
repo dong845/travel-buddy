@@ -110,9 +110,6 @@ ENTRY_STATUSES = (
     "required_to_apply",
 )
 ALLERGY_SEVERITIES = ("none", "preference", "intolerance", "severe")
-# check_plan_consistency.INTAKE_CONSTRAINT_FIELDS names the fields a plan may change after the form
-# only by saying so in trip.intake_changes; these are the words the page uses for each. The first
-# two reuse the constraint panel's own labels so a translated page says them the same way twice.
 # The parts of a plan a recheck can name that are neither a day nor a booking option. Everything
 # else a traveller would recognise by its own heading; these four cover the blocks a verification
 # actually reads, and the rest are grouped rather than printed by their JSON key names.
@@ -120,8 +117,12 @@ RECHECK_PART_LABELS = {
     "entry_context": "Entry eligibility",
     "arrival_essentials": "First hour on the ground",
     "budget": "Budget",
+    "transport_overview": "Transport overview",
 }
 RECHECK_PART_OTHER = "Other trip details"
+# check_plan_consistency.INTAKE_CONSTRAINT_FIELDS names the fields a plan may change after the form
+# only by saying so in trip.intake_changes; these are the words the page uses for each. The first
+# two reuse the constraint panel's own labels so a translated page says them the same way twice.
 INTAKE_CHANGE_LABELS = {
     "dietary_or_religious_needs": "Dietary needs",
     "mobility_notes": "Mobility",
@@ -392,6 +393,7 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "recheck_part_entry": "入境资格",
             "recheck_part_arrival": "落地第一小时",
             "recheck_part_budget": "预算",
+            "recheck_part_transport": "交通总览",
             "recheck_part_other": "其他行程信息",
             "intake_field_party": "人数：",
             "intake_field_cap": "人均预算上限：",
@@ -693,6 +695,7 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "recheck_part_entry",
     "recheck_part_arrival",
     "recheck_part_budget",
+    "recheck_part_transport",
     "recheck_part_other",
     "intake_field_party",
     "intake_field_cap",
@@ -1240,6 +1243,7 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
         '<span class="recheck-part">Entry eligibility</span>': f'<span class="recheck-part">{labels.get("recheck_part_entry", "Entry eligibility")}</span>',
         '<span class="recheck-part">First hour on the ground</span>': f'<span class="recheck-part">{labels.get("recheck_part_arrival", "First hour on the ground")}</span>',
         '<span class="recheck-part">Budget</span>': f'<span class="recheck-part">{labels.get("recheck_part_budget", "Budget")}</span>',
+        '<span class="recheck-part">Transport overview</span>': f'<span class="recheck-part">{labels.get("recheck_part_transport", "Transport overview")}</span>',
         '<span class="recheck-part">Other trip details</span>': f'<span class="recheck-part">{labels.get("recheck_part_other", "Other trip details")}</span>',
         "Party size: ": labels.get("intake_field_party", "Party size: "),
         "Budget cap per person: ": labels.get("intake_field_cap", "Budget cap per person: "),
@@ -4261,11 +4265,36 @@ def render_unlocalized(plan: dict) -> str:
     rechecked = receipt.get("rechecked") if isinstance(receipt.get("rechecked"), dict) else {}
     if plan.get("verification_status") != "verified":
         rechecked = {}
-    recheck_items = [f'{recheck_part_label(plan, str(section))} <span class="meta">{stamp(when)}</span>'
-                     for section, when in rechecked.items()]
+    # Grouped by the date of the recheck and read in the plan's own order -- days, then bookings,
+    # then the rest -- each part named once. A party change rechecks every day and card at once,
+    # and the part-by-part list printed one date sixteen times, called two different blocks "Other
+    # trip details", and put the hotels before the days.
+    booking = plan.get("booking_options") if isinstance(plan.get("booking_options"), dict) else {}
+    kinds = list(booking)
+
+    def recheck_order(section: str) -> tuple:
+        if section.startswith("days["):
+            return (0, section)
+        if section.startswith("booking_options.") and section.endswith("]") and "[" in section:
+            kind, _, option_id = section[len("booking_options."):-1].partition("[")
+            items = booking.get(kind) if isinstance(booking.get(kind), list) else []
+            ids = [str(item.get("id")) for item in items if isinstance(item, dict)]
+            return (1, kinds.index(kind) if kind in kinds else len(kinds),
+                    ids.index(option_id) if option_id in ids else len(ids))
+        return (2, section)
+
+    recheck_groups: dict[str, list[str]] = {}
+    for section in sorted((str(s) for s in rechecked), key=recheck_order):
+        names = recheck_groups.setdefault(stamp(rechecked[section]), [])
+        if (label := recheck_part_label(plan, section)) not in names:
+            names.append(label)
+    trip_language = str((plan.get("trip") or {}).get("language") or "").casefold()
+    separator = ("、" if trip_language.startswith("zh") or "chinese" in trip_language
+                 or "中文" in trip_language else ", ")
     rechecked_line = (
         '<p class="meta rechecked-sections"><strong>Re-checked after the main verification: </strong>'
-        + "; ".join(recheck_items) + "</p>") if recheck_items else ""
+        + "; ".join(f'<span class="meta">{when}</span> — ' + separator.join(names)
+                    for when, names in recheck_groups.items()) + "</p>") if recheck_groups else ""
     regional = plan.get("regional_service_context") if isinstance(plan.get("regional_service_context"), dict) else {}
     platform_note = (
         # selection_basis is REQUIRED by validate_plan and was printed nowhere, so the page said

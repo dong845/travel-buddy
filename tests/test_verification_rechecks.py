@@ -248,6 +248,31 @@ def main() -> int:
               "Re-checked" not in line and "Budget" not in line and "Other trip details" not in line
               and "Day " not in line.split("</p>", 1)[0], line[:400])
 
+        # A party change rechecks a dozen parts at once. Read on the page on 2026-09-24: the line
+        # printed the same date sixteen times, called both the transport overview and the trip
+        # block "Other trip details", and listed hotels before days. One date per group, each part
+        # once, days first.
+        many = json.loads(saved_path.read_text(encoding="utf-8"))
+        many["verification_receipt"]["rechecked"] = {
+            "trip": TODAY, "transport_overview": TODAY, "budget": TODAY,
+            "booking_options.accommodations[stay-a]": TODAY, f"days[{day0}]": TODAY}
+        english = renderer.render(many).split('class="meta rechecked-sections"', 1)[-1]
+        english = english.split("</p>", 1)[0]
+        check("the rechecked line prints a date once for parts rechecked together",
+              english.count(TODAY) == 1, english[:600])
+        check("the transport overview has its own name on the page",
+              "Transport overview" in english and english.count("Other trip details") == 1,
+              english[:600])
+        check("the rechecked line reads days before bookings",
+              english.find("Day ") < english.find(many["booking_options"]["accommodations"][0]
+                                                  ["property_name"]), english[:600])
+        many["trip"]["language"] = "zh-CN"
+        chinese_line = renderer.render(many).split('class="meta rechecked-sections"', 1)[-1]
+        chinese_line = chinese_line.split("</p>", 1)[0]
+        check("a Chinese page names the transport overview in Chinese",
+              "Transport overview" not in chinese_line and "交通总览" in chinese_line,
+              chinese_line[:600])
+
         # 6. The scaffold writes the recheck entries for exactly the sections that moved.
         resaved = json.loads(saved_path.read_text(encoding="utf-8"))
         resaved["booking_options"]["accommodations"][1]["selection_rationale"] = (

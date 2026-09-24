@@ -43,6 +43,7 @@
   "recheck_part_entry": "Entry eligibility",
   "recheck_part_arrival": "First hour on the ground",
   "recheck_part_budget": "Budget",
+  "recheck_part_transport": "Transport overview",
   "recheck_part_other": "Other trip details",
   "rental_restriction_label": "Restrictions: ",
   "fig_straight_line": "straight-line span",
