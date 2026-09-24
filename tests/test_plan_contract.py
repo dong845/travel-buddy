@@ -335,6 +335,21 @@ def main() -> int:
               "every value in a closed vocabulary is one that vocabulary contains"
               not in result.stdout, result.stdout.strip()[-160:])
 
+    # The multi-city form SKILL.md documents -- "one object, or a list of them for a multi-city
+    # trip" -- was reported as a type error ("the contract declares object"), while the consistency
+    # gate accepted it. The template can carry only one specimen, so the checker has to know.
+    fixture = json.loads((ROOT / "tests" / "booking-ready-fixture.json").read_text(encoding="utf-8"))
+    fixture["trip"]["destination_coords"] = [{"lat": 40.7128, "lon": -74.006, "label": "New York"},
+                                             {"lat": 34.0522, "lon": -118.2437, "label": "Los Angeles"}]
+    _, report = run(fixture)
+    coords = [i for i in report.get("issues", []) if "destination_coords" in i.get("path", "")]
+    check("the documented multi-city list of coordinates is known", not coords, str(coords)[:300])
+    fixture["trip"]["destination_coords"][1] = {"lat": 34.0522, "lng": -118.2437}
+    _, report = run(fixture)
+    typo = [i for i in report.get("issues", []) if i.get("path") == "trip.destination_coords[].lng"]
+    check("a misspelled key inside the list is still named, with its near-match",
+          typo and str(typo[0].get("suggestion") or "").endswith("lon"), str(report)[:300])
+
     if failures:
         print(f"PLAN CONTRACT FAILED ({len(failures)}):", file=sys.stderr)
         for failure in failures:

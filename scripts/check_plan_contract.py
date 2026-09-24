@@ -82,6 +82,23 @@ def shapes(node: object, path: str = "") -> dict[str, set[str]]:
     return found
 
 
+# Documented as "one object, or a list of them for a multi-city trip" (SKILL.md), and accepted in
+# both forms by check_plan_consistency. The template can carry only one specimen, so the list form
+# is declared here rather than reported as a type error -- which is what the checker did to every
+# multi-city plan written the way SKILL.md says to write it.
+OBJECT_OR_LIST = ("trip.destination_coords",)
+
+
+def contract_shapes(template: dict) -> dict[str, set[str]]:
+    """shapes(), plus the list form of every key that may be one object or a list of them."""
+    known = shapes(template)
+    for path in OBJECT_OR_LIST:
+        known.setdefault(path, set()).add("list")
+        for sub in [k for k in list(known) if k.startswith(path + ".")]:
+            known[path + "[]" + sub[len(path):]] = set(known[sub])
+    return known
+
+
 def kind(value: object) -> str:
     if value is None:
         return "null"
@@ -269,7 +286,7 @@ def main() -> int:
         print("ERROR: the plan must be a JSON object.", file=sys.stderr)
         return 2
 
-    known = shapes(contract)
+    known = contract_shapes(contract)
     vocab, vocab_failure = _vocabularies()
     # Deduplicated by path: `days[].dining[].price_per_person` is ONE mistake whatever the plan's
     # length, and printing it once per array element is the repeated-text waste the plan gate was
