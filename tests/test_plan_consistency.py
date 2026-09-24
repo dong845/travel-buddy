@@ -758,7 +758,9 @@ def ground_transport_cases(base: dict) -> list[str]:
                 price_checked_at="2026-07-01")
     plan["booking_options"]["ground_transport"] = [item]
     page = render(plan)
-    for probe, label in (("2026-07-01", "price_checked_at"), ("limited", "availability_status"),
+    # "Limited", not the token: an English page prints its enum values as English words since
+    # 2026-09-24 (ENGLISH_ENUM_LABELS), so the status reaches the card as the word a reader sees.
+    for probe, label in (("2026-07-01", "price_checked_at"), ("Limited", "availability_status"),
                          ("estimate", "price_status")):
         if probe not in page:
             failures.append(f"ground: {label} is required and never reaches the card")
