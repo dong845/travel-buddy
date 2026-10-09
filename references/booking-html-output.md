@@ -449,6 +449,31 @@ Generate one self-contained file: semantic HTML, inline CSS, minimal inline Java
 
 If a real cost does not fit a category, put it in the nearest one and explain it in that breakdown row’s `description`/`note`. Never invent a category name: the page cannot translate it and the gate will reject the file.
 
+<a id="page-copy-not-machinery"></a>
+### Page copy, not the plan's machinery
+
+A field name or an option id is not a word in any language, and audited pages carried both —
+`acc-3`, `rating_status`, and a booking card on every page ending "Source:
+operator_and_comparison_platform", Chinese pages included. Three rules now hold, by how certain each
+one can be:
+
+- **The plan's own keys and ids are refused.** `save_trip_deliverables.py` and
+  `validate_trip_html.py --plan` fail a page whose visible text contains an underscored key the plan
+  uses, or an id the plan defines that has a digit or an underscore in it. The plan names its own
+  vocabulary, so this needs no word list and cannot fire on a traveller's sentence. Ids of letters and
+  hyphens only (`day-trip`) and ids with capitals (`KL1234`, `KGX`) are left alone, because both are
+  plausibly real names the page should print.
+- **Any other underscored identifier is a note**, printed on the save path as well as by the
+  validator, because it may come from a free-text field the contract does not close yet
+  (`entry_context.traveler_basis`, an anchor's `category`). Write such values as prose in the trip
+  language.
+- `source_type` rides on each booking card as `data-source-type` and is not printed; the card says
+  the same thing in words — who provides the option and where it was compared.
+
+Words such as "gate" or 「闸门」 are not checked: both occur in real travel text (a boarding gate, a
+dam's sluice gates). Keep the skill's own vocabulary out of page prose by writing for the traveller,
+as SKILL.md's section "Write the page like a person who went there" says.
+
 ### The transport overview is for what is true all trip, not a fifth copy of day 1
 
 This section exists so trip-wide mobility facts have somewhere to live: which mode the trip uses,
@@ -503,6 +528,11 @@ A field that is required, researched, and never displayed is work the traveller 
 - any `single_option_reason`, so a category with only one option reads as a researched decision rather than an omission;
 - `budget.unverified_categories`, so the per-person total does not silently read as all-inclusive;
 - `plan.assumptions` and `regional_service_context.booking_platform_selection_note`;
+- each scheduled ticket's `sale_opens_at` — when it goes on sale, at what hour in which zone, and the
+  sentence saying where that came from — on the ticket's own card. Until 2026-10-09 it reached only the
+  calendar file embedded in the page, so a traveller who never imported the calendar was never told;
+- `budget.note`, the sentence that says how to read the headline figure, and each segment's
+  `detour_reason`, the reason the gate accepted for a leg far longer than the straight line;
 - every dining card's **rating** — value, count and source, or an explicit "no public rating" with
   its reason. This one is enforced by `validate_trip_html.py` rather than left to good intent,
   because it is the field most likely to be gathered and then not shown: a delivered page carried

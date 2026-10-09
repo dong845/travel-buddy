@@ -362,11 +362,18 @@ def main() -> int:
     except PlanFlagsError as exc:
         print(f"ERROR: Could not derive the HTML gate settings: {exc}", file=sys.stderr)
         return 2
+    # The page's notes are collected and printed like the plan's. They used to be dropped here --
+    # no list was passed, so the machine-identifier check, which reports only as a note, never
+    # ran on the one path every delivery takes (audit 2026-10-09). The plan goes in too, for the
+    # check that refuses the plan's own keys and ids printed as page text.
+    html_notes: list[str] = []
     html_errors = validate_html(
         rendered_html,
         flags.expected_days,
         flags.required_booking_types,
         flags.transport_mode,
+        html_notes,
+        plan=plan,
         require_unverified_banner=flags.require_unverified_banner,
         # This page was rendered by this script three lines up, so it carries the stamp by
         # construction. Asserting it anyway is what makes the assertion true of the renderer
@@ -374,6 +381,8 @@ def main() -> int:
         # path fails here instead of shipping unstamped pages that the --plan validator would
         # then reject downstream.
     )
+    for note in html_notes:
+        print(f"note: {note}")
     if html_errors:
         print("RENDERING ERROR", file=sys.stderr)
         for error in html_errors:

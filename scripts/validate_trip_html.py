@@ -250,6 +250,8 @@ RULE_REFERENCES: dict[str, str] = {
     # Enum values that reached the page untranslated. The section is named for exactly this: an
     # enum that leaks cannot be translated.
     "html.closed_enums": "booking-html-output.md#closed-enums",
+    # The plan's own keys and ids printed as page text.
+    "html.plan_vocabulary": "booking-html-output.md#page-copy-not-machinery",
     # Fields the plan collected that the page has to actually print -- the day's sections, and the
     # route fallback that the plan requires and the page kept to itself.
     "html.day_sections": "booking-html-output.md#render-what-the-plan-collects",
@@ -603,7 +605,32 @@ MACHINE_TOKEN = re.compile(r"^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)*$")
 # real delivered plans, and a rule that fails them would be a nuisance rather than a gate. The
 # hyphenated enums this skill actually has (`self-drive`, `public-transit`) are caught by the
 # enum-cell comparison instead, which does not have to guess.
-MACHINE_IDENTIFIER = re.compile(r"(?<![\w-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w-])")
+#
+# The boundaries are ASCII on purpose. `\w` is Unicode in Python, so every Chinese character counts
+# as a word character and `字段source_type未填` -- an identifier glued to the sentence around it,
+# which is how Chinese is written -- had no boundary on either side and was never found.
+MACHINE_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![A-Za-z0-9_-])")
+
+
+def without_addresses(readable: str) -> str:
+    """Visible text with links, e-mail addresses, file paths and file names blanked out.
+
+    A URL or file name that reached visible text is a different defect, and reporting one of its
+    underscored parts as an untranslated enum would send the reader hunting for a translation that
+    does not exist. Removed by their own ASCII shape rather than by dropping every whitespace-
+    delimited word that contains a "/" -- Chinese is not written with spaces, so that dropped
+    whole clauses: in 「比例5/6，见：source_type」 the fraction took the identifier with it.
+    `TODO:` runs are dropped for the reason SKILL.md gives about placeholder cards: a skeleton's
+    scaffolding says "TODO: provider 1 (must own review_url)", and validate_trip_html.py already
+    refuses a page that still contains a TODO.
+    """
+    text = re.sub(r"TODO:[^·\n]*", " ", readable)
+    text = re.sub(r"[A-Za-z][A-Za-z0-9+.-]*://[!-~]*", " ", text)
+    text = re.sub(r"[A-Za-z0-9_.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", " ", text)
+    text = re.sub(r"[A-Za-z0-9_.~-]*/[A-Za-z0-9_.~/-]*", " ", text)
+    return re.sub(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.[a-z]{2,4}(?![A-Za-z0-9_])", " ", text)
+
+
 # Attributes whose value is a machine token by design and is SUPPOSED to read the same as the
 # text beside it, or is not a translatable enum at all. Membership in renderer_enum_values()
 # already excludes most of these; they are named anyway so a provider or segment id that happens
@@ -761,7 +788,10 @@ def machine_identifiers(readable: str) -> list[str]:
     each sitting inside a fully translated label on a page both gates called VALID.
 
     REPORTED AS A NOTE, NOT AN ERROR, and the reason is worth writing down because it is a
-    judgement someone should be free to overturn. The three fields that produce these -- a booking
+    judgement someone should be free to overturn. (Since 2026-10-09 the option's `source_type`
+    rides on its card as an attribute and is no longer printed, and an identifier that is one of
+    the plan's OWN keys or ids is an error -- see plan_vocabulary(). What stays a note is a value
+    in free text that the plan does not itself define.) The three fields that produce these -- a booking
     option's `source_type`, `entry_context.traveler_basis`, and an anchor's `category` -- are
     author-supplied FREE TEXT in templates/final-trip-plan.json. They are the same unclosed-enum
     hole this file's SOURCE_CONFIDENCE_LEVELS fix just closed, one field over, and closing them is
@@ -778,20 +808,49 @@ def machine_identifiers(readable: str) -> list[str]:
     (render_final_trip_html.ENGLISH_ENUM_LABELS), so an underscored token left on one is the
     author's free text, exactly as on a Chinese page.
     """
-    # A URL or file name that reached visible text is a different defect, and reporting it as an
-    # untranslated enum would send the reader hunting for a translation that does not exist.
-    # `TODO:` runs are dropped for the reason SKILL.md already gives about placeholder cards: a
-    # skeleton's own scaffolding says "TODO: provider 1 (must own review_url)", and reporting
-    # `review_url` there sends the author hunting for a defect that does not exist on a page
-    # validate_trip_html.py already refuses to ship for containing TODOs at all.
-    prose = re.sub(r"TODO:[^·\n]*", " ", readable)
-    prose = " ".join(
-        ""
-        if ("://" in word or "/" in word or "@" in word or re.search(r"\.[a-z]{2,4}$", word))
-        else word
-        for word in prose.split()
-    )
+    prose = without_addresses(readable)
     return sorted({token for token in MACHINE_IDENTIFIER.findall(prose) if len(token) >= 5})
+
+
+def plan_vocabulary(plan: object) -> set[str]:
+    """The plan's own machinery: every underscored key it uses, and every id with a digit or an
+    underscore in it.
+
+    No traveller sentence contains `cross_border_or_restriction_note` or `acc-pit-1`, so neither
+    needs a word list to be recognised -- the plan being delivered names its own vocabulary. Ids
+    made only of letters and hyphens are left out on purpose: `day-trip` or `self-drive` is a
+    plausible id and ordinary prose, and a gate that fails ordinary prose gets routed around.
+    Ids with a capital letter are left out as well: an author who keys a flight option by its
+    flight number (`KL1234`) or a station by its code (`KGX`) has used a real-world name the page
+    rightly prints. Dates have no letter at all.
+    """
+    found: set[str] = set()
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(key, str) and "_" in key.strip("_") and len(key) >= 5:
+                    found.add(key)
+                if ((key == "id" or str(key).endswith("_id")) and isinstance(value, str)
+                        and len(value.strip()) >= 3
+                        and re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", value.strip())
+                        and re.search(r"[a-z]", value) and re.search(r"[0-9_]", value)):
+                    found.add(value.strip())
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(plan)
+    return found
+
+
+def plan_vocabulary_leaks(content: str, plan: object) -> list[str]:
+    """The plan's own keys and ids that are printed as visible text on its page."""
+    text = without_addresses(visible_text(content))
+    return sorted(
+        token for token in plan_vocabulary(plan)
+        if re.search(r"(?<![A-Za-z0-9_-])" + re.escape(token) + r"(?![A-Za-z0-9_-])", text))
 
 
 def machine_identifier_notes(content: str) -> list[str]:
@@ -1251,6 +1310,7 @@ def validate(
     notes: list[str] | None = None,
     require_unverified_banner: bool = False,
     entry_jurisdictions: tuple[str, ...] = (),
+    plan: dict | None = None,
 ) -> list[str]:
     parser = TripHTMLParser()
     parser.feed(content)
@@ -1366,6 +1426,18 @@ def validate(
     # condition under which this should be promoted.
     if notes is not None:
         notes.extend(machine_identifier_notes(content))
+    # The plan's own keys and ids are a different matter from free-text values: the plan defines
+    # them, so a hit cannot be a traveller's word. At least 5 of the 16 real pages audited on
+    # 2026-09-24 carried field names or option ids such as `acc-3` in their prose. Needs the plan, so it runs on the
+    # save path and under --plan; a bare page has no vocabulary to compare against.
+    if plan is not None:
+        machinery = plan_vocabulary_leaks(content, plan)
+        if machinery:
+            errors.append(cite("html.plan_vocabulary",
+                "The plan's own keys or ids are printed as page text: "
+                + ", ".join(machinery[:8]) + ("; …" if len(machinery) > 8 else "")
+                + ". They are this plan's machinery, not words a traveller can read in any "
+                "language; say what they refer to in the trip language."))
     if not parser.days:
         errors.append(cite("html.day_card_contract", "Final HTML must contain at least one .day-card."))
     numbers = [int(day["number"]) for day in parser.days if day["number"].isdigit()]
@@ -1943,6 +2015,15 @@ def main() -> int:
             notes.append(plan_summary)
         else:
             print(f"note: {plan_summary}")
+    # The plan itself, for the one check that compares the page with the plan's own vocabulary.
+    # load_html_flags() above has already refused a plan it could not read, so a failure here is a
+    # file that changed in between; the check is then skipped with a note rather than guessed.
+    delivered_plan = None
+    if args.plan:
+        try:
+            delivered_plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            notes.append(f"plan vocabulary not checked: {args.plan} could not be re-read ({exc})")
     errors = validate(
         content,
         expected_days,
@@ -1951,6 +2032,7 @@ def main() -> int:
         notes,
         require_unverified_banner=require_unverified_banner,
         entry_jurisdictions=entry_jurisdictions,
+        plan=delivered_plan if isinstance(delivered_plan, dict) else None,
     )
     if args.json:
         # getattr, not errors.positions: validate() returns the parser's list, and a future
