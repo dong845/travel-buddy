@@ -94,3 +94,13 @@ jobs:
                   + ", ".join(orphaned))
           print(f"{len(wired)} plan checks defined and all wired into the save path")
           PY
+
+      - name: The suite still passes three years from now
+        # Two test files once failed on an unchanged tree because the calendar passed their fixture's
+        # trip date. tests/future_clock/sitecustomize.py moves date.today() and datetime.now() for
+        # pytest and every script it launches, so a test bound to the real date fails here, the day
+        # it is written. Run on one interpreter only; the date logic does not differ between them.
+        if: matrix.python-version == '3.13'
+        run: |
+          FAKE_TODAY=$(python -c "import datetime; print(datetime.date.today() + datetime.timedelta(days=1100))") \
+          PYTHONPATH=tests/future_clock python -m pytest tests/ -q

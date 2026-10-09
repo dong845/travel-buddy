@@ -786,6 +786,10 @@ def main() -> int:
 
         # 12. The documented date-shift flow, which produced a plan neither consumer could open.
         #
+        # The fixture's dates are fixed and replan_trip.py refuses a window before today, so the
+        # shifts below pin today; unpinned, this block started failing once the calendar passed
+        # the fixture (2026-10-09) for a reason that has nothing to do with photographs.
+        REPLAN_TODAY = "2026-09-01"
         # `replan_trip.py <plan.json> --shift-days N --out <new.json>` copied `imagery_sidecar`
         # verbatim, so a plan shifted into any other directory named a file that was not beside it
         # and both render_final_trip_html.py and save_trip_deliverables.py exited 2 on it. The
@@ -803,7 +807,7 @@ def main() -> int:
         shifted_plan = shift_to / "trip-shifted.json"
         replan = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "replan_trip.py"), str(source_plan),
-             "--shift-days", "5", "--out", str(shifted_plan)], capture_output=True, text=True)
+             "--shift-days", "5", "--today", REPLAN_TODAY, "--out", str(shifted_plan)], capture_output=True, text=True)
         replan_out = replan.stdout + replan.stderr
         check("a date shift into another directory succeeds", replan.returncode == 0,
               replan_out[:400])
@@ -829,7 +833,7 @@ def main() -> int:
         # names a file relative to nowhere.
         piped_replan = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "replan_trip.py"), str(source_plan),
-             "--shift-days", "5"], capture_output=True, text=True)
+             "--shift-days", "5", "--today", REPLAN_TODAY], capture_output=True, text=True)
         check("a date shift to stdout refuses a plan whose photographs are in a sidecar",
               piped_replan.returncode != 0 and "--out" in piped_replan.stderr
               and not piped_replan.stdout.strip(),
@@ -843,7 +847,7 @@ def main() -> int:
         broken_target = shift_to / "broken-shifted.json"
         broken_replan = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "replan_trip.py"), str(broken_source),
-             "--shift-days", "5", "--out", str(broken_target)], capture_output=True, text=True)
+             "--shift-days", "5", "--today", REPLAN_TODAY, "--out", str(broken_target)], capture_output=True, text=True)
         check("a date shift refuses a plan whose photographs cannot be read",
               broken_replan.returncode != 0 and not broken_target.exists(),
               (broken_replan.stdout + broken_replan.stderr)[:400])

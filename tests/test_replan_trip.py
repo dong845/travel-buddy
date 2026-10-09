@@ -41,9 +41,16 @@ FIXTURE = ROOT / "tests" / "booking-ready-fixture.json"
 # a Tuesday, +5 on a Saturday. Stated once here because a case that silently stops crossing a
 # weekday boundary still passes while testing nothing.
 FIXTURE_START = "2026-09-28"
+# replan_trip.py refuses a window that starts before today, and the fixture's dates are fixed, so
+# without a pinned today every case here starts failing the day the calendar passes the fixture --
+# which is what happened on 2026-10-09, with CI last green two weeks earlier. Every call gets this
+# date unless the case passes its own --today.
+PINNED_TODAY = "2026-09-01"
 
 
 def run_cli(args: list[str]) -> tuple[int, str]:
+    if "--today" not in args:
+        args = [*args, "--today", PINNED_TODAY]
     proc = subprocess.run([sys.executable, str(REPLAN), *args], capture_output=True, text=True)
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -367,6 +374,15 @@ def main() -> int:
             if not out.strip():
                 fail(f"bad input ({name})",
                      f"exited {code} in silence; the operator is left guessing what to fix")
+
+    # 7. The refusal the pin above steps around still exists. A today after the new window must
+    # refuse with the remedy and write nothing; without this, pinning today everywhere would let
+    # the past-window guard be deleted with the suite still green.
+    code, out, shifted = run_replan(base, "--shift-days", "1", "--today", "2026-12-31")
+    if code == 0 or shifted is not None or "before today" not in out:
+        fail("a shift into the past is refused",
+             f"with --today after the shifted window, exit {code}, wrote "
+             f"{'a plan' if shifted is not None else 'nothing'}:\n{out[-400:]}")
 
     if failures:
         print(f"REPLAN FAILED {len(failures)} case(s):\n", file=sys.stderr)
