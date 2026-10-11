@@ -2873,6 +2873,88 @@ def _party_sizes_in_url(url: str) -> set[int]:
     return {adults + children for adults, children in rooms.values() if adults}
 
 
+def prefill_date_forms(value: str) -> list[str]:
+    """The spellings a search URL may use for one date (Skyscanner 270108, KAYAK 2027-01-08, ...)."""
+    try:
+        d = dt.date.fromisoformat(str(value)[:10])
+    except Exception:  # noqa: BLE001 - a malformed date is reported by the date checks
+        return []
+    return [d.isoformat(), d.strftime("%Y%m%d"), d.strftime("%y%m%d"),
+            d.strftime("%d-%m-%Y"), d.strftime("%d/%m/%Y"), d.strftime("%m/%d/%Y"),
+            d.strftime("%d.%m.%Y")]
+
+
+def url_discrete_parts(url: str) -> set[str]:
+    parsed = urllib.parse.urlparse(urllib.parse.unquote_plus(url))
+    parts = {p.casefold() for p in parsed.path.split("/") if p}
+    for values in urllib.parse.parse_qs(parsed.query).values():
+        for value in values:
+            # A value with whitespace in it is a search box someone typed a sentence into.
+            # Its contents are not prefilled fields; they are one field holding prose.
+            if value and not re.search(r"\s", value):
+                parts.add(value.casefold())
+    return parts
+
+
+def url_whole_values(url: str) -> set[str]:
+    """Every path segment and every whole query value, folded -- spaces allowed.
+
+    The whitespace rule above keeps a sentence typed into a search box from counting as
+    fields. A whole value that EQUALS the declared field is not a sentence, though: SBB writes
+    `von=Zürich HB`, one station, one field. Excluding it meant a multi-word station could
+    never be carried at all.
+    """
+    parsed = urllib.parse.urlparse(url)
+    values = {_fold(urllib.parse.unquote_plus(segment)) for segment in parsed.path.split("/")
+              if segment}
+    for found in urllib.parse.parse_qs(parsed.query).values():
+        values.update(_fold(value) for value in found if value)
+    return values - {""}
+
+
+def undelivered_prefill_fields(url: str, declared: list, wanted: dict,
+                               ids: dict | None = None) -> list[tuple[str, object, bool]]:
+    """Each declared field this URL does not carry as a discrete part: (field, value, loose).
+
+    Lifted out of check_booking_identity so kiwi_flights.py can ask the same rule which fields its
+    search URL really carries instead of re-implementing it. `loose` is True when the value occurs
+    only inside free text -- a search box with a sentence in it rather than a filled-in field.
+    """
+    if not url or not declared:
+        return []
+    parts = url_discrete_parts(url)
+    whole = url_whole_values(url)
+    haystack = urllib.parse.unquote_plus(url).casefold()
+    missing: list[tuple[str, object, bool]] = []
+    for field in [str(d) for d in declared]:
+        value = wanted.get(field)
+        if value in (None, ""):
+            continue
+        is_date = field.endswith("_date") or field in ("check_in", "check_out")
+        forms = [str(value).casefold()]
+        if is_date:
+            forms = [f.casefold() for f in prefill_date_forms(str(value))] or forms
+        # Inside a discrete part, not equal to it: a provider may pack two fields into one
+        # segment (KAYAK writes the pair as `AMS-HKG`) or decorate one (`1adults`), and both
+        # are still structured. _prefill_pattern holds the boundaries.
+        if any(re.search(_prefill_pattern(f, date=is_date), part) for f in forms for part in parts):
+            continue
+        if field in ("guests", "travellers") and isinstance(value, int) \
+                and not isinstance(value, bool) and value in _party_sizes_in_url(url):
+            continue
+        if field in ("origin", "destination"):
+            if _fold(str(value)) in whole:
+                continue
+            # A provider that keys stations by its own id (Trainline's urn:trainline:...)
+            # never names them; the card declares the id it saw, and the id is what is asked.
+            station_id = (ids or {}).get(field)
+            if isinstance(station_id, str) and station_id.strip() and _fold(station_id) in whole:
+                continue
+        loose = any(re.search(_prefill_pattern(f, date=is_date), haystack) for f in forms)
+        missing.append((field, value, loose))
+    return missing
+
+
 @cites
 def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A comparison link that opens a city is not a link to the thing being compared.
@@ -2967,14 +3049,7 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     # until now that list was a promise the same run wrote about itself: nothing compared it to
     # the URL sitting beside it. Providers encode dates differently -- Skyscanner writes 270108,
     # KAYAK writes 2027-01-08 -- so every common spelling counts as present.
-    def _date_forms(value: str) -> list[str]:
-        try:
-            d = dt.date.fromisoformat(str(value)[:10])
-        except Exception:  # noqa: BLE001 - a malformed date is reported by the date checks
-            return []
-        return [d.isoformat(), d.strftime("%Y%m%d"), d.strftime("%y%m%d"),
-                d.strftime("%d-%m-%Y"), d.strftime("%d/%m/%Y"), d.strftime("%m/%d/%Y"),
-                d.strftime("%d.%m.%Y")]
+    _date_forms = prefill_date_forms
 
     def _dates_in_url(url: str, dates: list[tuple[str, str]], where: str) -> None:
         if not url:
@@ -3028,64 +3103,12 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
     # where each field is its own segment, from a sentence typed into a search box. It is the same
     # rule this skill already applies to map endpoints: the string a button carries is a query,
     # not a caption.
-    def _discrete_parts(url: str) -> set[str]:
-        parsed = urllib.parse.urlparse(urllib.parse.unquote_plus(url))
-        parts = {p.casefold() for p in parsed.path.split("/") if p}
-        for values in urllib.parse.parse_qs(parsed.query).values():
-            for value in values:
-                # A value with whitespace in it is a search box someone typed a sentence into.
-                # Its contents are not prefilled fields; they are one field holding prose.
-                if value and not re.search(r"\s", value):
-                    parts.add(value.casefold())
-        return parts
-
-    def _whole_values(url: str) -> set[str]:
-        """Every path segment and every whole query value, folded -- spaces allowed.
-
-        The whitespace rule above keeps a sentence typed into a search box from counting as
-        fields. A whole value that EQUALS the declared field is not a sentence, though: SBB writes
-        `von=Zürich HB`, one station, one field. Excluding it meant a multi-word station could
-        never be carried at all.
-        """
-        parsed = urllib.parse.urlparse(url)
-        values = {_fold(urllib.parse.unquote_plus(segment)) for segment in parsed.path.split("/")
-                  if segment}
-        for found in urllib.parse.parse_qs(parsed.query).values():
-            values.update(_fold(value) for value in found if value)
-        return values - {""}
+    _discrete_parts = url_discrete_parts
+    _whole_values = url_whole_values
 
     def _declared_fields_in_url(url: str, declared: list, wanted: dict, where: str,
                                 ids: dict | None = None) -> None:
-        if not url or not declared:
-            return
-        parts = _discrete_parts(url)
-        whole = _whole_values(url)
-        haystack = urllib.parse.unquote_plus(url).casefold()
-        for field in [str(d) for d in declared]:
-            value = wanted.get(field)
-            if value in (None, ""):
-                continue
-            is_date = field.endswith("_date") or field in ("check_in", "check_out")
-            forms = [str(value).casefold()]
-            if is_date:
-                forms = [f.casefold() for f in _date_forms(str(value))] or forms
-            # Inside a discrete part, not equal to it: a provider may pack two fields into one
-            # segment (KAYAK writes the pair as `AMS-HKG`) or decorate one (`1adults`), and both
-            # are still structured. _prefill_pattern holds the boundaries.
-            if any(re.search(_prefill_pattern(f, date=is_date), part) for f in forms for part in parts):
-                continue
-            if field in ("guests", "travellers") and isinstance(value, int) \
-                    and not isinstance(value, bool) and value in _party_sizes_in_url(url):
-                continue
-            if field in ("origin", "destination"):
-                if _fold(str(value)) in whole:
-                    continue
-                # A provider that keys stations by its own id (Trainline's urn:trainline:...)
-                # never names them; the card declares the id it saw, and the id is what is asked.
-                station_id = (ids or {}).get(field)
-                if isinstance(station_id, str) and station_id.strip() and _fold(station_id) in whole:
-                    continue
-            loose = any(re.search(_prefill_pattern(f, date=is_date), haystack) for f in forms)
+        for field, value, loose in undelivered_prefill_fields(url, declared, wanted, ids):
             errors.append(
                 f"{where}: it declares {field!r} prefilled, but the URL "
                 + (f"carries {value!r} only inside a free-text parameter, which is a search box "
