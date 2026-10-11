@@ -254,6 +254,8 @@ RULE_REFERENCES: dict[str, str] = {
     "html.plan_vocabulary": "booking-html-output.md#page-copy-not-machinery",
     # A flight leg marked self_transfer must carry its warning row on the page.
     "html.self_transfer_warning": "booking-html-output.md#self-transfer",
+    # Each recorded decision carries its badge on the page.
+    "html.booking_badges": "replanning.md#bookings",
     # Fields the plan collected that the page has to actually print -- the day's sections, and the
     # route fallback that the plan requires and the page kept to itself.
     "html.day_sections": "booking-html-output.md#render-what-the-plan-collects",
@@ -1483,6 +1485,18 @@ def validate(
                 f"The plan marks {marked} self-transfer leg(s) but the page warns on {shown}. A missed "
                 f"connection on separate tickets is not protected, and the card is where the traveller "
                 f"decides; render the plan through render_final_trip_html.py."))
+        import bookings as booking_rules  # noqa: PLC0415 - sibling module, imported where used
+        booking_index = booking_rules.option_index(plan)
+        booking_live = [r for r in booking_rules.records(plan) if str(r.get("option_id") or "") in booking_index]
+        for record in booking_live:
+            needle = f'data-booking-option="{record.get("option_id")}" data-booking-state="{record.get("state")}"'
+            if needle not in content:
+                errors.append(cite("html.booking_badges",
+                    f"The plan records {record.get('option_id')} as {record.get('state')} but the page shows no "
+                    f"badge for it; render the plan through render_final_trip_html.py."))
+        if any(r.get("state") == "booked" for r in booking_live) and 'data-bookings="booked"' not in content:
+            errors.append(cite("html.booking_badges",
+                "The plan records a booking but the page still presents its options as 'no purchase made'."))
     if not parser.days:
         errors.append(cite("html.day_card_contract", "Final HTML must contain at least one .day-card."))
     numbers = [int(day["number"]) for day in parser.days if day["number"].isdigit()]
