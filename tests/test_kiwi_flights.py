@@ -200,9 +200,85 @@ def mapping_cases() -> None:
         check(f"the recorded {key} response maps", cards and all(c["fare_low"] > 0 for c in cards), key)
 
 
+class FakePage:
+    def __init__(self, body: str):
+        self.body = body.encode("utf-8")
+
+    def read(self) -> bytes:
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def opener_with(title_by_slug: dict[str, str], seen: list[str], headers: list[dict] | None = None):
+    def opener(request, timeout=30.0):
+        url = request.full_url
+        seen.append(url)
+        if headers is not None:
+            headers.append(dict(request.header_items()))
+        for slug, title in title_by_slug.items():
+            if slug in url:
+                return FakePage(f"<html><head><title>{title}</title></head></html>")
+        return FakePage("<html><head><title>Kiwi.com | Find Cheap Flights &amp; Discover New Destinations</title></head></html>")
+    return opener
+
+
+def link_cases() -> None:
+    check("slugs fold accents and spaces", kf.slugify("Zürich") == "zurich" and kf.slugify("New York") == "new-york")
+    url = kf.search_page_url(DIRECT, REQUEST)
+    check("the slug form, the dates, the party",
+          url == "https://www.kiwi.com/en/search/results/amsterdam-netherlands/edinburgh-united-kingdom/"
+                 "2026-11-20/2026-11-24?adults=2&children=2", url)
+
+    check("a resolved title confirms", kf.title_confirms("Amsterdam‎ – Edinburgh‎ trips", "Amsterdam", "Edinburgh"))
+    check("accented_title_verifies", kf.title_confirms("Amsterdam – Zürich trips", "Amsterdam", "Zurich"))
+    check("the empty-form title does not", not kf.title_confirms("–  trips", "Amsterdam", "Edinburgh"))
+    check("the home-page title does not",
+          not kf.title_confirms("Kiwi.com | Find Cheap Flights & Discover New Destinations", "Amsterdam", "Edinburgh"))
+    check("another city does not", not kf.title_confirms("Amsterdam – Glasgow trips", "Amsterdam", "Edinburgh"))
+    check("no title does not", not kf.title_confirms(None, "Amsterdam", "Edinburgh"))
+
+    cards = [kf.itinerary_to_card(DIRECT, REQUEST, 0, "2026-10-11", single=False)]
+    lines: list[str] = []
+    seen: list[str] = []
+    sent: list[dict] = []
+    kf.attach_search_link(cards, DIRECT, REQUEST, lines,
+                          opener=opener_with({"edinburgh-united-kingdom": "Amsterdam – Edinburgh trips"}, seen, sent))
+    check("a verified page becomes the search button", cards[0]["round_trip_search_url"] == url, cards[0]["round_trip_search_url"])
+    check("only what the gate confirms is declared prefilled",
+          cards[0]["round_trip_prefilled_fields"] == ["outbound_date", "return_date", "travellers"],
+          cards[0]["round_trip_prefilled_fields"])
+    check("the verification is reported", any(l.startswith("LINK VERIFIED") for l in lines), lines)
+    check("the browser user agent is used", sent and "Chrome/" in sent[0].get("User-agent", ""), sent)
+
+    cards = [kf.itinerary_to_card(DIRECT, REQUEST, 0, "2026-10-11", single=False)]
+    lines = []
+    kf.attach_search_link(cards, DIRECT, REQUEST, lines, opener=opener_with({}, []))
+    check("an unverified page stays TODO", cards[0]["round_trip_search_url"].startswith("TODO:"), cards[0]["round_trip_search_url"])
+    check("and says which URL failed", any(l.startswith("LINK NOT VERIFIED") and "kiwi.com" in l for l in lines), lines)
+
+    def broken(request, timeout=30.0):
+        raise OSError("down")
+    cards = [kf.itinerary_to_card(DIRECT, REQUEST, 0, "2026-10-11", single=False)]
+    kf.attach_search_link(cards, DIRECT, REQUEST, [], opener=broken)
+    check("a fetch error leaves TODO", cards[0]["round_trip_search_url"].startswith("TODO:"))
+
+    with_infant = dict(REQUEST, adults=1, children=0, infants=1)
+    cards = [kf.itinerary_to_card(DIRECT, with_infant, 0, "2026-10-11", single=False)]
+    kf.attach_search_link(cards, DIRECT, with_infant, [],
+                          opener=opener_with({"edinburgh-united-kingdom": "Amsterdam – Edinburgh trips"}, []))
+    check("with an infant, the party is not declared prefilled",
+          "travellers" not in cards[0]["round_trip_prefilled_fields"], cards[0]["round_trip_prefilled_fields"])
+
+
 def main() -> int:
     client_cases()
     mapping_cases()
+    link_cases()
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:

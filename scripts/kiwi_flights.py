@@ -22,12 +22,19 @@ this client names itself and makes one search per flight query, two when self-tr
 from __future__ import annotations
 
 import datetime as dt
+import html
 import json
 import math
+import re
 import sys
+import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_plan_consistency as cpc  # noqa: E402 - the prefilled-field rule this script asks
 
 ENDPOINT = "https://mcp.kiwi.com"
 SEARCH_TOOL = "search-flight"
@@ -372,3 +379,92 @@ def itinerary_to_card(itinerary: dict, request: dict, index: int, checked_at: st
                                         "Kiwi.com returned no second itinerary with another airline or a departure "
                                         "at least two hours apart for these dates.")
     return card
+
+
+SEARCH_PAGE = "https://www.kiwi.com/en/search/results"
+BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+ALL_PREFILL = ["origin", "destination", "outbound_date", "return_date", "travellers"]
+
+
+def _fold(text: str) -> str:
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").casefold().strip()
+
+
+def slugify(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", _fold(text)).strip("-")
+
+
+def search_page_url(itinerary: dict, request: dict) -> str:
+    """Kiwi's search-results page in the only form that prefills its cities: `city-country` slugs.
+
+    The IATA form (/AMS/EDI/...) loads with the dates and party filled in and BOTH places empty --
+    a 200 that delivers nothing (checked in Chrome, 2026-10-11).
+    """
+    first = itinerary["outbound"]["segments"][0]
+    last = itinerary["outbound"]["segments"][-1]
+    origin = f"{slugify(first.get('fromCity', ''))}-{slugify(first.get('fromCountry', ''))}"
+    destination = f"{slugify(last.get('toCity', ''))}-{slugify(last.get('toCountry', ''))}"
+    query = {"adults": request["adults"]}
+    if request["children"]:
+        query["children"] = request["children"]
+    if request["infants"]:
+        query["infants"] = request["infants"]
+    return (f"{SEARCH_PAGE}/{origin}/{destination}/{request['depart']}/{request['return']}"
+            f"?{urllib.parse.urlencode(query)}")
+
+
+def fetch_title(url: str, opener=urllib.request.urlopen, timeout: float = 30.0) -> str | None:
+    try:
+        with opener(urllib.request.Request(url, headers={"User-Agent": BROWSER_UA, "Accept-Language": "en"}),
+                    timeout=timeout) as response:
+            body = response.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+    match = re.search(r"<title>(.*?)</title>", body, re.DOTALL | re.IGNORECASE)
+    return html.unescape(match.group(1)) if match else None
+
+
+def title_confirms(title: str | None, origin_city: str, destination_city: str) -> bool:
+    """The server-rendered title names both cities only when both slugs resolved.
+
+    Valid: "Amsterdam – Edinburgh trips". Invalid slugs give "–  trips" or Kiwi's generic home-page
+    title. Names are compared accent-folded: slug `zurich` renders as "Zürich".
+    """
+    if not title:
+        return False
+    match = re.fullmatch(r"\s*(.+?)\s+[–-]\s+(.+?)\s+trips\s*", title.replace("‎", ""))
+    if not match:
+        return False
+    return _fold(match.group(1)) == _fold(origin_city) and _fold(match.group(2)) == _fold(destination_city)
+
+
+def prefilled_fields(url: str, card: dict, request: dict) -> list[str]:
+    """Only the fields the gate itself confirms in this URL -- asked, never assumed.
+
+    Kiwi's `infants` parameter was never checked on a rendered page, so a party with infants does
+    not declare `travellers` even when the number is in the URL.
+    """
+    wanted = {"origin": card["origin_airport"], "destination": card["destination_airport"],
+              "outbound_date": card["outbound_date"], "return_date": card["return_date"],
+              "travellers": request["adults"] + request["children"] + request["infants"]}
+    missing = {field for field, _, _ in cpc.undelivered_prefill_fields(url, ALL_PREFILL, wanted)}
+    fields = [field for field in ALL_PREFILL if field not in missing]
+    if request["infants"]:
+        fields = [field for field in fields if field != "travellers"]
+    return fields
+
+
+def attach_search_link(cards: list[dict], itinerary: dict, request: dict, lines: list[str],
+                       opener=urllib.request.urlopen) -> None:
+    url = search_page_url(itinerary, request)
+    first = itinerary["outbound"]["segments"][0]
+    last = itinerary["outbound"]["segments"][-1]
+    if title_confirms(fetch_title(url, opener=opener), first.get("fromCity", ""), last.get("toCity", "")):
+        for card in cards:
+            card["round_trip_search_url"] = url
+            card["round_trip_prefilled_fields"] = prefilled_fields(url, card, request)
+        lines.append(f"LINK VERIFIED {url}")
+    else:
+        lines.append(f"LINK NOT VERIFIED {url} -- its title did not name both cities; find another "
+                     f"dated comparison search for round_trip_search_url")
