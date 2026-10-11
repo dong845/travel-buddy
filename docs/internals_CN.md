@@ -65,6 +65,7 @@ start_intake_workflow.py
 | `replan_trip.py` | 日期一改，它决定的部分重写，其余部分不再算「已核实」 |
 | `audit_workspace.py` | 拿今天的闸门回头跑一遍所有已保存的方案，只报告、不改动 |
 | `probe_sources.py` | 在有人写下「这个查不到」之前，先问清楚这台机器到底能读到什么 |
+| `kiwi_flights.py` | 用 Kiwi.com 的公开航班搜索生成往返机票卡片 —— 默认只给受保护的衔接，不需要账号 |
 | `trip_timer.py` | 记录一次规划真实花掉的时间，并拆成「机器算」和「你在等」 |
 
 ## 四道闸门

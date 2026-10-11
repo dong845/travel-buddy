@@ -487,6 +487,17 @@ Words such as "gate" or 「闸门」 are not checked: both occur in real travel 
 dam's sluice gates). Keep the skill's own vocabulary out of page prose by writing for the traveller,
 as SKILL.md's section "Write the page like a person who went there" says.
 
+<a id="self-transfer"></a>
+### Self-transfer is the traveller's risk, in their words
+
+`kiwi_flights.py` searches protected connections only: no separate-ticket transfers, no airport
+change inside a city, no overnight layover. With Kiwi's defaults the cheapest family fare from
+Amsterdam to Edinburgh was easyJet to Belfast plus Ryanair onwards on separate tickets, five euros
+less than the direct flight. A traveller may accept that trade; then put their words in
+`trip.traveler_preferences.accepts_self_transfer` and pass `--accept-self-transfer`. The script
+marks each connecting leg `self_transfer: true`, `check_plan_consistency.py` refuses a marked leg
+without those words, and the page prints a warning on the card that `validate_trip_html.py` requires.
+
 ### The transport overview is for what is true all trip, not a fifth copy of day 1
 
 This section exists so trip-wide mobility facts have somewhere to live: which mode the trip uses,

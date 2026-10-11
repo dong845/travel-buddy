@@ -283,6 +283,9 @@
     "without photographs if there is none. A name that points at no file is refused loudly rather",
     "than rendered around, because no gate counts images and a silently photo-less page is one",
     "nobody notices.",
+    "booking_options.flights[].outbound_itinerary.self_transfer / return_itinerary.self_transfer -- true only on a leg whose connection is on separate tickets (written by kiwi_flights.py when the traveller accepted self-transfer); the page prints a warning on that card.",
+    "booking_options.flights[].price_note -- how to read the per-person price when it is an average over a party with children or infants; printed beside the price.",
+    "trip.traveler_preferences.accepts_self_transfer -- the traveller's OWN WORDS accepting separate-ticket connections; required before any leg is marked self_transfer.",
     "Delete this _contract key before saving the real plan."
   ],
   "plan_status": "researched",
@@ -332,7 +335,8 @@
       "pace": null,
       "avoid_list": [],
       "avoid_list_handling": [],
-      "unmet_preferences": []
+      "unmet_preferences": [],
+      "accepts_self_transfer": null
     },
     "intake_changes": []
   },
@@ -490,7 +494,8 @@
           "stops": null,
           "connection_or_terminal_note": null,
           "service_identifier_status": "researched",
-          "service_identifier_unresearched_reason": null
+          "service_identifier_unresearched_reason": null,
+          "self_transfer": null
         },
         "return_itinerary": {
           "service_identifier": null,
@@ -500,7 +505,8 @@
           "stops": null,
           "connection_or_terminal_note": null,
           "service_identifier_status": "researched",
-          "service_identifier_unresearched_reason": null
+          "service_identifier_unresearched_reason": null,
+          "self_transfer": null
         },
         "cabin": null,
         "baggage_assumption": null,
@@ -513,6 +519,7 @@
         "material_conditions": null,
         "availability_status": null,
         "price_checked_at": null,
+        "price_note": null,
         "airport_transfer_note": null,
         "single_option_reason": null
       }

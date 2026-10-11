@@ -467,6 +467,8 @@ CHECK_REFERENCES: dict[str, str] = {
     # A multi-stop trip is a sequence of stays, and the one arithmetic mistake it makes that
     # every per-day check passes is paying for two hotels on one night.
     "check_entry_covers_every_jurisdiction": "booking-html-output.md#multi-stop-trips",
+    # A separate-ticket connection needs the traveller's own words accepting it.
+    "check_self_transfer_consent": "booking-html-output.md#self-transfer",
     # Settling the entry answer is the entry domain's job, stated with the verification domains.
     "check_verified_plan_entry_answer": "verification.md#verify-domains",
     "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
@@ -5323,6 +5325,32 @@ def check_dates_agree_with_the_gates_that_ran(plan: dict, errors: list[str],
             f"in replan_context so this gate can hold you to each entry.")
 
 
+@cites
+def check_self_transfer_consent(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A separate-ticket connection is the traveller's risk to take, in their own words.
+
+    kiwi_flights.py excludes self-transfer unless asked, and marks a leg `self_transfer: true` when
+    the traveller accepted it. A missed connection on separate tickets is nobody's problem but
+    theirs -- no rebooking, bags to collect, check-in to redo -- so a marked leg needs
+    trip.traveler_preferences.accepts_self_transfer to hold their words, not a placeholder.
+    """
+    consent = _obj(_obj(_obj(plan.get("trip")).get("traveler_preferences"))).get("accepts_self_transfer")
+    consented = isinstance(consent, str) and bool(consent.strip()) and not _unfilled(consent)
+    for option in [_obj(o) for o in _seq(_obj(plan.get("booking_options")).get("flights"))]:
+        label = str(option.get("provider") or option.get("id") or "?")
+        for leg in ("outbound_itinerary", "return_itinerary"):
+            value = _obj(option.get(leg)).get("self_transfer")
+            if value is None:
+                continue
+            if not isinstance(value, bool):
+                errors.append(f"flight '{label}' {leg}.self_transfer is {value!r}; it must be true, false or absent.")
+            elif value and not consented:
+                errors.append(
+                    f"flight '{label}' {leg} is a self-transfer (separate tickets), but "
+                    f"trip.traveler_preferences.accepts_self_transfer does not hold the traveller's own "
+                    f"words accepting that. Ask them and record their words, or choose a protected itinerary.")
+
+
 PLAN_CHECKS = (
     check_entry_covers_every_jurisdiction,
     check_verified_plan_entry_answer,
@@ -5359,6 +5387,7 @@ PLAN_CHECKS = (
     # sentinel rather than on the field it stands in for.
     check_untyped_constraints,
     check_ticket_sale_windows,
+    check_self_transfer_consent,
 )
 
 

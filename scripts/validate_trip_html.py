@@ -252,6 +252,8 @@ RULE_REFERENCES: dict[str, str] = {
     "html.closed_enums": "booking-html-output.md#closed-enums",
     # The plan's own keys and ids printed as page text.
     "html.plan_vocabulary": "booking-html-output.md#page-copy-not-machinery",
+    # A flight leg marked self_transfer must carry its warning row on the page.
+    "html.self_transfer_warning": "booking-html-output.md#self-transfer",
     # Fields the plan collected that the page has to actually print -- the day's sections, and the
     # route fallback that the plan requires and the page kept to itself.
     "html.day_sections": "booking-html-output.md#render-what-the-plan-collects",
@@ -1471,6 +1473,16 @@ def validate(
                 + ", ".join(machinery[:8]) + ("; …" if len(machinery) > 8 else "")
                 + ". They are this plan's machinery, not words a traveller can read in any "
                 "language; say what they refer to in the trip language."))
+        marked = sum(1 for option in ((plan.get("booking_options") or {}).get("flights") or [])
+                     if isinstance(option, dict)
+                     for key in ("outbound_itinerary", "return_itinerary")
+                     if isinstance(option.get(key), dict) and option[key].get("self_transfer") is True)
+        shown = len(re.findall(r'data-self-transfer-leg="', content))
+        if shown < marked:
+            errors.append(cite("html.self_transfer_warning",
+                f"The plan marks {marked} self-transfer leg(s) but the page warns on {shown}. A missed "
+                f"connection on separate tickets is not protected, and the card is where the traveller "
+                f"decides; render the plan through render_final_trip_html.py."))
     if not parser.days:
         errors.append(cite("html.day_card_contract", "Final HTML must contain at least one .day-card."))
     numbers = [int(day["number"]) for day in parser.days if day["number"].isdigit()]

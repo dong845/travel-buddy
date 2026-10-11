@@ -563,6 +563,8 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "ticket_sale_at_the_door": "现场售票",
             "ticket_sale_sold_out": "已售罄或无法购买",
             "ticket_sale_unknown": "开售时间未确认",
+            "self_transfer_label": "自行转机：",
+            "self_transfer_sentence": "分开出票。误了衔接航班不受保护，需要自己取行李并为下一段重新值机。",
             "nav_label": "本页导航",
             "nav_budget": "预算",
             "nav_options": "预订选项",
@@ -664,6 +666,10 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "ticket_sale_at_the_door",
     "ticket_sale_sold_out",
     "ticket_sale_unknown",
+    # Added with the self-transfer warning on flight cards (2026-10-11), optional for the same
+    # reason as the ticket note.
+    "self_transfer_label",
+    "self_transfer_sentence",
     # Added with the multi-stop spine, optional for the reason stated directly above and for a
     # third demonstration of it: a plan that sleeps in one place renders no spine at all, so
     # demanding four labels for it would reject every single-base label set ever written in order
@@ -1273,6 +1279,15 @@ def static_replacements(labels: dict[str, str]) -> dict[str, str]:
         },
         f'<span class="ticket-sale-status">{TICKET_SALE_UNKNOWN}</span>':
             f'<span class="ticket-sale-status">{labels.get("ticket_sale_unknown", TICKET_SALE_UNKNOWN)}</span>',
+        # The self-transfer warning: label and sentence are two keys, each anchored on its own
+        # markup, so a label set that translates one and not the other leaves an English key on
+        # the page that validate_trip_html.py finds. As one combined key, a translated label hid an
+        # English sentence from the gate.
+        '<strong>Self-transfer: </strong><span class="self-transfer-sentence">':
+            f'<strong>{labels.get("self_transfer_label", "Self-transfer: ")}</strong>'
+            '<span class="self-transfer-sentence">',
+        f'<span class="self-transfer-sentence">{SELF_TRANSFER_SENTENCE}</span>':
+            f'<span class="self-transfer-sentence">{labels.get("self_transfer_sentence", SELF_TRANSFER_SENTENCE)}</span>',
         " per person · ": f" {labels['per_person_suffix']} · ",
         ">Not fact-checked<": f">{labels.get('unverified_banner_title', 'Not fact-checked')}<",
         # NOTE: this key must stay byte-identical to the sentence emitted at :2079. It is a
@@ -2339,6 +2354,8 @@ TICKET_SALE_ENGLISH = {
     "sold_out_or_unavailable": "Sold out or unavailable",
 }
 TICKET_SALE_UNKNOWN = "Sale window not confirmed"
+SELF_TRANSFER_SENTENCE = ("separate tickets. A missed connection is not protected; collect your "
+                          "bags and check in again for the next flight.")
 TICKET_SALE_LABEL_KEYS = {
     "always_available": "ticket_sale_always_available",
     "scheduled_release": "ticket_sale_scheduled_release",
@@ -2410,10 +2427,21 @@ def option_detail_list(kind: str, item: dict) -> str:
             )
         )
     if kind == "flight":
+        # A leg kiwi_flights.py marked self_transfer connects on separate tickets: nothing rebooks a
+        # missed connection, bags come off and check in again. The card is where the traveller
+        # decides, so the warning sits under the leg it belongs to (references/booking-html-output.md#self-transfer).
+        warnings = [
+            f'<li class="warning self-transfer" data-self-transfer-leg="{leg}">'
+            f'<strong>Self-transfer: </strong>'
+            f'<span class="self-transfer-sentence">{SELF_TRANSFER_SENTENCE}</span></li>'
+            for leg, key in (("outbound", "outbound_itinerary"), ("return", "return_itinerary"))
+            if isinstance(item.get(key), dict) and item[key].get("self_transfer") is True
+        ]
         rows.extend(
             (
                 f'<li><strong>Outbound: </strong>{markup(flight_leg_summary(item.get("outbound_itinerary")) or "Not supplied")}</li>',
                 f'<li><strong>Return: </strong>{markup(flight_leg_summary(item.get("return_itinerary")) or "Not supplied")}</li>',
+                *warnings,
                 f'<li><strong>Fare conditions: </strong>{esc(item.get("material_conditions"))}</li>',
                 f'<li><strong>Availability: </strong>{vocab(item.get("availability_status"))} · <strong>Price status: </strong>{vocab(item.get("price_status"))} · <strong>Price checked: </strong>{stamp(item.get("price_checked_at"))}</li>',
                 f'<li>{esc(item.get("airport_transfer_note"))}</li>',
@@ -2513,6 +2541,10 @@ def option_card(kind: str, item: dict) -> str:
         "Vehicle price per day: " if kind == "car" else
         "Price per person, round trip: " if kind == "ground" else ""
     )
+    # How to read an average: a party total over adults, children and infants, written by
+    # kiwi_flights.py beside the per-person figure it was divided into.
+    price_note = (f'<p class="meta price-note">{esc(item.get("price_note"))}</p>'
+                  if item.get("price_note") else "")
     stay_total = ""
     if kind == "hotel":
         stay_total = f'<p class="meta"><strong>Trip total for stay: </strong>{markup(money(item.get("trip_cost_low"), item.get("trip_cost_high"), item.get("currency")))}</p>'
@@ -2551,7 +2583,7 @@ def option_card(kind: str, item: dict) -> str:
     # card on every page, Chinese ones included, ended in "Source: operator_and_comparison_platform"
     # (audit 2026-10-09). The visible line already says the same thing in words: who provides the
     # option and where it was compared.
-    return f'''<article class="option" data-option-kind="{attr(kind)}" data-source-type="{attr(item.get("source_type"))}"><span class="pill">{attr(kind)}</span><h3>{markup(booking_title(kind, item))}</h3><p><strong>{price_label}</strong>{markup(price)}</p>{stay_total}<p>{markup(booking_details(kind, item) or "Conditions require recheck")}</p>{option_detail_list(kind, item)}{single_reason}<p class="meta">Provider: {markup(provider_shown)} · Compared via: {markup(comparison_shown)} · Checked: {stamp(checked_at)}</p>{"".join(actions)}</article>'''
+    return f'''<article class="option" data-option-kind="{attr(kind)}" data-source-type="{attr(item.get("source_type"))}"><span class="pill">{attr(kind)}</span><h3>{markup(booking_title(kind, item))}</h3><p><strong>{price_label}</strong>{markup(price)}</p>{price_note}{stay_total}<p>{markup(booking_details(kind, item) or "Conditions require recheck")}</p>{option_detail_list(kind, item)}{single_reason}<p class="meta">Provider: {markup(provider_shown)} · Compared via: {markup(comparison_shown)} · Checked: {stamp(checked_at)}</p>{"".join(actions)}</article>'''
 
 
 def booking_access_details(value: object) -> str:

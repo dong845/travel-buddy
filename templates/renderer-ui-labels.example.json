@@ -200,6 +200,8 @@
   "ticket_sale_at_the_door": "Sold at the door",
   "ticket_sale_sold_out": "Sold out or unavailable",
   "ticket_sale_unknown": "Sale window not confirmed",
+  "self_transfer_label": "Self-transfer: ",
+  "self_transfer_sentence": "separate tickets. A missed connection is not protected; collect your bags and check in again for the next flight.",
   "nav_label": "On this page",
   "nav_budget": "Budget",
   "nav_options": "Options",
