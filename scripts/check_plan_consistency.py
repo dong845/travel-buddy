@@ -5363,9 +5363,11 @@ def check_bookings(plan: dict, errors: list[str], notes: list[str]) -> None:
     """The traveller's recorded decisions name real options, one per group, with honest dates.
 
     The rules live in scripts/bookings.py so the renderer, the page gate and record_booking.py ask
-    the same ones. Today is the machine's: a booking cannot be dated after it.
+    the same ones. Today is the machine's: a booking cannot be dated after it. A decided stay also
+    means no day may still send the traveller to a sibling hotel of that stay.
     """
     errors.extend(booking_rules.record_problems(plan, dt.date.today()))
+    errors.extend(booking_rules.stale_stay_mentions(plan))
 
 
 PLAN_CHECKS = (

@@ -81,9 +81,19 @@ def end_to_end_case() -> None:
         check("e2e: booking the planned hotel keeps the plan verified", code == 0 and again.returncode == 0,
               (out[-200:], (again.stdout + again.stderr)[-600:]))
         code, out = run(source, "--option", "stay-b", "--booked", "--on", YESTERDAY, "--via", "hotel website")
+        unedited = subprocess.run(save + ["--overwrite", "--verification", str(report_path)], capture_output=True, text=True)
+        check("e2e: a switch whose days still name the old hotel is refused at the save, naming it",
+              code == 0 and "EDIT: " in out and unedited.returncode != 0
+              and "still name Fixture Hotel A" in unedited.stdout + unedited.stderr,
+              (out[-400:], (unedited.stdout + unedited.stderr)[-600:]))
+        # The edit an agent makes for the EDIT lines: the days now name the hotel actually taken.
+        edited = json.loads(source.read_text(encoding="utf-8"))
+        edited["days"] = json.loads(json.dumps(edited["days"], ensure_ascii=False).replace("Fixture Hotel A", "Fixture Hotel B"))
+        source.write_text(json.dumps(edited, ensure_ascii=False), encoding="utf-8")
         switched = subprocess.run(save + ["--overwrite", "--verification", str(report_path)], capture_output=True, text=True)
         check("e2e: a switched hotel asks for its days' recheck", code == 0 and "STAY SWITCHED" in out
-              and switched.returncode != 0 and "days[" in switched.stderr,
+              and switched.returncode != 0 and "days[" in switched.stderr
+              and "still name Fixture Hotel A" not in switched.stdout + switched.stderr,
               (out[-200:], (switched.stdout + switched.stderr)[-600:]))
 
         # On the DELIVERED copy (the one a later conversation edits), the printed save runs as printed.
@@ -143,6 +153,12 @@ def main() -> int:
         check("switch_touches_only_its_group", plan["days"][2]["accommodation_option_id"] == "acc-sta-1")
         import bookings  # noqa: PLC0415
         check("the result passes the rules", not bookings.record_problems(plan, TODAY), bookings.record_problems(plan, TODAY))
+        edits = [l for l in out.splitlines() if l.startswith("EDIT: ")]
+        nxt = next((l for l in out.splitlines() if l.startswith("NEXT: ")), "")
+        check("a switch names every day still pointing the traveller at the old hotel",
+              "was Atholl Palace Hotel" in out and any("day 1" in l and "days[0].route.end" in l for l in edits)
+              and any("day 3" in l and "days[2].activities[0].name" in l for l in edits)
+              and nxt.startswith("NEXT: edit") and "Pitlochry Hydro Hotel" in nxt, out[-1500:])
 
     end_to_end_case()
 

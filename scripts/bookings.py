@@ -16,8 +16,14 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from urllib.parse import unquote_plus
 
 RECORD_STATES = ("chosen", "booked")
+# Blocks where naming a hotel the traveller did not take is not an instruction to go there: the
+# option cards themselves, the records, the evidence cited, the replan log, and what the traveller
+# typed. Everything else -- days, arrival notes, the overview -- tells the traveller where to go.
+NOT_DIRECTIONS = frozenset({"booking_options", "bookings", "sources", "replan_context", "intake_context",
+                            "profile_context", "ui_labels", "_contract", "_enums"})
 BOOKING_KINDS = ("flights", "ground_transport", "accommodations", "attraction_tickets", "rental_cars")
 
 
@@ -129,3 +135,61 @@ def record_problems(plan: dict, today: dt.date) -> list[str]:
                                     f"group's days sleep at (record_booking.py re-points them).")
                     break
     return problems
+
+
+def _strings(node: object, path: str):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from _strings(value, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, list):
+        for position, value in enumerate(node):
+            yield from _strings(value, f"{path}[{position}]")
+    elif isinstance(node, str):
+        yield path, node
+
+
+def stale_stay_mentions(plan: dict) -> list[str]:
+    """Places that still send the traveller to a hotel of a decided stay that they did not take.
+
+    A hotel switch re-points the days' accommodation_option_id, which is all code can do: the
+    check-in line, the route stops, the directions and the next morning's check-out are prose that
+    still names the old property, and the page navigates the traveller there. So once a stay is
+    decided, the name of every other hotel in its group is looked for outside the option cards, with
+    URLs decoded and the recorded hotel's own name taken out first (a sibling called "Hydro" is not
+    mentioned by "Pitlochry Hydro Hotel"). One sentence per day or block, naming every field.
+    """
+    index = option_index(plan)
+    decided: list[tuple[str, str, list[str]]] = []
+    for record in records(plan):
+        found = index.get(_text(record.get("option_id")))
+        if not found or found[0] != "accommodations":
+            continue
+        group = group_key("accommodations", found[1])
+        name = _text(found[1].get("property_name"))
+        others = sorted({_text(o.get("property_name")) for kind, o in index.values()
+                         if kind == "accommodations" and group_key(kind, o) == group
+                         and _text(o.get("property_name")) and _text(o.get("property_name")).casefold() != name.casefold()})
+        if name and others:
+            decided.append((group.split(":", 1)[1] or "the unnamed stay", name, others))
+    findings: dict[str, tuple[str, str, list[str]]] = {}
+    for key, value in plan.items():
+        if key in NOT_DIRECTIONS:
+            continue
+        for path, text in _strings(value, key):
+            folded = unquote_plus(text).casefold()
+            for group, name, others in decided:
+                searched = folded.replace(name.casefold(), " ")
+                for other in others:
+                    if other.casefold() in searched:
+                        day = re.match(r"days\[(\d+)\]", path)
+                        unit = f"day {plan['days'][int(day.group(1))].get('number', int(day.group(1)) + 1)}" \
+                            if day and isinstance(plan["days"][int(day.group(1))], dict) else path.split(".")[0]
+                        entry = findings.setdefault(f"{unit}\0{other}\0{name}", (group, unit, []))
+                        if path not in entry[2]:
+                            entry[2].append(path)
+    sentences = []
+    for label, (group, unit, paths) in findings.items():
+        _, other, name = label.split("\0")
+        sentences.append(f"{unit}: {len(paths)} field(s) still name {other}, but the traveller's recorded "
+                         f"stay for {group} is {name} -- edit them to the recorded stay: {', '.join(paths)}.")
+    return sentences

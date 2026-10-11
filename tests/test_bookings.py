@@ -137,6 +137,33 @@ def gate_cases() -> None:
     check("dangling_record (gate)", any("gone-1" in e for e in dangling), dangling)
     check("every finding names its reference", all("replanning.md#bookings" in e for e in dangling), dangling)
 
+    # A hotel switch re-points the days' id; the check-in line, the route stops and the next day's
+    # check-out still name the hotel the traveller did not take, and the page navigates them there.
+    switched = with_records(SELF_DRIVE, {"option_id": "acc-pit-2", "state": "chosen"})
+    for day in switched["days"]:
+        if day.get("accommodation_option_id") == "acc-pit-1":
+            day["accommodation_option_id"] = "acc-pit-2"
+    stale = run(switched)
+    check("stale_stay_names: each day still naming the untaken hotel is named, with its fields",
+          any("day 1" in e and "Atholl Palace Hotel" in e and "days[0].route.end" in e
+              and "Pitlochry Hydro Hotel" in e for e in stale)
+          and any("day 3" in e and "days[2].activities[0].name" in e for e in stale), stale)
+    renamed = copy.deepcopy(switched)
+    renamed["days"] = json.loads(json.dumps(renamed["days"]).replace("Atholl Palace Hotel", "Pitlochry Hydro Hotel"))
+    check("stale_stay_names: quiet once the days name the recorded stay", not run(renamed), run(renamed))
+    encoded = copy.deepcopy(renamed)
+    encoded["days"][1]["route"]["maps_url"] = "https://www.google.com/maps/dir/?api=1&destination=Atholl+Palace+Hotel"
+    check("stale_stay_names: a URL-encoded name counts", any("days[1].route.maps_url" in e for e in run(encoded)),
+          run(encoded))
+    contained = copy.deepcopy(renamed)
+    contained["booking_options"]["accommodations"][0]["property_name"] = "Pitlochry Hydro"
+    check("stale_stay_names: a sibling name inside the recorded name is not a mention", not run(contained),
+          run(contained))
+    undecided = copy.deepcopy(switched)
+    undecided["bookings"] = []
+    check("stale_stay_names: no record, no finding (plans saved before bookings are unchanged)",
+          not run(undecided), run(undecided))
+
 
 def main() -> int:
     rules_cases()

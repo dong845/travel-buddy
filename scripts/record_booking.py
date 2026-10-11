@@ -121,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     plan["bookings"] = [r for r in records if r.get("option_id") not in replaced] + [record]
 
     switched: list[int] = []
+    left: list[str] = []
     if kind == "accommodations":
         for day in plan.get("days") or []:
             current = index.get(str(day.get("accommodation_option_id") or ""))
@@ -128,6 +129,9 @@ def main(argv: list[str] | None = None) -> int:
                     and day.get("accommodation_option_id") != args.option:
                 day["accommodation_option_id"] = args.option
                 switched.append(day.get("number"))
+                name_left = current[1].get("property_name") or day.get("accommodation_option_id")
+                if name_left not in left:
+                    left.append(name_left)
 
     problems = bookings.record_problems(plan, today)
     if problems:
@@ -137,11 +141,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"REPLACED {', '.join(str(r) for r in replaced)} with {args.option} ({group})")
     else:
         print(f"RECORDED {args.option} as {record['state']} ({group})")
+    name = option.get("property_name") or args.option
     if switched:
-        name = option.get("property_name") or args.option
-        print(f"STAY SWITCHED: day(s) {', '.join(str(n) for n in switched)} now sleep at {name}"
+        print(f"STAY SWITCHED: day(s) {', '.join(str(n) for n in switched)} now sleep at {name} "
+              f"(was {', '.join(left)})"
               + (" -- they changed, so the save will ask for their recheck" if plan.get("verification_status") == "verified" else ""))
-    print(next_save(path, plan))
+    # Code moved the ids; the check-in lines, route stops and directions are prose, and only an edit
+    # moves them. The save refuses until they name the recorded stay, so say which, and say it first.
+    stale = bookings.stale_stay_mentions(plan)
+    for sentence in stale:
+        print(f"EDIT: {sentence}")
+    if stale:
+        print(f"NEXT: edit the field(s) above to name {name}. Then: " + next_save(path, plan)[len("NEXT: "):])
+    else:
+        print(next_save(path, plan))
     return 0
 
 
