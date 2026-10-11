@@ -720,6 +720,23 @@ def _flag_party(plan: dict, old_count: object, new_count: int, findings: Finding
             f"any per-vehicle cost need re-pricing for {new_count} traveller(s)."))
 
 
+def _flag_bookings(plan: dict, what_moved: str, findings: Findings) -> None:
+    """A purchase does not move with the plan. The option card is shifted like any other, but the
+    ticket or room the traveller paid for is still for the old dates and the old party, and the
+    page would keep calling it Booked. A `chosen` record is a decision, not a purchase, and stays."""
+    records = plan.get("bookings") if isinstance(plan.get("bookings"), list) else []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict) or record.get("state") != "booked":
+            continue
+        option = record.get("option_id")
+        findings.add(f"bookings[{index}]", (
+            f"'{option}' was recorded as booked (on {record.get('booked_on')}, via "
+            f"{record.get('booked_via')}) for the plan before {what_moved}; the purchase did not move "
+            f"with it. Change or rebook it with the provider, then record the result with "
+            f"python scripts/record_booking.py <plan.json> --option {option} --booked ..., or remove "
+            f"the record with --clear {option} if it was cancelled"))
+
+
 def _flag_cap(plan: dict, old_cap: object, new_cap: float, findings: Findings) -> None:
     """A lowered cap re-opens choices that were made under the old one."""
     budget = plan.get("budget") if isinstance(plan.get("budget"), dict) else {}
@@ -905,6 +922,11 @@ def main(argv: list[str] | None = None) -> int:
         _flag_activities(plan, delta, findings)
     if args.travellers is not None and args.travellers != old_travellers:
         _flag_party(plan, old_travellers, args.travellers, findings)
+    moved = [f"the dates moved {delta:+d} day(s)"] if delta else []
+    if args.travellers is not None and args.travellers != old_travellers:
+        moved.append(f"the party changed {old_travellers} -> {args.travellers}")
+    if moved:
+        _flag_bookings(plan, " and ".join(moved), findings)
     if cap_lowered:
         _flag_cap(plan, old_cap, args.cap, findings)
     prose_groups = _flag_prose(plan, delta, old_window, findings) if delta else {}

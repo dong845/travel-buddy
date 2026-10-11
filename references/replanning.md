@@ -154,4 +154,13 @@ booking reference, a document or a payment detail.
 The `bookings` block sits outside verification's fingerprints: a decision is the traveller's fact,
 not research, so a verified plan stays verified. The one exception is a hotel other than the one
 the days were planned around: the script re-points those days to it, and because the days really
-changed, the save asks for their recheck like any edit.
+changed, the save asks for their recheck like any edit. Re-pointing moves only the ids. The check-in
+line, the route stops, the directions and the next morning's check-out still name the old hotel, so
+the script prints an `EDIT:` line for each day that does. `check_bookings` refuses the plan until
+none of them names a hotel of that stay that the traveller did not take. Edit them to the
+recorded hotel before saving.
+
+A purchase does not move with a replan. When `replan_trip.py` shifts the dates or changes the
+party, every `booked` record becomes a `must_reverify` entry, because the ticket or room was bought
+for the old dates and the old party. Change or rebook it with the provider, then record the result
+again, or `--clear` it. A `chosen` record is a decision, not a purchase, and survives the replan.

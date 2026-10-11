@@ -384,6 +384,26 @@ def main() -> int:
              f"with --today after the shifted window, exit {code}, wrote "
              f"{'a plan' if shifted is not None else 'nothing'}:\n{out[-400:]}")
 
+    # 8. A booking does not move with the plan. A ticket bought for 28 September is not a ticket for
+    # the 29th, and a room paid for two is not a room for three; left alone the shifted page says
+    # "Booked" over dates and a party nobody bought for. A chosen record is a decision, not a
+    # purchase, and survives -- the option it names is shifted and re-flagged like any other card.
+    paid = copy.deepcopy(base)
+    paid["bookings"] = [{"option_id": "stay-a", "state": "booked", "booked_on": "2026-08-30",
+                         "booked_via": "hotel website", "paid_total": 900, "paid_currency": "CNY"}]
+    for label, argv in (("a date shift", ("--shift-days", "1")), ("a party change", ("--travellers", "3"))):
+        code, out, shifted = run_replan(paid, *argv)
+        flagged = cites(shifted, "bookings[0]")
+        if code != 0 or len(flagged) != 1 or "stay-a" not in str(flagged[0].get("reason")) \
+                or "record_booking.py" not in str(flagged[0].get("reason")):
+            fail(f"a booked record is re-flagged after {label}",
+                 f"exit {code}; bookings entries {flagged}\n{out[-400:]}")
+    decided = copy.deepcopy(base)
+    decided["bookings"] = [{"option_id": "stay-a", "state": "chosen"}]
+    code, out, shifted = run_replan(decided, "--shift-days", "1")
+    if code != 0 or cites(shifted, "bookings"):
+        fail("a chosen record is not a purchase and is not flagged", f"exit {code}; {cites(shifted, 'bookings')}")
+
     if failures:
         print(f"REPLAN FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:
