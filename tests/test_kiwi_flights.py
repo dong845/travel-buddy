@@ -294,7 +294,7 @@ def link_cases() -> None:
     cards = [kf.itinerary_to_card(DIRECT, with_infant, 0, "2026-10-11", single=False)]
     kf.attach_search_link(cards, DIRECT, with_infant, [],
                           opener=opener_with({"edinburgh-united-kingdom": "Amsterdam – Edinburgh trips"}, []))
-    check("with an infant, the party is not declared prefilled",
+    check("with an infant, the party is never declared prefilled",
           "travellers" not in cards[0]["round_trip_prefilled_fields"], cards[0]["round_trip_prefilled_fields"])
 
 
@@ -482,12 +482,65 @@ def test_live_endpoint() -> None:
     assert kf.usable_itineraries(payload, []), "the live endpoint returned no usable itinerary"
 
 
+def review_fix_cases() -> None:
+    """Four findings of the whole-branch review (2026-10-11), each pinned before its fix."""
+    # 1. A round trip whose two directions are flown by disjoint airlines is two tickets: neither
+    #    airline sells that fare, and change and refund terms differ per leg.
+    mixed = itin(195, [seg("KL", "KL933", "AMS", "EDI", "2026-11-20T09:10:00", "2026-11-20T09:40:00", name="KLM")],
+                 DIRECT["inbound"]["segments"])
+    adults_only = dict(REQUEST, children=0)
+    card = kf.itinerary_to_card(mixed, adults_only, 0, "2026-10-11", single=False)
+    check("a mixed-carrier round trip says it is two tickets", "separate" in card.get("price_note", ""),
+          card.get("price_note"))
+    zh = kf.itinerary_to_card(mixed, dict(adults_only, language="zh"), 0, "2026-10-11", single=False)
+    check("in Chinese too", "两张" in zh.get("price_note", ""), zh.get("price_note"))
+    check("a single-airline round trip does not", "price_note" not in kf.itinerary_to_card(
+        DIRECT, adults_only, 0, "2026-10-11", single=False))
+    code, out, _ = run(["--from", "AMS", "--to", "EDI", "--depart", "2026-11-20", "--return", "2026-11-24",
+                        "--adults", "2", "--currency", "EUR"], results=[{"itineraries": [mixed, KLM]}])
+    check("and the run names it", "MIXED CARRIERS" in out, out[-400:])
+
+    # 2. With an infant, `travellers` cannot be declared (Kiwi's infants parameter is unverified)
+    #    and the page gate requires it, so the Kiwi link would leave the author stuck. Not used.
+    infant_request = dict(REQUEST, adults=1, children=0, infants=1)
+    cards = [kf.itinerary_to_card(DIRECT, infant_request, 0, "2026-10-11", single=False)]
+    lines: list[str] = []
+    kf.attach_search_link(cards, DIRECT, infant_request, lines,
+                          opener=opener_with({"edinburgh-united-kingdom": "Amsterdam – Edinburgh trips"}, []))
+    check("with an infant the Kiwi page is not used", cards[0]["round_trip_search_url"].startswith("TODO:")
+          and "infant" in cards[0]["round_trip_search_url"], cards[0]["round_trip_search_url"])
+    check("and the run says why", any(l.startswith("LINK NOT USED") for l in lines), lines)
+
+    # 3. The endpoint says what it priced; a reply in another currency or for another party is not
+    #    this search's answer, and writing it would label EUR figures as CNY.
+    echo = {"itineraries": [DIRECT, KLM], "currency": "EUR", "passengers": {"adults": 2, "children": 2, "infants": 0}}
+    code, out, _ = run(ARGS, results=[echo])
+    check("a matching echo is accepted", code == 0, out[-300:])
+    code, out, _ = run([a if a != "EUR" else "CNY" for a in ARGS], results=[echo])
+    check("a reply in another currency is refused", code == 2 and "KIWI UNAVAILABLE" in out and "currency" in out, out[-300:])
+    code, out, _ = run(ARGS, results=[dict(echo, passengers={"adults": 1, "children": 0, "infants": 0})])
+    check("a reply for another party is refused", code == 2 and "passengers" in out, out[-300:])
+    code, out, stub = run([a if a != "EUR" else "eur" for a in ARGS], results=[echo])
+    sent = [c["body"]["params"]["arguments"].get("currency") for c in stub.calls if c["body"].get("method") == "tools/call"]
+    check("--currency is upper-cased", code == 0 and sent == ["EUR"], (code, sent, out[-200:]))
+
+    # 4. Traveller-visible totals print as amounts, never in exponent form.
+    yen = dict(REQUEST, currency="JPY")
+    big = dict(DIRECT, price=1250000)
+    note = kf.itinerary_to_card(big, yen, 0, "2026-10-11", single=False)["price_note"]
+    check("a large total prints in full", "1,250,000 JPY" in note and "e+" not in note, note)
+    odd = dict(DIRECT, price=123456.7)
+    note = kf.itinerary_to_card(odd, yen, 0, "2026-10-11", single=False)["price_note"]
+    check("a fractional total keeps its cents", "123,456.70" in note, note)
+
+
 def main() -> int:
     client_cases()
     mapping_cases()
     link_cases()
     cli_cases()
     end_to_end_case()
+    review_fix_cases()
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:

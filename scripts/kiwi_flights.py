@@ -303,6 +303,20 @@ def _connection_summary(itinerary: dict, zh: bool) -> str:
     return ("；" if zh else "; ").join((part(outbound, "Outbound", "去程"), part(inbound, "return", "回程")))
 
 
+def _amount(value: float) -> str:
+    """A total as a person reads it: 1,250,000 -- never 1.25e+06, which `:g` printed for a JPY party."""
+    return f"{int(value):,}" if float(value).is_integer() else f"{value:,.2f}"
+
+
+def _mixed_carriers(itinerary: dict) -> tuple[list[str], list[str]] | None:
+    """The airlines of each direction when the two share none: a round trip sold as two tickets."""
+    def names(leg: dict) -> list[str]:
+        return list(dict.fromkeys(s.get("carrierName") or s["carrier"] for s in leg["segments"]))
+    out = {s["carrier"] for s in itinerary["outbound"]["segments"]}
+    back = {s["carrier"] for s in itinerary["inbound"]["segments"]}
+    return None if out & back else (names(itinerary["outbound"]), names(itinerary["inbound"]))
+
+
 def _party_words(request: dict, zh: bool) -> str:
     parts = []
     for key, en, cn in (("adults", "adult", "位成人"), ("children", "child", "位儿童"), ("infants", "infant", "位婴儿")):
@@ -387,11 +401,25 @@ def itinerary_to_card(itinerary: dict, request: dict, index: int, checked_at: st
         "price_checked_at": checked_at,
         "airport_transfer_note": todo + "how the traveller gets from the arrival airport into town",
     }
+    notes = []
     if request["children"] or request["infants"]:
-        card["price_note"] = (f"全团合计 {total:g} {request['currency']}（{_party_words(request, True)}），此处为人均平均值。"
-                              if zh else
-                              f"Party total {total:g} {request['currency']} for {_party_words(request, False)}; "
-                              f"shown as an average per person.")
+        notes.append(f"全团合计 {_amount(total)} {request['currency']}（{_party_words(request, True)}），此处为人均平均值。"
+                     if zh else
+                     f"Party total {_amount(total)} {request['currency']} for {_party_words(request, False)}; "
+                     f"shown as an average per person.")
+    # Disjoint airlines out and back (KLM out, easyJet back: 9 of 15 recorded Amsterdam-Edinburgh
+    # results) are two tickets. Neither airline sells the pair, and each leg changes and refunds on
+    # its own terms -- which a card headed "round trip" would otherwise hide.
+    mixed = _mixed_carriers(itinerary)
+    if mixed:
+        out_names, back_names = ("、".join(mixed[0]), "、".join(mixed[1])) if zh else \
+            (", ".join(mixed[0]), ", ".join(mixed[1]))
+        notes.append(f"去程（{out_names}）和回程（{back_names}）是不同航司的两张票，各自预订、改签和退款，条款不同。"
+                     if zh else
+                     f"Outbound ({out_names}) and return ({back_names}) are separate tickets with different "
+                     f"airlines: each is booked, changed and refunded on its own terms.")
+    if notes:
+        card["price_note"] = (" " if not zh else "").join(notes)
     if single:
         card["single_option_reason"] = ("Kiwi.com 在这些日期没有返回航司不同或出发时间相差两小时以上的第二个方案。"
                                         if zh else
@@ -482,6 +510,17 @@ def prefilled_fields(url: str, card: dict, request: dict) -> list[str]:
 
 def attach_search_link(cards: list[dict], itinerary: dict, request: dict, lines: list[str],
                        opener=urllib.request.urlopen) -> None:
+    if request["infants"]:
+        # The page gate requires `travellers` on every flight search button, and Kiwi's `infants`
+        # parameter was never checked on a rendered page, so `travellers` cannot be declared: a
+        # verified Kiwi link would only leave the author stuck behind a refusal they cannot fix.
+        for card in cards:
+            card["round_trip_search_url"] = ("TODO: a dated round-trip search that carries the whole party, "
+                                             "infants included -- Kiwi's infants parameter is unverified, so "
+                                             "its page is not used")
+        lines.append("LINK NOT USED: the party includes infants, and Kiwi's search page was never checked to "
+                     "carry them; find a dated search on another platform that does")
+        return
     url = search_page_url(itinerary, request)
     first = itinerary["outbound"]["segments"][0]
     last = itinerary["outbound"]["segments"][-1]
@@ -501,6 +540,25 @@ def attach_search_link(cards: list[dict], itinerary: dict, request: dict, lines:
     else:
         lines.append(f"LINK NOT VERIFIED {url} -- its title did not name both cities; find another "
                      f"dated comparison search for round_trip_search_url")
+
+
+def echo_problems(payload: dict, request: dict) -> list[str]:
+    """Where the reply says it priced something other than what was asked.
+
+    Every recorded reply echoes `currency` and `passengers`. A reply in another currency would put
+    EUR figures under a CNY label; one for another party would be divided by the wrong head count.
+    """
+    problems = []
+    currency = payload.get("currency")
+    if isinstance(currency, str) and currency.strip() and currency.strip().upper() != request["currency"].upper():
+        problems.append(f"the reply is priced in currency {currency}, not {request['currency']}")
+    passengers = payload.get("passengers")
+    if isinstance(passengers, dict):
+        asked = {key: request[key] for key in ("adults", "children", "infants")}
+        echoed = {key: passengers.get(key) for key in asked if key in passengers}
+        if any(echoed[key] != asked[key] for key in echoed):
+            problems.append(f"the reply's passengers are {echoed}, not {asked}")
+    return problems
 
 
 def _is_filled_card(card: object) -> bool:
@@ -558,7 +616,7 @@ def main(argv: list[str] | None = None, client: KiwiClient | None = None,
 
     plan = None
     language = args.language or "en"
-    currency = args.currency or "EUR"
+    currency = (args.currency or "EUR").upper()
     if args.into:
         try:
             plan = json.loads(Path(args.into).read_text(encoding="utf-8"))
@@ -572,7 +630,7 @@ def main(argv: list[str] | None = None, client: KiwiClient | None = None,
             return _refuse(f"the search is for {party} travellers but trip.traveler_count is "
                            f"{trip.get('traveler_count')!r}; the cards must price the plan's own party")
         plan_currency = trip.get("currency")
-        if args.currency and plan_currency and args.currency != plan_currency:
+        if args.currency and plan_currency and args.currency.upper() != str(plan_currency).upper():
             return _refuse(f"--currency {args.currency} differs from trip.currency {plan_currency}; "
                            f"cards are priced in the plan's currency")
         currency = plan_currency or currency
@@ -600,10 +658,16 @@ def main(argv: list[str] | None = None, client: KiwiClient | None = None,
     client = client or KiwiClient()
     lines: list[str] = []
     try:
-        safe = usable_itineraries(client.search(search_arguments(request)), lines)
+        def search(permissive: bool) -> dict:
+            payload = client.search(search_arguments(request, permissive=permissive))
+            problems = echo_problems(payload, request)
+            if problems:
+                raise KiwiUnavailable("; ".join(problems))
+            return payload
+        safe = usable_itineraries(search(False), lines)
         itineraries = safe
         if args.accept_self_transfer:
-            permissive = usable_itineraries(client.search(search_arguments(request, permissive=True)), lines)
+            permissive = usable_itineraries(search(True), lines)
             itineraries = mark_self_transfer(safe, permissive)
     except KiwiUnavailable as exc:
         print(f"KIWI UNAVAILABLE: {exc}. Research flights as before and say so in the hand-off.", file=sys.stderr)
@@ -624,6 +688,10 @@ def main(argv: list[str] | None = None, client: KiwiClient | None = None,
     for candidate, card in zip(candidates, cards):
         flag = " (self-transfer)" if candidate.get("_self_transfer") else ""
         print(f"CANDIDATE {card['id']}: {card['provider']} {card['fare_low']} {currency} per person{flag}")
+        mixed = _mixed_carriers(candidate)
+        if mixed:
+            print(f"MIXED CARRIERS {card['id']}: outbound {', '.join(mixed[0])}, return {', '.join(mixed[1])} -- "
+                  f"two tickets; the card's price note says so")
 
     if plan is None:
         print(json.dumps(cards, ensure_ascii=False, indent=1))
