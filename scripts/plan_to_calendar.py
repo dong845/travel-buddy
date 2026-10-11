@@ -109,6 +109,7 @@ WORDS = {
            "pickup": "取车 — {provider}", "dropoff": "还车 — {provider}"},
 }
 TRANSPORT_KINDS = ("flights", "ground_transport", "rental_cars")
+_MERIDIEM = re.compile(r"\s*(a\.?m\.?|p\.?m\.?)(?![a-z])", re.IGNORECASE)
 _CLOCK_SPAN = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*(?:[–—\-~至]\s*(\d{1,2}):(\d{2}))?")
 
 
@@ -136,13 +137,25 @@ def _clock_span(day_date: object, text: object, *, whole: bool = True) -> tuple[
     """
     raw = str(text or "")
     match = _CLOCK_SPAN.match(raw)
-    if not match or (whole and raw[match.end():].strip()):
-        return None
+    if not match or (whole and raw[match.end():].strip()) or _MERIDIEM.match(raw[match.end():]):
+        return None  # "7:00 PM" read as 07:00 would be a confident lie, with a reminder on it
     start = _on(day_date, match.group(1), match.group(2))
     end = _on(day_date, match.group(3), match.group(4)) if match.group(3) else None
     if start is None:
         return None
     return start, end if end is not None and end > start else start
+
+
+def _aware(value: object) -> dt.datetime | None:
+    """An ISO date-time that carries its own offset ('…+09:00', '…Z'), else None."""
+    text = str(value or "").strip()
+    if not re.search(r"(Z|[+-]\d{2}:?\d{2})$", text):
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
 
 
 def _booking_line(record: dict, words: dict) -> str:
@@ -154,8 +167,8 @@ def _booking_line(record: dict, words: dict) -> str:
 _NO_BOOKING = re.compile(
     r"(无需|不需|不用|不接受|不可|不能)\s*(提前)?\s*(预订|订位|预约)"
     r"|\bno (booking|reservation)s?\b|\bno need to book\b|walk-?ins? only"
-    r"|\b(booking|reservation)s? (are |is )?(not|aren't|isn't) (required|needed|accepted|taken)\b"
-    r"|\bnot (required|needed|accepted)\b", re.IGNORECASE)
+    r"|\b(booking|reservation)s? (are |is )?(not|aren't|isn't) (required|needed|accepted|taken)\b",
+    re.IGNORECASE)  # negation tied to the booking noun: "walk-ins not accepted" is a must-book note
 _BOOKING = re.compile(r"订位|预订|预约|致电|提前订|\bbook(ing|ed)?\b|reserv|call ahead|phone ahead", re.IGNORECASE)
 
 
@@ -377,6 +390,8 @@ def build_with_summary(plan: dict) -> tuple[str, dict[str, int], dict]:
             card = _obj(card)
             span = _clock_span(day.get("date"), card.get("time_window"), whole=False)
             if not span:
+                if str(card.get("time_window") or "").strip():
+                    unparsed.append(f"day {day.get('number')}: {card.get('venue_name') or 'meal'} ({card.get('time_window')})")
                 continue
             note = str(card.get("reservation_or_queue_note") or "")
             local = local_line(f"{span[0]:%H:%M}–{span[1]:%H:%M}", zone_name)
@@ -407,12 +422,17 @@ def build_with_summary(plan: dict) -> tuple[str, dict[str, int], dict]:
         if decided.get(str(ticket.get("id") or ""), {}).get("state") == "booked":
             continue  # bought: a "tickets on sale" alarm would send the traveller to buy it again
         sale = _obj(ticket.get("sale_opens_at"))
-        moment, _ = tz.local_moment(sale.get("opens_at"), None) if str(sale.get("status")) == "scheduled_release" else (None, False)
-        if moment is None:
-            continue
-        day = days_by_number.get(ticket.get("day_number"))
-        zone_name = tz.day_zone(plan, day) if day else tz.zone_on(plan, moment.date())
-        start = timed(moment, zone_name)
+        opens = sale.get("opens_at") if str(sale.get("status")) == "scheduled_release" else None
+        aware = _aware(opens)
+        if aware is not None:
+            start = _utc(aware)  # the value states its own offset: that instant, whatever the day's zone
+        else:
+            moment, _ = tz.local_moment(opens, None)
+            if moment is None:
+                continue
+            day = days_by_number.get(ticket.get("day_number"))
+            zone_name = tz.day_zone(plan, day) if day else tz.zone_on(plan, moment.date())
+            start = timed(moment, zone_name)
         body += event(f"ticket{number}{start}",
                       f"{ticket.get('attraction_name')} — tickets on sale",
                       start, start, description=str(sale.get("basis") or ""),

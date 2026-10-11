@@ -2940,6 +2940,10 @@ def dining_hours_line(item: dict, day_date: object = None) -> str:
 
 def reservation_need_label(item: dict) -> str:
     need = item.get("reservation_need")
+    if isinstance(need, str) and need.startswith("TODO"):
+        # Printed, so the page gate's TODO scan refuses the page: a skeleton still renders, and an
+        # unfilled need cannot ship as a card with no reminder rule.
+        return f'<span class="reservation-need">{esc(need)}</span> · '
     if need not in RESERVATION_NEED_ENGLISH:
         return ""
     return f'<span class="reservation-need" data-reservation-need="{need}">{RESERVATION_NEED_ENGLISH[need]}</span> · '

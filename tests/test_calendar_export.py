@@ -166,6 +166,30 @@ def decision_and_zone_cases(report) -> None:
           not by_summary(CAL.build_with_summary({**ticket_plan, "bookings": [{"option_id": "tk-1", "state": "booked",
                                                   "booked_on": "2026-10-10", "booked_via": "site"}]})[0], "on sale"))
 
+    # A sale time written with its own offset is that instant, whatever the visit day's zone.
+    def sale_start(opens_at: str) -> str:
+        plan = {"trip": {"timezone": "Europe/London", "origin_timezone": "Europe/London"},
+                "booking_options": {"attraction_tickets": [{"id": "tk-1", "attraction_name": "Castle",
+                    "sale_opens_at": {"status": "scheduled_release", "opens_at": opens_at, "basis": "site"}}]}}
+        found = by_summary(CAL.build_with_summary(plan)[0], "on sale")
+        return found[0].get("DTSTART", "") if found else ""
+    check("a +09:00 sale time is its own instant", sale_start("2026-12-01T12:00:00+09:00") == "20261201T030000Z",
+          sale_start("2026-12-01T12:00:00+09:00"))
+    check("a Z sale time is UTC", sale_start("2026-10-10T09:30:00Z") == "20261010T093000Z", sale_start("2026-10-10T09:30:00Z"))
+    check("a naive sale time takes the trip zone", sale_start("2026-10-10 09:30") == "20261010T083000Z", sale_start("2026-10-10 09:30"))
+
+    # A 12-hour window is not read as morning: no event, and it is named.
+    twelve = {"days": [{"number": 1, "date": "2026-10-17", "dining": [
+        {"venue_name": "Evening", "time_window": "7:00 PM–9:00 PM"}, {"venue_name": "Late", "time_window": "7:00–9:00 pm"}]}]}
+    body, _, summary = CAL.build_with_summary(twelve)
+    check("a 12-hour window makes no 07:00 event", not by_summary(body, "Evening") and not by_summary(body, "Late"),
+          [e.get("DTSTART") for e in events(body)])
+    check("and is named as not understood", sum("Evening" in u or "Late" in u for u in summary["unparsed"]) == 2, summary)
+
+    # Negation belongs to the booking noun: "walk-ins not accepted" is a must-book note.
+    check("'walk-ins not accepted' still reminds", meal_alarm("Reservations required; walk-ins not accepted."))
+    check("'cards not accepted' still reminds", meal_alarm("Book ahead; cards not accepted."))
+
     # zh_descriptions: a Chinese plan's calendar lines are Chinese.
     zh = json.loads(json.dumps(decided))
     zh["trip"]["language"] = "zh-CN"

@@ -45,6 +45,10 @@ def main() -> int:
     check("every fixture card states its need",
           all(c.get("reservation_need") in renderer.RESERVATION_NEEDS for d in SELF_DRIVE["days"] for c in d["dining"]),
           [c.get("reservation_need") for d in SELF_DRIVE["days"] for c in d["dining"]])
+    import validate_trip_html as htmlgate  # noqa: PLC0415
+    todo_page = renderer.render(with_need("TODO: required | recommended | walk_in | not_accepted"))
+    check("a TODO need is printed, so the page gate's TODO scan refuses the page",
+          "TODO: required" in htmlgate.visible_text(todo_page))
     for value in renderer.RESERVATION_NEEDS + (None, "TODO: required | recommended | walk_in | not_accepted"):
         errors = [e for e in renderer.validate_plan(with_need(value)) if "reservation_need" in e]
         check(f"validate_plan accepts {value!r}", not errors, errors)

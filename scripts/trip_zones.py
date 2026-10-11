@@ -217,9 +217,15 @@ def zone_problems(plan: dict) -> list[str]:
     """Every zone that is not a zone, every leg that cannot be placed, every zone a duration refutes."""
     problems: list[str] = []
     known = database_available()
+    placeholders = [path for path, value in named_zones(plan) if _placeholder(value)]
+    if placeholders:
+        # Refused here because nothing else can: the page never prints a zone, so the HTML gate's
+        # TODO scan does not see it, and a plan saved with one gets a floating calendar.
+        problems.append(f"{', '.join(placeholders)} still hold a TODO placeholder: write each IANA time "
+                        f"zone (Europe/London, Asia/Tokyo).")
     for path, value in named_zones(plan):
         if _placeholder(value):
-            continue  # the placeholder gate owns a TODO
+            continue
         if not _text(value):
             problems.append(f"{path} must be an IANA time zone name such as Europe/London, or null.")
         elif known and zone(value) is None:

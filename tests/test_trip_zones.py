@@ -127,8 +127,9 @@ def gate_cases() -> None:
           tz.zone_problems(invalid))
     placeholder = copy.deepcopy(SELF_DRIVE)
     placeholder["trip"]["timezone"] = "TODO: IANA time zone of the destination"
-    check("a TODO is the placeholder gate's finding, not this one's", not tz.zone_problems(placeholder),
-          tz.zone_problems(placeholder))
+    problems = tz.zone_problems(placeholder)
+    check("a TODO zone is refused here: the page never prints a zone, so no other gate sees it",
+          any("trip.timezone" in p and "TODO" in p for p in problems), problems)
 
     real_known = tz._known
     tz._known = lambda: frozenset()
@@ -155,9 +156,13 @@ def skeleton_cases() -> None:
         capture_output=True, text=True)
     check("the scaffold runs", scaffold.returncode == 0, scaffold.stderr[-300:])
     if scaffold.returncode == 0:
-        trip = json.loads(scaffold.stdout)["trip"]
+        skeleton = json.loads(scaffold.stdout)
+        trip = skeleton["trip"]
         check("the scaffold asks for both trip zones",
               str(trip.get("timezone")).startswith("TODO:") and str(trip.get("origin_timezone")).startswith("TODO:"), trip)
+        problems = tz.zone_problems(skeleton)
+        check("and the save path refuses it until both are filled",
+              any("trip.timezone" in p and "trip.origin_timezone" in p for p in problems), problems)
 
 
 def main() -> int:
