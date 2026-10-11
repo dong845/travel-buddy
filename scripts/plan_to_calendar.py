@@ -13,11 +13,15 @@ of ours.
 It also carries the two things a page cannot: a reminder that fires, and a time the traveller has
 to be somewhere. "Only 24 seats, call ahead" is a sentence on a page; it is an alarm in a calendar.
 
-FLOATING LOCAL TIME, on purpose. Events carry no TZID and no trailing Z, which RFC 5545 calls
-floating: the time shows as written, wherever the reader is. That is what a travel itinerary means
--- "19:00" is 19:00 in Lucerne whether you look at it from Amsterdam or from the train -- and it is
-why an itinerary pinned to the AUTHOR's timezone would show the traveller the wrong hour for every
-event on the trip.
+UTC FROM THE PLAN'S OWN ZONES. Only Apple Calendar shows a floating (zone-less) time as written:
+Outlook converts it to the phone's zone at import ([MS-STANOICAL]) and Google Calendar does not
+support it, so a Tokyo dinner imported at home in Amsterdam showed at the Amsterdam hour. Where
+scripts/trip_zones.py resolves an event's zone it is written in UTC, which every client converts to
+the phone's zone, and the description states the local time and zone. Where it cannot (a plan saved
+before zones existed) the event is floating as before, and the summary says so.
+
+ONLY WHAT THE TRAVELLER DECIDED. A flight, rail leg or rental car enters once scripts/bookings.py
+records it as chosen or booked; the undecided groups are counted, never exported as candidates.
 
 WHAT IT DOES NOT DO. It invents nothing. An event exists only where the plan already carries a
 time: flight and rail itineraries, dining windows, timed activities, accommodation windows, and a
@@ -34,6 +38,10 @@ import json
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bookings  # noqa: E402 - which option the traveller decided
+import trip_zones as tz  # noqa: E402 - which zone each event happens in
 
 PRODID = "-//travel-buddy//trip plan//EN"
 
@@ -94,6 +102,63 @@ def _plus_minutes(stamp: str, minutes: float) -> str:
     return moment.strftime("%Y%m%dT%H%M%S")
 
 
+WORDS = {
+    "en": {"local": "Local time", "booked": "Booked via {via} on {on}", "chosen": "Chosen — not booked yet",
+           "pickup": "Pick up car — {provider}", "dropoff": "Return car — {provider}"},
+    "zh": {"local": "当地时间", "booked": "已订：{via}，{on}", "chosen": "已选，尚未预订",
+           "pickup": "取车 — {provider}", "dropoff": "还车 — {provider}"},
+}
+TRANSPORT_KINDS = ("flights", "ground_transport", "rental_cars")
+_CLOCK_SPAN = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*(?:[–—\-~至]\s*(\d{1,2}):(\d{2}))?")
+
+
+def _utc(moment: dt.datetime) -> str:
+    return moment.astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _floating(moment: dt.datetime) -> str:
+    return moment.strftime("%Y%m%dT%H%M%S")
+
+
+def _on(day_date: object, hour: str, minute: str) -> dt.datetime | None:
+    date = _date(day_date)
+    try:
+        return dt.datetime.strptime(f"{date}{int(hour):02d}{minute}", "%Y%m%d%H%M") if date else None
+    except ValueError:
+        return None
+
+
+def _clock_span(day_date: object, text: object, *, whole: bool = True) -> tuple[dt.datetime, dt.datetime] | None:
+    """'9:30', '09:30' or '09:30–11:00' on the day's date; an end not after the start is the start.
+
+    A meal's window may trail words ("19:00–20:30, early sitting"), as it always could (whole=False);
+    an activity's time must be only a time or a range, or it is reported as not understood.
+    """
+    raw = str(text or "")
+    match = _CLOCK_SPAN.match(raw)
+    if not match or (whole and raw[match.end():].strip()):
+        return None
+    start = _on(day_date, match.group(1), match.group(2))
+    end = _on(day_date, match.group(3), match.group(4)) if match.group(3) else None
+    if start is None:
+        return None
+    return start, end if end is not None and end > start else start
+
+
+def _booking_line(record: dict, words: dict) -> str:
+    if record.get("state") == "booked":
+        return words["booked"].format(via=record.get("booked_via") or "?", on=record.get("booked_on") or "?")
+    return words["chosen"]
+
+
+_NO_BOOKING = re.compile(
+    r"(无需|不需|不用|不接受|不可|不能)\s*(提前)?\s*(预订|订位|预约)"
+    r"|\bno (booking|reservation)s?\b|\bno need to book\b|walk-?ins? only"
+    r"|\b(booking|reservation)s? (are |is )?(not|aren't|isn't) (required|needed|accepted|taken)\b"
+    r"|\bnot (required|needed|accepted)\b", re.IGNORECASE)
+_BOOKING = re.compile(r"订位|预订|预约|致电|提前订|\bbook(ing|ed)?\b|reserv|call ahead|phone ahead", re.IGNORECASE)
+
+
 def _date(value: object) -> str | None:
     match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", str(value or "").strip())
     return "".join(match.groups()) if match else None
@@ -140,12 +205,19 @@ def event(uid_seed: str, summary: str, start: str, end: str | None, *,
 
 
 def _needs_booking(note: object) -> bool:
-    """Does this card say the traveller has to do something in advance?"""
+    """Does this card's note say the traveller has to do something in advance? Negation first:
+    "Reservations not accepted" names a reservation and needs none."""
     text = str(note or "")
-    if re.search(r"(无需|不需|不接受)\s*(预订|订位)", text) or "no reservation" in text.casefold():
-        return False
-    return bool(re.search(r"(订位|预订|致电|预约)", text)
-                or "reserv" in text.casefold() or "book ahead" in text.casefold())
+    return not _NO_BOOKING.search(text) and bool(_BOOKING.search(text))
+
+
+def _meal_alarm(card: dict) -> int | None:
+    need = card.get("reservation_need")
+    if need in ("required", "recommended"):
+        return 1440
+    if need in ("walk_in", "not_accepted"):
+        return None
+    return 1440 if _needs_booking(card.get("reservation_or_queue_note")) else None
 
 
 def _dtstamp(plan: dict) -> str:
@@ -176,52 +248,104 @@ def _dtstamp(plan: dict) -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def build(plan: dict) -> tuple[str, dict[str, int]]:
+def build_with_summary(plan: dict) -> tuple[str, dict[str, int], dict]:
     trip = _obj(plan.get("trip"))
     stamp = _dtstamp(plan)
+    words = WORDS["zh" if str(trip.get("language") or "").lower().startswith("zh") else "en"]
     title = str(trip.get("title") or trip.get("destination") or "Trip")
     body: list[str] = ["BEGIN:VCALENDAR", "VERSION:2.0", f"PRODID:{PRODID}",
                        "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
                        f"X-WR-CALNAME:{_text(title)}"]
-    counts = {"flight": 0, "rail": 0, "stay": 0, "meal": 0, "activity": 0, "ticket": 0, "day": 0}
+    counts = {"flight": 0, "rail": 0, "car": 0, "stay": 0, "meal": 0, "activity": 0, "ticket": 0, "day": 0}
+    unparsed: list[str] = []
+    floating = False
+
+    def timed(moment: dt.datetime, zone_name: str | None) -> str:
+        nonlocal floating
+        if zone_name:
+            return _utc(tz.to_utc(moment, zone_name))
+        floating = True
+        return _floating(moment)
+
+    def local_line(text: str, zone_name: str | None) -> str:
+        return f"{words['local']}: {text} {zone_name}" if zone_name else ""
+
+    index = bookings.option_index(plan)
+    decided = {oid: r for oid, r in bookings.record_by_option(plan).items()
+               if r.get("state") in bookings.RECORD_STATES and oid in index}
+    decided_groups = {bookings.group_key(*index[oid]) for oid in decided}
+    undecided = sorted({bookings.group_key(kind, option) for kind, option in index.values()
+                        if kind in TRANSPORT_KINDS} - decided_groups)
 
     booking = _obj(plan.get("booking_options"))
     for kind, key in (("flight", "flights"), ("rail", "ground_transport")):
-        for index, item in enumerate(_seq(booking.get(key))):
+        for number, item in enumerate(_seq(booking.get(key))):
             item = _obj(item)
-            for leg, label in (("outbound_itinerary", ""), ("return_itinerary", "")):
+            record = decided.get(str(item.get("id") or ""))
+            if record is None:
+                continue
+            for leg, date_key in tz.LEGS:
                 itin = _obj(item.get(leg))
-                start = _stamp(itin.get("departure_local"))
-                if not start:
+                start_local, _ = tz.local_moment(itin.get("departure_local"), item.get(date_key))
+                if start_local is None:
                     continue
-                end = _stamp(itin.get("arrival_local")) or start
                 duration = itin.get("duration_minutes")
-                if end < start:
-                    # Local clocks across the date line: Tokyo 19:05 lands in Honolulu at 07:10 the
-                    # same date. Events here are floating local times, so start + duration gives a
-                    # valid event of the right length, not the arrival clock -- RFC 5545 forbids
-                    # DTEND before DTSTART, and calendars reject or mangle such an event.
-                    end = (_plus_minutes(start, duration)
-                           if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration > 0
-                           else start)
+                has_duration = isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration > 0
+                span = tz.itinerary_span(plan, item, leg, date_key)
+                if span is not None:
+                    start_utc, end_utc = span
+                    if end_utc is None or end_utc < start_utc:
+                        end_utc = start_utc + dt.timedelta(minutes=duration) if has_duration else start_utc
+                    departure_zone, arrival_zone = tz.itinerary_zones(plan, itin)
+                    start, end = _utc(start_utc), _utc(end_utc)
+                    arrives = end_utc.astimezone(tz.zone(arrival_zone)).strftime("%H:%M")
+                    local = f"{words['local']}: {start_local:%H:%M} {departure_zone} → {arrives} {arrival_zone}"
+                else:
+                    # Floating, as before zones existed -- including the date-line patch: RFC 5545
+                    # forbids DTEND before DTSTART, so start + duration gives the right length.
+                    floating = True
+                    start = _floating(start_local)
+                    end_local, _ = tz.local_moment(itin.get("arrival_local"), start_local.date().isoformat())
+                    end = _floating(end_local) if end_local else start
+                    if end < start:
+                        end = _plus_minutes(start, duration) if has_duration else start
+                    local = ""
                 service = str(itin.get("service_identifier") or "")
                 where = " → ".join(x for x in (item.get("origin_airport") or item.get("origin_station"),
                                                item.get("destination_airport") or item.get("destination_station"))
                                    if x)
                 if leg == "return_itinerary":
-                    # NOT the outbound pair reversed. The contract carries one origin/destination
-                    # pair per item, so on an open-jaw trip the return's real airports are not in
-                    # any structured field -- they live in connection_or_terminal_note. Reversing
-                    # produced "KL1924 GVA → AMS" for a flight that leaves ZURICH, which is the
-                    # exact class of confident-and-wrong this whole skill exists to prevent, and it
-                    # would have been the line the traveller read at the airport. Where the plan
-                    # cannot say it, the calendar does not either: the note carries the truth.
+                    # NOT the outbound pair reversed: on an open-jaw trip the return's real airports
+                    # are in no structured field, only in connection_or_terminal_note. Reversing
+                    # produced "KL1924 GVA → AMS" for a flight that leaves ZURICH.
                     where = ""
-                body += event(f"{kind}{index}{leg}{start}", f"{service} {where}".strip(),
-                              start, end, location=where,
-                              description=str(itin.get("connection_or_terminal_note") or ""),
+                description = "\n".join(x for x in (local, _booking_line(record, words),
+                                                    str(itin.get("connection_or_terminal_note") or "")) if x)
+                body += event(f"{kind}{number}{leg}{start}", f"{service} {where}".strip(),
+                              start, end, location=where, description=description,
                               alarm_minutes=180 if kind == "flight" else 45, stamp=stamp)
                 counts[kind] += 1
+
+    for number, car in enumerate(_seq(booking.get("rental_cars"))):
+        car = _obj(car)
+        record = decided.get(str(car.get("id") or ""))
+        if record is None:
+            continue
+        provider = str(car.get("provider") or car.get("direct_provider") or "")
+        for which, time_key, place_key in (("pickup", "pickup_time", "pickup_location"),
+                                           ("dropoff", "dropoff_time", "dropoff_location")):
+            moment, _ = tz.local_moment(car.get(time_key), None)
+            if moment is None:
+                if car.get(time_key):
+                    unparsed.append(f"{provider or 'rental car'} {time_key} ({car.get(time_key)})")
+                continue
+            zone_name = tz.zone_on(plan, moment.date())
+            start = timed(moment, zone_name)
+            description = "\n".join(x for x in (local_line(f"{moment:%H:%M}", zone_name), _booking_line(record, words)) if x)
+            body += event(f"car{number}{which}{start}", words[which].format(provider=provider).rstrip(" —"),
+                          start, start, location=str(car.get(place_key) or ""), description=description,
+                          alarm_minutes=60, stamp=stamp)
+            counts["car"] += 1
 
     stays = {str(_obj(a).get("id")): _obj(a) for a in _seq(booking.get("accommodations"))}
     used: set[str] = set()
@@ -243,46 +367,82 @@ def build(plan: dict) -> tuple[str, dict[str, int]]:
         date = _date(day.get("date"))
         if not date:
             continue
+        zone_name = tz.day_zone(plan, day)
         body += event(f"day{date}", str(day.get("title") or f"Day {day.get('number')}"),
                       date, None, all_day=True,
                       description=str(day.get("focus") or ""),
                       location=str(day.get("base_location") or ""), stamp=stamp)
         counts["day"] += 1
-        for index, card in enumerate(_seq(day.get("dining"))):
+        for number, card in enumerate(_seq(day.get("dining"))):
             card = _obj(card)
-            span = _window(day.get("date"), card.get("time_window"))
+            span = _clock_span(day.get("date"), card.get("time_window"), whole=False)
             if not span:
                 continue
-            note = card.get("reservation_or_queue_note")
-            body += event(f"meal{date}{index}", str(card.get("venue_name") or "Meal"),
-                          span[0], span[1],
+            note = str(card.get("reservation_or_queue_note") or "")
+            local = local_line(f"{span[0]:%H:%M}–{span[1]:%H:%M}", zone_name)
+            body += event(f"meal{date}{number}", str(card.get("venue_name") or "Meal"),
+                          timed(span[0], zone_name), timed(span[1], zone_name),
                           location=str(card.get("neighborhood") or ""),
-                          description=str(note or ""),
-                          alarm_minutes=1440 if _needs_booking(note) else None, stamp=stamp)
+                          description="\n".join(x for x in (local, note) if x),
+                          alarm_minutes=_meal_alarm(card), stamp=stamp)
             counts["meal"] += 1
-        for index, act in enumerate(_seq(day.get("activities"))):
+        for number, act in enumerate(_seq(day.get("activities"))):
             act = _obj(act)
-            start = _stamp(f"{day.get('date')} {act.get('time')}") if act.get("time") else None
-            if not start:
+            raw = str(act.get("time") or "").strip()
+            if not raw:
                 continue
-            body += event(f"act{date}{index}", str(act.get("name") or "Activity"),
-                          start, start, description=str(act.get("detail") or ""), stamp=stamp)
+            span = _clock_span(day.get("date"), raw)
+            if span is None:
+                unparsed.append(f"day {day.get('number')}: {act.get('name') or 'activity'} ({raw})")
+                continue
+            local = local_line(f"{span[0]:%H:%M}" + (f"–{span[1]:%H:%M}" if span[1] > span[0] else ""), zone_name)
+            body += event(f"act{date}{number}", str(act.get("name") or "Activity"),
+                          timed(span[0], zone_name), timed(span[1], zone_name),
+                          description="\n".join(x for x in (local, str(act.get("detail") or "")) if x), stamp=stamp)
             counts["activity"] += 1
 
-    for index, ticket in enumerate(_seq(booking.get("attraction_tickets"))):
+    days_by_number = {_obj(d).get("number"): _obj(d) for d in _seq(plan.get("days"))}
+    for number, ticket in enumerate(_seq(booking.get("attraction_tickets"))):
         ticket = _obj(ticket)
+        if decided.get(str(ticket.get("id") or ""), {}).get("state") == "booked":
+            continue  # bought: a "tickets on sale" alarm would send the traveller to buy it again
         sale = _obj(ticket.get("sale_opens_at"))
-        start = _stamp(sale.get("opens_at")) if str(sale.get("status")) == "scheduled_release" else None
-        if not start:
+        moment, _ = tz.local_moment(sale.get("opens_at"), None) if str(sale.get("status")) == "scheduled_release" else (None, False)
+        if moment is None:
             continue
-        body += event(f"ticket{index}{start}",
+        day = days_by_number.get(ticket.get("day_number"))
+        zone_name = tz.day_zone(plan, day) if day else tz.zone_on(plan, moment.date())
+        start = timed(moment, zone_name)
+        body += event(f"ticket{number}{start}",
                       f"{ticket.get('attraction_name')} — tickets on sale",
                       start, start, description=str(sale.get("basis") or ""),
                       alarm_minutes=60, stamp=stamp)
         counts["ticket"] += 1
 
     body.append("END:VCALENDAR")
-    return "\r\n".join(fold(line) for line in body) + "\r\n", counts
+    summary = {"undecided": undecided, "unparsed": unparsed, "floating": floating}
+    return "\r\n".join(fold(line) for line in body) + "\r\n", counts, summary
+
+
+def build(plan: dict) -> tuple[str, dict[str, int]]:
+    text, counts, _ = build_with_summary(plan)
+    return text, counts
+
+
+def summary_notes(summary: dict) -> list[str]:
+    """What the terminal should say about a calendar, in the order worth reading."""
+    notes = []
+    if summary.get("undecided"):
+        notes.append(f"{len(summary['undecided'])} transport group(s) have no recorded choice and are not in the "
+                     f"calendar ({', '.join(summary['undecided'])}); record one with scripts/record_booking.py "
+                     f"and save again.")
+    if summary.get("floating"):
+        notes.append("calendar times are floating (the plan names no time zones): Apple Calendar shows them as "
+                     "written, Google Calendar and Outlook shift them to the phone's zone. Add trip.timezone and "
+                     "trip.origin_timezone.")
+    if summary.get("unparsed"):
+        notes.append("these times were not understood and are not in the calendar: " + "; ".join(summary["unparsed"]))
+    return notes
 
 
 def main() -> int:
@@ -298,16 +458,16 @@ def main() -> int:
     if not isinstance(plan, dict):
         print("ERROR: the plan must be a JSON object.", file=sys.stderr)
         return 2
-    body, counts = build(plan)
+    body, counts, summary = build_with_summary(plan)
     if args.out == "-":
         sys.stdout.write(body)
     else:
         Path(args.out).write_bytes(body.encode("utf-8"))
         print(f"Calendar: {args.out}")
     print("  " + ", ".join(f"{n} {k}" for k, n in counts.items() if n), file=sys.stderr)
-    print("  Times are floating local: they show as written wherever the reader is, which is what "
-          "an itinerary means. Reminders ride along on the flights, the rail legs, the meals that "
-          "need booking ahead, and any ticket with a sale time.", file=sys.stderr)
+    for note in summary_notes(summary) or ["Times are written in UTC from the plan's own zones, so every calendar "
+                                           "app shows them at the right local hour."]:
+        print(f"  {note}", file=sys.stderr)
     return 0
 
 

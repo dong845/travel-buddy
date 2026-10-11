@@ -58,6 +58,131 @@ def events(body: str) -> list[dict]:
     return found
 
 
+def decision_and_zone_cases(report) -> None:
+    def check(label: str, condition: object, detail: object = "") -> None:
+        # This file's check() concatenates a string detail; a list or dict would turn a named
+        # failure into a TypeError that reports nothing.
+        report(label, bool(condition), str(detail) if detail != "" else "")
+
+    self_drive = json.loads((ROOT / "tests" / "self-drive-fixture.json").read_text(encoding="utf-8"))
+
+    def by_summary(body: str, needle: str) -> list[dict]:
+        return [e for e in events(body) if needle in e.get("SUMMARY", "")]
+
+    def alarmed(evt: dict) -> bool:
+        return any("BEGIN:VALARM" in line for line in evt["_raw"])
+
+    # Undecided: no trains, no car, both groups counted; times are UTC because the plan names zones.
+    body, counts, summary = CAL.build_with_summary(self_drive)
+    # Matched on the service name and the event wording: the fixture's own activities are called
+    # "LNER train London King's Cross to Edinburgh Waverley" and "Collect the hire car at Hertz".
+    check("undecided transport stays out", not by_summary(body, "Azuma") and not by_summary(body, "Pick up car"),
+          [e.get("SUMMARY") for e in events(body)][:8])
+    check("and is counted", len(summary["undecided"]) == 2 and "rental_cars" in summary["undecided"], summary)
+    check("a zoned plan is not floating", summary["floating"] is False, summary)
+    lunch = [e for e in events(body) if e.get("DTSTART") == "20261017T114000Z"]
+    check("a meal is written in UTC (12:40 BST)", lunch, [e.get("DTSTART") for e in events(body)][:10])
+    if lunch:
+        check("and says its local time", lunch[0].get("DESCRIPTION", "").startswith("Local time: 12:40–13:35 Europe/London"),
+              lunch[0].get("DESCRIPTION"))
+
+    # Decided: the booked train and the chosen car enter, with their state.
+    decided = json.loads(json.dumps(self_drive))
+    decided["bookings"] = [{"option_id": "gt-lner", "state": "booked", "booked_on": "2026-10-10", "booked_via": "LNER website"},
+                           {"option_id": "car-hertz", "state": "chosen"}]
+    body, counts, summary = CAL.build_with_summary(decided)
+    trains = by_summary(body, "Azuma")
+    check("the booked train enters, both ways", len(trains) == 2 and not by_summary(body, "Lumo"), [e.get("SUMMARY") for e in trains])
+    out = [e for e in trains if e.get("DTSTART") == "20261017T070000Z"]
+    check("its outbound runs 07:00Z-11:23Z", out and out[0].get("DTEND") == "20261017T112300Z", out)
+    check("its description says where it was booked", out and "Booked via LNER website on 2026-10-10" in out[0].get("DESCRIPTION", ""), out)
+    pickup = by_summary(body, "Pick up car")
+    check("the chosen car has a pickup at 12:45Z with a reminder",
+          pickup and pickup[0].get("DTSTART") == "20261017T124500Z" and alarmed(pickup[0]) and "Hertz" in pickup[0]["SUMMARY"], pickup)
+    check("and a return", by_summary(body, "Return car"), [e.get("SUMMARY") for e in events(body)][:12])
+    check("its description says it is not booked yet", pickup and "Chosen — not booked yet" in pickup[0].get("DESCRIPTION", ""), pickup)
+    check("nothing undecided now", summary["undecided"] == [], summary)
+
+    # dst_meals: Europe/London leaves BST on 2026-10-25.
+    dst = {"trip": {"timezone": "Europe/London", "origin_timezone": "Europe/London", "language": "en"},
+           "days": [{"number": 1, "date": "2026-10-24", "dining": [{"venue_name": "Before", "time_window": "12:00-13:00"}]},
+                    {"number": 2, "date": "2026-10-26", "dining": [{"venue_name": "After", "time_window": "12:00-13:00"}]}]}
+    body, _, _ = CAL.build_with_summary(dst)
+    check("dst_meals: BST before the change", by_summary(body, "Before") and by_summary(body, "Before")[0].get("DTSTART") == "20261024T110000Z")
+    check("dst_meals: GMT after it", by_summary(body, "After") and by_summary(body, "After")[0].get("DTSTART") == "20261026T120000Z")
+
+    # A date-line flight with zones: its true length, no patch.
+    zoned = {"trip": {"timezone": "Pacific/Honolulu", "origin_timezone": "Asia/Tokyo", "language": "en"},
+             "booking_options": {"flights": [{"id": "fl-1", "outbound_itinerary": {
+                 "service_identifier": "ZG2", "departure_local": "2026-11-20 19:05", "arrival_local": "2026-11-20 07:10",
+                 "duration_minutes": 425, "departure_timezone": "Asia/Tokyo", "arrival_timezone": "Pacific/Honolulu"}}]},
+             "bookings": [{"option_id": "fl-1", "state": "chosen"}]}
+    flight = by_summary(CAL.build_with_summary(zoned)[0], "ZG2")
+    check("a zoned date-line flight is 10:05Z-17:10Z",
+          flight and flight[0].get("DTSTART") == "20261120T100500Z" and flight[0].get("DTEND") == "20261120T171000Z", flight)
+
+    # decided_without_times: chosen, but no times -- no event, no crash, not undecided.
+    timeless = json.loads(json.dumps(zoned))
+    timeless["booking_options"]["flights"][0]["outbound_itinerary"] = {"service_identifier": "ZG2"}
+    body, _, summary = CAL.build_with_summary(timeless)
+    check("decided_without_times", not by_summary(body, "ZG2") and summary["undecided"] == [], summary)
+
+    # Activity times: a one-digit hour, a range, and one nobody can place.
+    acts = {"trip": {"timezone": "Europe/London", "origin_timezone": "Europe/London", "language": "en"},
+            "days": [{"number": 1, "date": "2026-10-17", "activities": [
+                {"time": "9:30", "name": "Castle"}, {"time": "09:30–11:00", "name": "Gardens"}, {"time": "morning", "name": "Market"}]}]}
+    body, _, summary = CAL.build_with_summary(acts)
+    check("9:30 is an event", by_summary(body, "Castle") and by_summary(body, "Castle")[0].get("DTSTART") == "20261017T083000Z")
+    gardens = by_summary(body, "Gardens")
+    check("a range has an end", gardens and gardens[0].get("DTEND") == "20261017T100000Z", gardens)
+    check("an unplaceable time is named", any("Market" in u for u in summary["unparsed"]), summary)
+    trailing = {"days": [{"number": 1, "date": "2026-10-17", "dining": [
+        {"venue_name": "Sitting", "time_window": "19:00–20:30, early sitting"}]}]}
+    check("a meal window may trail words, as it always could",
+          by_summary(CAL.build_with_summary(trailing)[0], "Sitting"))
+
+    # Reminders: the enum decides; without it, keywords, negation first.
+    def meal_alarm(note: str, need: object = None) -> bool:
+        plan = {"days": [{"number": 1, "date": "2026-10-17", "dining": [
+            {"venue_name": "Probe", "time_window": "12:00-13:00", "reservation_or_queue_note": note,
+             **({} if need is None else {"reservation_need": need})}]}]}
+        found = by_summary(CAL.build_with_summary(plan)[0], "Probe")
+        return bool(found) and alarmed(found[0])
+    check("'Book for 12:45 on a Saturday' reminds", meal_alarm("Book for 12:45 on a Saturday; a children's menu is available."))
+    check("'book on a Saturday' reminds", meal_alarm("Walk-ins usually seated before 18:30; book on a Saturday in October."))
+    check("'no booking needed' does not", not meal_alarm("Residents only; no booking needed."))
+    check("'Reservations not accepted' does not", not meal_alarm("Reservations not accepted; queue from 11:30."))
+    check("a guidebook is not a booking", not meal_alarm("Listed in every guidebook; counter service."))
+    check("the enum beats the words (walk_in)", not meal_alarm("Book for 12:45", "walk_in"))
+    check("the enum beats the words (required)", meal_alarm("Counter service.", "required"))
+    check("a TODO enum falls back to the words", meal_alarm("Book ahead.", "TODO: pick one"))
+
+    # A booked ticket needs no on-sale reminder; a chosen one keeps it.
+    ticket_plan = {"booking_options": {"attraction_tickets": [{"id": "tk-1", "attraction_name": "Castle",
+                   "sale_opens_at": {"status": "scheduled_release", "opens_at": "2026-10-10 09:30", "basis": "site"}}]}}
+    check("a chosen ticket keeps its on-sale event",
+          by_summary(CAL.build_with_summary({**ticket_plan, "bookings": [{"option_id": "tk-1", "state": "chosen"}]})[0], "on sale"))
+    check("a booked ticket loses it",
+          not by_summary(CAL.build_with_summary({**ticket_plan, "bookings": [{"option_id": "tk-1", "state": "booked",
+                                                  "booked_on": "2026-10-10", "booked_via": "site"}]})[0], "on sale"))
+
+    # zh_descriptions: a Chinese plan's calendar lines are Chinese.
+    zh = json.loads(json.dumps(decided))
+    zh["trip"]["language"] = "zh-CN"
+    body, _, _ = CAL.build_with_summary(zh)
+    out = [e for e in by_summary(body, "Azuma") if e.get("DTSTART") == "20261017T070000Z"]
+    check("zh_descriptions: local time and booking line in Chinese",
+          out and "当地时间" in out[0].get("DESCRIPTION", "") and "已订：LNER website，2026-10-10" in out[0].get("DESCRIPTION", "")
+          and "Booked via" not in out[0].get("DESCRIPTION", ""), out)
+
+    # The floating fallback: no zones, so floating and said so.
+    legacy = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    body, _, summary = CAL.build_with_summary(legacy)
+    check("a plan without zones is floating, and says so", summary["floating"] is True
+          and all(not e.get("DTSTART", "").endswith("Z") for e in events(body)), summary)
+    check("the terminal notes name it", any("floating" in n for n in CAL.summary_notes(summary)), CAL.summary_notes(summary))
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -138,6 +263,7 @@ def main() -> int:
         "outbound_itinerary": {"service_identifier": "KL1931",
                                "departure_local": "2027-05-07 09:45",
                                "arrival_local": "2027-05-07 11:15"}}]
+    open_jaw["bookings"] = [{"option_id": "fl-1", "state": "chosen"}]  # undecided transport no longer enters
     flights = open_jaw["booking_options"]["flights"]
     if flights:
         flights[0]["origin_airport"] = "AMS"
@@ -256,6 +382,7 @@ def main() -> int:
         "outbound_itinerary": {"service_identifier": "ZG2", "departure_local": "2026-11-20 19:05",
                                "arrival_local": "2026-11-20 07:10", "duration_minutes": 425},
         "return_itinerary": {}}]
+    dateline["bookings"] = [{"option_id": "fl-1", "state": "chosen"}]
     body, _ = CAL.build(dateline)
     flight = [e for e in events(body) if "ZG2" in e.get("SUMMARY", "")]
     check("a date-line flight ends after it starts",
@@ -268,6 +395,8 @@ def main() -> int:
     flight = [e for e in events(body) if "ZG2" in e.get("SUMMARY", "")]
     check("without a duration it is zero-length, never inverted",
           flight and flight[0].get("DTEND", flight[0].get("DTSTART")) >= flight[0].get("DTSTART"), str(flight))
+
+    decision_and_zone_cases(check)
 
     if failures:
         print(f"CALENDAR EXPORT FAILED ({len(failures)}):", file=sys.stderr)
