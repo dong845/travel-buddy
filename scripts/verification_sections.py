@@ -32,6 +32,8 @@ META_KEYS = frozenset({
     "verification_status", "verification_report", "verification_receipt", "gates_passed",
     "generated_at", "imagery_sidecar", "imagery", "intake_context", "ui_labels", "_contract",
     "_enums", "plan_status", "replan_context", "profile_context",
+    # bookings: the traveller's decisions (scripts/bookings.py) -- not research, never re-verified.
+    "bookings",
 })
 BOOKING_KINDS = ("flights", "ground_transport", "accommodations", "attraction_tickets",
                  "rental_cars")

@@ -66,6 +66,7 @@ start_intake_workflow.py
 | `audit_workspace.py` | 拿今天的闸门回头跑一遍所有已保存的方案，只报告、不改动 |
 | `probe_sources.py` | 在有人写下「这个查不到」之前，先问清楚这台机器到底能读到什么 |
 | `kiwi_flights.py` | 用 Kiwi.com 的公开航班搜索生成往返机票卡片 —— 默认只给受保护的衔接，不需要账号 |
+| `bookings.py` | 预订记录的规则（分组、合法记录），其他脚本都来问它 |
 | `trip_timer.py` | 记录一次规划真实花掉的时间，并拆成「机器算」和「你在等」 |
 
 ## 四道闸门

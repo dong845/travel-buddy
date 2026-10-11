@@ -66,6 +66,7 @@ You never run these yourself — the skill does. They are listed because the gua
 | `audit_workspace.py` | Re-runs today's gates over every plan already saved, and reports without touching anything |
 | `probe_sources.py` | What this machine can actually read, before anyone writes that a fact "could not be obtained" |
 | `kiwi_flights.py` | Round-trip flight cards from Kiwi.com's public flight search — protected connections only, no account needed |
+| `bookings.py` | The booking-record rules every other script asks (groups, valid records) |
 | `trip_timer.py` | Real wall-clock for a run, split into compute and the time you spent waiting |
 
 ## The four gates

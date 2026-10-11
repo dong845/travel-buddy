@@ -287,6 +287,7 @@
     "booking_options.flights[].price_note -- how to read the per-person price when it is an average over a party with children or infants; printed beside the price.",
     "trip.traveler_preferences.accepts_self_transfer -- the traveller's OWN WORDS accepting separate-ticket connections; required before any leg is marked self_transfer.",
     "booking_options.flights[].origin_place_id / destination_place_id -- the search provider's own key for each place when its URL names places that way (Kiwi.com: amsterdam-netherlands); the prefilled-field check accepts the id in place of the airport code, as it accepts a rail card's station ids.",
+    "bookings -- one record per group the traveller decided: {option_id, state: chosen|booked, booked_on (YYYY-MM-DD, booked only), booked_via (booked only), paid_total and paid_currency (optional, booked only)}. Never a booking reference, document or payment detail. Groups: flights/ground by leg_group_id, hotels by stay_group_id, rental cars one group, each ticket alone. Written by scripts/record_booking.py; outside verification.",
     "Delete this _contract key before saving the real plan."
   ],
   "plan_status": "researched",
@@ -718,6 +719,7 @@
       }
     ]
   },
+  "bookings": [],
   "transport_overview": {
     "map_link_kind": "directions",
     "overall_map_scope": "primary_leg",
