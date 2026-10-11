@@ -91,6 +91,9 @@ with headroom for the orchestrator. Also:
   `csair.com`, `keisei.co.jp`, `tokyometro.jp` does not need to search for them.
 - **One domain per agent, and say what is out of scope.** "Do not price hotels" in the flights
   prompt is worth more than any instruction about what to include.
+- **The flights agent runs `scripts/kiwi_flights.py` before any web search for fares** and reports
+  its `CANDIDATE` and `LINK` lines. One call answers prices, flight numbers, times and baggage for
+  the party; web research is for what it leaves `TODO:`, or for when it reports `KIWI UNAVAILABLE`.
 - **Never let an agent silently exhaust the shared quota.** Tell it the cap and tell it to report
   what it could not check rather than spending past it. An unchecked fact that says so is a
   finding; an unchecked fact that does not is a defect.

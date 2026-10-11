@@ -279,13 +279,28 @@ def _leg_note(leg: dict, zh: bool) -> str:
     segments = leg["segments"]
     route = " → ".join([segments[0]["from"]] + [s["to"] for s in segments])
     if len(segments) == 1:
-        return f"直飞，{route}" if zh else f"Direct, {route}"
+        # The renderer prints the stop count itself ("non-stop" / 直飞); repeating it here read
+        # "直飞 · 直飞，AMS → EDI" on a real card.
+        return route
     changes = []
     for a, b in zip(segments, segments[1:]):
         where = a["to"] if a["to"] == b["from"] else f"{a['to']} → {b['from']}"
         changes.append((f"在 {where} 转机（停留 {_layover(a, b)}）") if zh
                        else f"change at {where} ({_layover(a, b)} layover)")
     return f"{route}；" + "；".join(changes) if zh else f"{route}; " + "; ".join(changes)
+
+
+def _connection_summary(itinerary: dict, zh: bool) -> str:
+    """Both directions in one phrase, for the card's detail line: direct, or how many changes."""
+    def part(leg: dict, en_name: str, zh_name: str) -> str:
+        changes = len(leg["segments"]) - 1
+        if zh:
+            return f"{zh_name}直飞" if not changes else f"{zh_name}转机 {changes} 次"
+        return f"{en_name}: direct" if not changes else f"{en_name}: {changes} change{'s' if changes > 1 else ''}"
+    outbound, inbound = itinerary["outbound"], itinerary["inbound"]
+    if len(outbound["segments"]) == 1 and len(inbound["segments"]) == 1:
+        return "往返均为直飞" if zh else "Direct both ways"
+    return ("；" if zh else "; ").join((part(outbound, "Outbound", "去程"), part(inbound, "return", "回程")))
 
 
 def _party_words(request: dict, zh: bool) -> str:
@@ -329,7 +344,8 @@ def itinerary_to_card(itinerary: dict, request: dict, index: int, checked_at: st
     cabin = (CABINS[cabin_code][1 if zh else 0] if cabin_code in CABINS
              else itinerary["outbound"].get("cabinClass") or "economy")
     if zh:
-        cabin = CABIN_WORDS_ZH.get(cabin, cabin)
+        # Kiwi writes "Economy"; the table is keyed lower-case.
+        cabin = CABIN_WORDS_ZH.get(str(cabin).casefold(), cabin)
     bags = itinerary.get("baggage") or {}
     baggage = (f"全团已含：{bags.get('personalItem', 0)} 件随身小件、{bags.get('cabinBag', 0)} 件登机箱、"
                f"{bags.get('checkedBag', 0)} 件托运行李" if zh else
@@ -360,7 +376,7 @@ def itinerary_to_card(itinerary: dict, request: dict, index: int, checked_at: st
         "return_itinerary": leg_card(inbound),
         "cabin": cabin,
         "baggage_assumption": baggage,
-        "connection_summary": _leg_note(outbound, zh),
+        "connection_summary": _connection_summary(itinerary, zh),
         "fare_currency": request["currency"],
         "fare_low": per_person,
         "fare_high": per_person,
@@ -398,16 +414,21 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", _fold(text)).strip("-")
 
 
+def place_slugs(itinerary: dict) -> tuple[str, str]:
+    """Kiwi's keys for the two ends of the outbound leg: `city-country`, accent-folded."""
+    first = itinerary["outbound"]["segments"][0]
+    last = itinerary["outbound"]["segments"][-1]
+    return (f"{slugify(first.get('fromCity', ''))}-{slugify(first.get('fromCountry', ''))}",
+            f"{slugify(last.get('toCity', ''))}-{slugify(last.get('toCountry', ''))}")
+
+
 def search_page_url(itinerary: dict, request: dict) -> str:
     """Kiwi's search-results page in the only form that prefills its cities: `city-country` slugs.
 
     The IATA form (/AMS/EDI/...) loads with the dates and party filled in and BOTH places empty --
     a 200 that delivers nothing (checked in Chrome, 2026-10-11).
     """
-    first = itinerary["outbound"]["segments"][0]
-    last = itinerary["outbound"]["segments"][-1]
-    origin = f"{slugify(first.get('fromCity', ''))}-{slugify(first.get('fromCountry', ''))}"
-    destination = f"{slugify(last.get('toCity', ''))}-{slugify(last.get('toCountry', ''))}"
+    origin, destination = place_slugs(itinerary)
     query = {"adults": request["adults"]}
     if request["children"]:
         query["children"] = request["children"]
@@ -451,7 +472,8 @@ def prefilled_fields(url: str, card: dict, request: dict) -> list[str]:
     wanted = {"origin": card["origin_airport"], "destination": card["destination_airport"],
               "outbound_date": card["outbound_date"], "return_date": card["return_date"],
               "travellers": request["adults"] + request["children"] + request["infants"]}
-    missing = {field for field, _, _ in cpc.undelivered_prefill_fields(url, ALL_PREFILL, wanted)}
+    ids = {"origin": card.get("origin_place_id"), "destination": card.get("destination_place_id")}
+    missing = {field for field, _, _ in cpc.undelivered_prefill_fields(url, ALL_PREFILL, wanted, ids)}
     fields = [field for field in ALL_PREFILL if field not in missing]
     if request["infants"]:
         fields = [field for field in fields if field != "travellers"]
@@ -464,10 +486,18 @@ def attach_search_link(cards: list[dict], itinerary: dict, request: dict, lines:
     first = itinerary["outbound"]["segments"][0]
     last = itinerary["outbound"]["segments"][-1]
     if title_confirms(fetch_title(url, opener=opener), first.get("fromCity", ""), last.get("toCity", "")):
-        for card in cards:
-            card["round_trip_search_url"] = url
-            card["round_trip_prefilled_fields"] = prefilled_fields(url, card, request)
-        lines.append(f"LINK VERIFIED {url}")
+        # The first card only. Two options that open the same page are one option shown twice
+        # (check_plan_consistency.check_booking_identity), and the Kiwi page lists both, so a
+        # second card needs a dated search of its own on another comparison platform.
+        card = cards[0]
+        card["origin_place_id"], card["destination_place_id"] = place_slugs(itinerary)
+        card["round_trip_search_url"] = url
+        card["round_trip_prefilled_fields"] = prefilled_fields(url, card, request)
+        for other in cards[1:]:
+            other["round_trip_search_url"] = ("TODO: a dated round-trip search on another comparison "
+                                              "platform -- the Kiwi page is the first card's, and two "
+                                              "options may not open the same page")
+        lines.append(f"LINK VERIFIED {url} (first card; the others need another platform)")
     else:
         lines.append(f"LINK NOT VERIFIED {url} -- its title did not name both cities; find another "
                      f"dated comparison search for round_trip_search_url")
@@ -546,6 +576,13 @@ def main(argv: list[str] | None = None, client: KiwiClient | None = None,
             return _refuse(f"--currency {args.currency} differs from trip.currency {plan_currency}; "
                            f"cards are priced in the plan's currency")
         currency = plan_currency or currency
+        # render_final_trip_html.validate_plan refuses a flight whose dates are not the trip's
+        # first and last day, so cards for other dates could never be saved.
+        start, end = str(trip.get("start_date") or "")[:10], str(trip.get("end_date") or "")[:10]
+        if start and end and (depart.isoformat() != start or ret.isoformat() != end):
+            return _refuse(f"the search is {depart} to {ret} but the trip runs {start} to {end}; a flight "
+                           f"card's dates must be the trip's first and last day (trip.start_date / "
+                           f"trip.end_date)")
         language = "zh" if str(trip.get("language") or "").casefold().startswith("zh") else "en"
         consent = (trip.get("traveler_preferences") or {}).get("accepts_self_transfer")
         if args.accept_self_transfer and not (isinstance(consent, str) and consent.strip()
@@ -610,8 +647,11 @@ def main(argv: list[str] | None = None, client: KiwiClient | None = None,
         json.dump(plan, handle, ensure_ascii=False, indent=2)
     os.replace(temp, target)
     print(f"WROTE {len(cards)} flight card(s) into {target}")
-    print(f"NEXT: fill the TODO: fields on the new flight cards (review_url, material_conditions, "
-          f"airport_transfer_note, direct_*), then python scripts/check_plan_contract.py {target}")
+    todo_fields = "review_url, material_conditions, airport_transfer_note, direct_*"
+    if len(cards) > 1 or any(str(c["round_trip_search_url"]).startswith("TODO") for c in cards):
+        todo_fields += ", and round_trip_search_url wherever it is still TODO (a dated search on another platform)"
+    print(f"NEXT: fill the TODO: fields on the new flight cards ({todo_fields}), then "
+          f"python scripts/check_plan_contract.py {target}")
     return 0
 
 

@@ -49,6 +49,28 @@ def main() -> int:
           {(m[0], m[2]) for m in loose} == {("origin", True), ("outbound_date", True)}, loose)
     check("nothing declared, nothing missing", cpc.undelivered_prefill_fields(KIWI, [], WANTED) == [])
     check("the date forms are exposed", "20261120" in cpc.prefill_date_forms("2026-11-20"))
+
+    # A flight card may name the provider's own place ids, as a rail card names station ids: the
+    # Kiwi page keys places by city slug, never by IATA code, and the id is what is asked.
+    import copy  # noqa: PLC0415
+    import json  # noqa: PLC0415
+    plan = json.loads((ROOT / "tests" / "booking-ready-fixture.json").read_text(encoding="utf-8"))
+    plan["trip"]["traveler_count"] = 4
+    card = {"id": "fl-1", "provider": "easyJet", "origin_airport": "AMS", "destination_airport": "EDI",
+            "outbound_date": "2026-11-20", "return_date": "2026-11-24", "round_trip_search_url": KIWI,
+            "round_trip_search_provider": "Kiwi.com", "round_trip_prefilled_fields": ALL,
+            "origin_place_id": "amsterdam-netherlands", "destination_place_id": "edinburgh-united-kingdom"}
+    plan["booking_options"]["flights"] = [card]
+    errors: list[str] = []
+    cpc.check_booking_identity(copy.deepcopy(plan), errors, [])
+    check("a flight's place ids satisfy origin and destination",
+          not [e for e in errors if "declares 'origin'" in e or "declares 'destination'" in e], errors)
+    without = copy.deepcopy(plan)
+    del without["booking_options"]["flights"][0]["origin_place_id"]
+    errors = []
+    cpc.check_booking_identity(without, errors, [])
+    check("without them the airport code is still asked for",
+          any("declares 'origin'" in e for e in errors), errors)
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:

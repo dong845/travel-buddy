@@ -168,7 +168,10 @@ def mapping_cases() -> None:
     check("flight number as the service identifier", out["service_identifier"] == "U23302", out)
     check("local times carry their date", out["departure_local"] == "2026-11-20 21:55" and out["arrival_local"] == "2026-11-20 22:25", out)
     check("duration in minutes", out["duration_minutes"] == 90, out)
-    check("a direct leg says so", out["connection_or_terminal_note"].startswith("Direct"), out)
+    # The renderer already prints the stop count ("non-stop" / 直飞), so a direct leg's note is just
+    # its route; printing "Direct" again read "直飞 · 直飞，AMS → EDI" on a real Chinese card.
+    check("a direct leg's note is its route, not a second 'direct'", out["connection_or_terminal_note"] == "AMS → EDI", out)
+    check("the card summarises both directions", card["connection_summary"] == "Direct both ways", card["connection_summary"])
     check("airports from the segments", card["origin_airport"] == "AMS" and card["destination_airport"] == "EDI")
     check("Kiwi is the comparison platform", card["comparison_platform"] == "Kiwi.com" and card["round_trip_search_provider"] == "Kiwi.com")
     check("researched now, per person round trip", card["price_status"] == "researched_current"
@@ -182,6 +185,7 @@ def mapping_cases() -> None:
     check("the connecting leg of a self-transfer is marked", risky["outbound_itinerary"].get("self_transfer") is True)
     check("its direct return is not", risky["return_itinerary"].get("self_transfer") is not True)
     check("the change is in the note", "BFS" in risky["outbound_itinerary"]["connection_or_terminal_note"])
+    check("and in the summary", risky["connection_summary"] == "Outbound: 1 change; return: direct", risky["connection_summary"])
 
     infants = dict(REQUEST, adults=1, children=0, infants=1)
     baby = kf.itinerary_to_card(DIRECT, infants, 0, "2026-10-11", single=False)
@@ -191,9 +195,14 @@ def mapping_cases() -> None:
         DIRECT, dict(REQUEST, adults=2, children=0), 0, "2026-10-11", single=False))
 
     zh = kf.itinerary_to_card(DIRECT, dict(REQUEST, language="zh"), 0, "2026-10-11", single=True)
-    check("Chinese plans get Chinese notes", zh["outbound_itinerary"]["connection_or_terminal_note"].startswith("直飞")
-          and "儿童" in zh["price_note"], zh["outbound_itinerary"]["connection_or_terminal_note"])
+    check("Chinese plans get Chinese notes", zh["connection_summary"] == "往返均为直飞"
+          and "儿童" in zh["price_note"], zh["connection_summary"])
     check("a lone candidate says why", zh.get("single_option_reason"))
+    # Kiwi writes the cabin capitalised ("Economy", every one of 214 recorded legs); a Chinese
+    # card printed it in English until the lookup ignored case.
+    recorded = FIXTURE["ams_edi_2a2c_safe"]["result"]["structuredContent"]["itineraries"][0]
+    zh_recorded = kf.itinerary_to_card(recorded, dict(REQUEST, language="zh"), 0, "2026-10-11", single=False)
+    check("Kiwi's capitalised cabin is translated", zh_recorded["cabin"] == "经济舱", zh_recorded["cabin"])
 
     # The recorded responses map without raising, and every card is per person.
     for key in ("ams_edi_2a2c_safe", "ams_hkg_1a_safe"):
@@ -247,16 +256,25 @@ def link_cases() -> None:
     check("another city does not", not kf.title_confirms("Amsterdam – Glasgow trips", "Amsterdam", "Edinburgh"))
     check("no title does not", not kf.title_confirms(None, "Amsterdam", "Edinburgh"))
 
-    cards = [kf.itinerary_to_card(DIRECT, REQUEST, 0, "2026-10-11", single=False)]
+    cards = [kf.itinerary_to_card(DIRECT, REQUEST, 0, "2026-10-11", single=False),
+             kf.itinerary_to_card(KLM, REQUEST, 1, "2026-10-11", single=False)]
     lines: list[str] = []
     seen: list[str] = []
     sent: list[dict] = []
     kf.attach_search_link(cards, DIRECT, REQUEST, lines,
                           opener=opener_with({"edinburgh-united-kingdom": "Amsterdam – Edinburgh trips"}, seen, sent))
     check("a verified page becomes the search button", cards[0]["round_trip_search_url"] == url, cards[0]["round_trip_search_url"])
-    check("only what the gate confirms is declared prefilled",
-          cards[0]["round_trip_prefilled_fields"] == ["outbound_date", "return_date", "travellers"],
+    check("the page's own place ids make origin and destination checkable",
+          cards[0].get("origin_place_id") == "amsterdam-netherlands"
+          and cards[0].get("destination_place_id") == "edinburgh-united-kingdom", cards[0])
+    check("so all five fields are declared, each confirmed by the gate",
+          cards[0]["round_trip_prefilled_fields"] == ["origin", "destination", "outbound_date", "return_date", "travellers"],
           cards[0]["round_trip_prefilled_fields"])
+    # Two options that open the same page are one option shown twice
+    # (check_plan_consistency.check_booking_identity), so the Kiwi page is the first card's only.
+    check("the second card does not reuse the first card's search page",
+          cards[1]["round_trip_search_url"] != url and cards[1]["round_trip_search_url"].startswith("TODO:")
+          and "another" in cards[1]["round_trip_search_url"], cards[1]["round_trip_search_url"])
     check("the verification is reported", any(l.startswith("LINK VERIFIED") for l in lines), lines)
     check("the browser user agent is used", sent and "Chrome/" in sent[0].get("User-agent", ""), sent)
 
@@ -300,7 +318,8 @@ ARGS = ["--from", "AMS", "--to", "EDI", "--depart", "2026-11-20", "--return", "2
 
 def plan_file(tmp: str, **trip) -> Path:
     plan = json.loads((ROOT / "tests" / "booking-ready-fixture.json").read_text(encoding="utf-8"))
-    plan["trip"].update({"traveler_count": 4, "currency": "EUR", "language": "en"}, **trip)
+    plan["trip"].update({"traveler_count": 4, "currency": "EUR", "language": "en",
+                         "start_date": "2026-11-20", "end_date": "2026-11-24"}, **trip)
     path = Path(tmp) / "plan.json"
     path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
     return path
@@ -342,6 +361,12 @@ def cli_cases() -> None:
         path = plan_file(tmp, currency="GBP")
         code, out, stub = run(ARGS + ["--into", str(path)])
         check("mismatch_refused_before_network: currency", code == 1 and not stub.calls, out[-300:])
+        # The renderer refuses a flight whose dates are not the trip's first and last day, so the
+        # script refuses first, before spending a search on cards that cannot be saved.
+        path = plan_file(tmp, start_date="2026-11-21", end_date="2026-11-24")
+        code, out, stub = run(ARGS + ["--into", str(path)])
+        check("mismatch_refused_before_network: dates", code == 1 and not stub.calls
+              and "start_date" in out, out[-300:])
 
         path = plan_file(tmp)
         before_plan = json.loads(path.read_text(encoding="utf-8"))
@@ -364,7 +389,7 @@ def cli_cases() -> None:
         zh = plan_file(tmp, language="zh-CN")
         code, out, _ = run(ARGS + ["--into", str(zh)], results=[{"itineraries": [DIRECT, KLM]}])
         card = json.loads(zh.read_text(encoding="utf-8"))["booking_options"]["flights"][0]
-        check("a Chinese plan gets Chinese card text", card["outbound_itinerary"]["connection_or_terminal_note"].startswith("直飞"))
+        check("a Chinese plan gets Chinese card text", card["connection_summary"] == "往返均为直飞", card["connection_summary"])
 
         path = plan_file(tmp)
         code, out, stub = run(ARGS + ["--into", str(path), "--accept-self-transfer"])
@@ -385,11 +410,84 @@ def cli_cases() -> None:
     check("--accept-self-transfer needs --into", code == 1 and "--into" in out, out[-300:])
 
 
+def end_to_end_case() -> None:
+    """Cards from the script, TODOs filled as an author would, through every gate."""
+    import check_plan_consistency as cpc  # noqa: PLC0415
+    import plan_flags  # noqa: PLC0415
+    import render_final_trip_html as renderer  # noqa: PLC0415
+    import validate_trip_html as htmlgate  # noqa: PLC0415
+
+    # The fixture is a one-day trip on 2026-09-28, so the flights go out in the morning and come
+    # back that evening; a renderer-valid plan needs flight dates equal to the trip's.
+    day = "2026-09-28"
+    morning = itin(733, [seg("U2", "U23302", "AMS", "EDI", f"{day}T06:00:00", f"{day}T06:30:00", name="easyJet")],
+                   [seg("U2", "U23301", "EDI", "AMS", f"{day}T20:00:00", f"{day}T22:40:00",
+                        city_from="Edinburgh", city_to="Amsterdam", country_from="United Kingdom",
+                        country_to="Netherlands", name="easyJet")])
+    later = itin(778, [seg("KL", "KL1287", "AMS", "EDI", f"{day}T09:10:00", f"{day}T09:40:00", name="KLM")],
+                 [seg("KL", "KL1290", "EDI", "AMS", f"{day}T18:05:00", f"{day}T20:40:00",
+                      city_from="Edinburgh", city_to="Amsterdam", country_from="United Kingdom",
+                      country_to="Netherlands", name="KLM")])
+    argv = ["--from", "AMS", "--to", "EDI", "--depart", day, "--return", day,
+            "--adults", "2", "--children", "2", "--currency", "EUR"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = plan_file(tmp, arrival_transport_mode="flight", start_date=day, end_date=day)
+        code, out, _ = run(argv + ["--into", str(path)], results=[{"itineraries": [morning, later]}],
+                           titles={"edinburgh-united-kingdom": "Amsterdam – Edinburgh trips"}, today="2026-09-01")
+        check("the script wrote the cards", code == 0, out[-400:])
+        plan = json.loads(path.read_text(encoding="utf-8"))
+    for card in plan["booking_options"]["flights"]:
+        card["review_url"] = "https://www.easyjet.com/en/" if "easyJet" in card["provider"] else "https://www.klm.com/"
+        card["material_conditions"] = "Standard fare: changes for a fee, no refund."
+        card["airport_transfer_note"] = "Airlink 100 bus to the city centre, about 30 minutes."
+        card.pop("direct_provider"); card.pop("direct_review_url")
+    # What the script leaves the author beyond the cards' own TODOs, done as an author would:
+    # the second card's dated search on another platform (the Kiwi page is the first card's), the
+    # booking-access check the page requires for a flight category, and -- fixture housekeeping --
+    # the budget rows in the plan's currency, since plan_file switched the trip to EUR.
+    second = plan["booking_options"]["flights"][1]
+    second["round_trip_search_provider"] = "KAYAK"
+    second["round_trip_search_url"] = f"https://www.kayak.com/flights/AMS-EDI/{day}/{day}/4adults"
+    second["round_trip_prefilled_fields"] = ["origin", "destination", "outbound_date", "return_date", "travellers"]
+    access = plan["regional_service_context"]["booking_access_checks"]
+    flight_check = dict(access[0], category="flight", provider_or_channel="Kiwi.com and the airlines' own sites")
+    access.append(flight_check)
+    for row in plan["budget"].get("breakdown", []):
+        row["currency"] = "EUR"
+    errors = renderer.validate_plan(plan)
+    check("the filled plan passes the renderer's plan check", not errors, errors[:3])
+    findings: list[str] = []
+    for check_fn in cpc.PLAN_CHECKS:
+        check_fn(plan, findings, [])
+    flight_findings = [f for f in findings if "flight" in f.lower() or "kiwi" in f.lower()]
+    check("no consistency finding about the flight cards", not flight_findings, flight_findings[:3])
+    page = renderer.render(plan)
+    flags = plan_flags.derive_html_flags(plan)
+    page_errors = htmlgate.validate(page, flags.expected_days, set(flags.required_booking_types),
+                                    flags.transport_mode, [], require_unverified_banner=flags.require_unverified_banner,
+                                    plan=plan)
+    check("the page passes", not page_errors, page_errors[:3])
+    check("Kiwi's booking link never reaches the page", "kiwi.com/u/" not in page and "/booking/" not in page)
+
+
+def test_live_endpoint() -> None:
+    """One real search, only when asked: TRAVEL_BUDDY_LIVE_KIWI=1."""
+    if os.environ.get("TRAVEL_BUDDY_LIVE_KIWI") != "1":
+        import pytest  # noqa: PLC0415
+        pytest.skip("set TRAVEL_BUDDY_LIVE_KIWI=1 to search Kiwi.com for real")
+    import datetime as _dt  # noqa: PLC0415
+    depart = _dt.date.today() + _dt.timedelta(days=45)
+    payload = kf.KiwiClient().search(kf.search_arguments(dict(REQUEST, depart=depart.isoformat(),
+                                                              **{"return": (depart + _dt.timedelta(days=4)).isoformat()})))
+    assert kf.usable_itineraries(payload, []), "the live endpoint returned no usable itinerary"
+
+
 def main() -> int:
     client_cases()
     mapping_cases()
     link_cases()
     cli_cases()
+    end_to_end_case()
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:

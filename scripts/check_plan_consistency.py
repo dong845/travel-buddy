@@ -3139,8 +3139,12 @@ def check_booking_identity(plan: dict, errors: list[str], notes: list[str]) -> N
                  "return_date": option.get("return_date"),
                  "travellers": travellers},
                 f"{kind} '{label}' round-trip search",
-                ids={"origin": option.get("origin_station_id"),
-                     "destination": option.get("destination_station_id")})
+                # A flight card may name the provider's own place ids the same way: Kiwi keys its
+                # search page by city slug (amsterdam-netherlands), never by the IATA code the card
+                # carries, and the id the card declares is what is asked for in the URL.
+                ids={"origin": option.get("origin_station_id") or option.get("origin_place_id"),
+                     "destination": option.get("destination_station_id")
+                     or option.get("destination_place_id")})
     for option in [_obj(o) for o in _seq(options.get("accommodations"))]:
         label = str(option.get("property_name") or option.get("id") or "?")
         if _unfilled(label, option.get("review_url")):

@@ -286,6 +286,7 @@
     "booking_options.flights[].outbound_itinerary.self_transfer / return_itinerary.self_transfer -- true only on a leg whose connection is on separate tickets (written by kiwi_flights.py when the traveller accepted self-transfer); the page prints a warning on that card.",
     "booking_options.flights[].price_note -- how to read the per-person price when it is an average over a party with children or infants; printed beside the price.",
     "trip.traveler_preferences.accepts_self_transfer -- the traveller's OWN WORDS accepting separate-ticket connections; required before any leg is marked self_transfer.",
+    "booking_options.flights[].origin_place_id / destination_place_id -- the search provider's own key for each place when its URL names places that way (Kiwi.com: amsterdam-netherlands); the prefilled-field check accepts the id in place of the airport code, as it accepts a rail card's station ids.",
     "Delete this _contract key before saving the real plan."
   ],
   "plan_status": "researched",
@@ -484,6 +485,8 @@
         ],
         "origin_airport": null,
         "destination_airport": null,
+        "origin_place_id": null,
+        "destination_place_id": null,
         "outbound_date": null,
         "return_date": null,
         "outbound_itinerary": {

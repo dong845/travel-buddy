@@ -251,6 +251,8 @@ The honest residual limit: any process running as **you** on **your** machine ca
 
 The skill will not recommend a VPN, proxy, account workaround or credential sharing to make a blocked service work, and it will not perform bookings, payments, or account changes on your behalf.
 
+**Flight prices come from Kiwi.com.** `scripts/kiwi_flights.py` asks Kiwi.com's public flight-search endpoint for round-trip fares — no account and no key, so it works on any machine. It sends only the route, dates, party size and currency, never your name or documents. No published terms for that endpoint were found; it is public and built for AI assistants, and the script identifies itself and makes one or two searches per flight.
+
 ---
 
 ## How it works inside
