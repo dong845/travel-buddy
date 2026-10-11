@@ -63,6 +63,7 @@ from verification_sections import (  # noqa: E402
     resave_command,
     section_of_pointer,
 )
+import bookings as booking_rules  # noqa: E402 - the booking-record rules (scripts/bookings.py)
 
 # Route totals are authored in round numbers; allow a little slack before failing.
 DURATION_TOLERANCE_MIN = 5
@@ -469,6 +470,8 @@ CHECK_REFERENCES: dict[str, str] = {
     "check_entry_covers_every_jurisdiction": "booking-html-output.md#multi-stop-trips",
     # A separate-ticket connection needs the traveller's own words accepting it.
     "check_self_transfer_consent": "booking-html-output.md#self-transfer",
+    # The traveller's recorded decisions: one per group, real options, honest dates.
+    "check_bookings": "replanning.md#bookings",
     # Settling the entry answer is the entry domain's job, stated with the verification domains.
     "check_verified_plan_entry_answer": "verification.md#verify-domains",
     "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
@@ -5355,6 +5358,16 @@ def check_self_transfer_consent(plan: dict, errors: list[str], notes: list[str])
                     f"words accepting that. Ask them and record their words, or choose a protected itinerary.")
 
 
+@cites
+def check_bookings(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """The traveller's recorded decisions name real options, one per group, with honest dates.
+
+    The rules live in scripts/bookings.py so the renderer, the page gate and record_booking.py ask
+    the same ones. Today is the machine's: a booking cannot be dated after it.
+    """
+    errors.extend(booking_rules.record_problems(plan, dt.date.today()))
+
+
 PLAN_CHECKS = (
     check_entry_covers_every_jurisdiction,
     check_verified_plan_entry_answer,
@@ -5392,6 +5405,7 @@ PLAN_CHECKS = (
     check_untyped_constraints,
     check_ticket_sale_windows,
     check_self_transfer_consent,
+    check_bookings,
 )
 
 

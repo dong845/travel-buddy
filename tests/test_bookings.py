@@ -122,9 +122,26 @@ def verification_cases() -> None:
               (again.stdout + again.stderr)[-800:])
 
 
+def gate_cases() -> None:
+    import check_plan_consistency as cpc  # noqa: PLC0415
+    check("check_bookings runs on the save path", cpc.check_bookings in cpc.PLAN_CHECKS)
+
+    def run(plan: dict) -> list[str]:
+        errors: list[str] = []
+        cpc.check_bookings(plan, errors, [])
+        return errors
+
+    check("a valid block raises nothing", not run(with_records(SELF_DRIVE, booked("gt-lner"))))
+    check("absent_block_is_quiet (gate)", not run(SELF_DRIVE))
+    dangling = run(with_records(SELF_DRIVE, booked("gone-1")))
+    check("dangling_record (gate)", any("gone-1" in e for e in dangling), dangling)
+    check("every finding names its reference", all("replanning.md#bookings" in e for e in dangling), dangling)
+
+
 def main() -> int:
     rules_cases()
     verification_cases()
+    gate_cases()
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:

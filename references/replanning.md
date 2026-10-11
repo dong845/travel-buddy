@@ -140,3 +140,18 @@ usually the shorter route.
 Keep what is still valid. A replan that rebuilds everything is not a replan, and it throws away
 research that was correct — the script prints a `RETAINED` block naming what it deliberately left
 alone so that a reviewer can see the claim and challenge it.
+
+<a id="bookings"></a>
+## When the traveller chooses or books something
+
+Record it with `python scripts/record_booking.py <plan.json> --option <id> --chosen` (decided, not
+paid) or `--booked --on <YYYY-MM-DD> --via "<where>" [--paid <amount> <CUR>]`; `--clear <id>` undoes
+it. Never edit the cards to say so. One decision per group: flights and rail by `leg_group_id`,
+hotels by `stay_group_id`, rental cars as one group, each ticket alone; recording another option
+in a group replaces the first. A record holds the date, where, and what was paid -- never a
+booking reference, a document or a payment detail.
+
+The `bookings` block sits outside verification's fingerprints: a decision is the traveller's fact,
+not research, so a verified plan stays verified. The one exception is a hotel other than the one
+the days were planned around: the script re-points those days to it, and because the days really
+changed, the save asks for their recheck like any edit.
