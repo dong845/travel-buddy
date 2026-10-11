@@ -55,6 +55,48 @@ def plan_of(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def end_to_end_case() -> None:
+    """A verified save, a hotel booked that the days already sleep at, a re-save: still verified;
+    then a switch to the other hotel: the save asks for exactly those days' recheck."""
+    import copy  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_plan_consistency import full_verification  # noqa: PLC0415
+    save_script = ROOT / "scripts" / "save_trip_deliverables.py"
+    plan = json.loads((ROOT / "tests" / "booking-ready-fixture.json").read_text(encoding="utf-8"))
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        stem = f"{plan['trip']['start_date']}-trip"
+        source = tmp / f"{stem}.json"
+        source.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+        report = full_verification()
+        report["plan"] = source.name
+        report_path = tmp / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        save = [sys.executable, str(save_script), str(source), "--workspace", str(tmp / "ws"), "--slug", "trip"]
+        first = subprocess.run(save + ["--verification", str(report_path)], capture_output=True, text=True)
+        check("e2e: verified save", first.returncode == 0, (first.stdout + first.stderr)[-500:])
+        code, out = run(source, "--option", "stay-a", "--booked", "--on", YESTERDAY, "--via", "hotel website")
+        again = subprocess.run(save + ["--overwrite", "--verification", str(report_path)], capture_output=True, text=True)
+        check("e2e: booking the planned hotel keeps the plan verified", code == 0 and again.returncode == 0,
+              (out[-200:], (again.stdout + again.stderr)[-600:]))
+        code, out = run(source, "--option", "stay-b", "--booked", "--on", YESTERDAY, "--via", "hotel website")
+        switched = subprocess.run(save + ["--overwrite", "--verification", str(report_path)], capture_output=True, text=True)
+        check("e2e: a switched hotel asks for its days' recheck", code == 0 and "STAY SWITCHED" in out
+              and switched.returncode != 0 and "days[" in switched.stderr,
+              (out[-200:], (switched.stdout + switched.stderr)[-600:]))
+
+        # On the DELIVERED copy (the one a later conversation edits), the printed save runs as printed.
+        delivered = tmp / "ws" / "plans" / f"{stem}.json"
+        code, out = run(delivered, "--option", "stay-a", "--chosen")
+        line = next((l for l in out.splitlines() if l.startswith("NEXT: ")), "")
+        import shlex  # noqa: PLC0415
+        ran = subprocess.run(shlex.split(line[len("NEXT: "):]), capture_output=True, text=True) if line else None
+        check("e2e: the NEXT command on a delivered copy runs as printed",
+              code == 0 and ran is not None and ran.returncode == 0,
+              (out[-300:], (ran.stdout + ran.stderr)[-500:] if ran else "no NEXT line"))
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         path = fresh(tmp)
@@ -101,6 +143,8 @@ def main() -> int:
         check("switch_touches_only_its_group", plan["days"][2]["accommodation_option_id"] == "acc-sta-1")
         import bookings  # noqa: PLC0415
         check("the result passes the rules", not bookings.record_problems(plan, TODAY), bookings.record_problems(plan, TODAY))
+
+    end_to_end_case()
 
     help_text = io.StringIO()
     with contextlib.redirect_stdout(help_text):

@@ -155,6 +155,13 @@ IRRELEVANT_TO: dict[str, tuple[frozenset[str], str]] = {
         "the visa conclusion, its basis, source and date -- the entry row's whole subject. No "
         "other row turns on it: a fare, an opening time, a sale window and a sunset are the same "
         "whether the traveller needs a visa or not."),
+    "bookings": (
+        ALL_FIVE - {"booking_and_lodging"},
+        "the traveller's own decisions -- which option was chosen or booked, when, where, and what "
+        "was paid. None of it is research and none of it is verified: the block sits outside the "
+        "verification fingerprints (verification_sections.META_KEYS). booking_and_lodging keeps it "
+        "so its verifier can skip re-checking whether something already bought is still sellable; "
+        "no other row turns on it."),
     "arrival_essentials": (
         ALL_FIVE - {"entry"},
         "can the traveller pay, get online, call for help, and are they insured. Every one of the "

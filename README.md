@@ -77,6 +77,8 @@ Plain files, saved to a folder you own — the first two are the deliverables a 
 
 **What is *not* on it.** Anything nobody checked, unless it is labelled as unchecked. A plan saved without a verification pass prints a **"not fact-checked"** banner above everything else, in your own language.
 
+**After you book, say so.** The page marks what is booked, folds the alternatives away and adds up what you have paid; a plan that was fact-checked stays fact-checked.
+
 ---
 
 ## What makes it different
