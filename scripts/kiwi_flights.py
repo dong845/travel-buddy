@@ -38,6 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_plan_consistency as cpc  # noqa: E402 - the prefilled-field rule this script asks
+import trip_zones  # noqa: E402 - the plan's zones for the round trip's two ends
 
 ENDPOINT = "https://mcp.kiwi.com"
 SEARCH_TOOL = "search-flight"
@@ -576,6 +577,28 @@ def _refuse(message: str) -> int:
     return 1
 
 
+def stamp_zones(plan: dict, cards: list[dict]) -> bool:
+    """The round trip's two ends from the plan's own zones, when it names them.
+
+    A Kiwi search here is the round trip between trip.origin and the destination on the trip's own
+    dates (main() refuses other dates), so its outbound leaves the origin zone and lands in the
+    first day's zone, and the return is the reverse. Without the plan's zones nothing is written:
+    the gate then asks for them by name, rather than this script guessing from airport codes.
+    """
+    trip = plan.get("trip") if isinstance(plan.get("trip"), dict) else {}
+    days = [d for d in plan.get("days") or [] if isinstance(d, dict)]
+    origin = str(trip.get("origin_timezone") or "")
+    first = trip_zones.day_zone(plan, days[0]) if days else trip_zones.zone_on(plan, dt.date.min)
+    last = trip_zones.day_zone(plan, days[-1]) if days else first
+    if not (trip_zones.zone(origin) and first and last):
+        return False
+    for card in cards:
+        for leg, departure, arrival in (("outbound_itinerary", origin, first), ("return_itinerary", last, origin)):
+            if isinstance(card.get(leg), dict) and card[leg].get("departure_local"):
+                card[leg]["departure_timezone"], card[leg]["arrival_timezone"] = departure, arrival
+    return True
+
+
 def main(argv: list[str] | None = None, client: KiwiClient | None = None,
          opener=urllib.request.urlopen, today: dt.date | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -682,6 +705,8 @@ def main(argv: list[str] | None = None, client: KiwiClient | None = None,
     checked_at = now.isoformat()
     cards = [itinerary_to_card(c, request, n, checked_at, single=len(candidates) == 1)
              for n, c in enumerate(candidates)]
+    if plan is not None and stamp_zones(plan, cards):
+        print("ZONES: each card's two ends carry the plan's trip.origin_timezone and destination zone.")
     attach_search_link(cards, candidates[0], request, lines, opener=opener)
     for line in lines[-1:]:
         print(line)

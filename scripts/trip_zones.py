@@ -234,10 +234,12 @@ def zone_problems(plan: dict) -> list[str]:
         missing = [key for key in ZONE_KEYS if not _text(itin.get(key))]
         if opted_in and not one_zone and missing:
             label = _text(itin.get("service_identifier")) or _text(option.get("id")) or "this leg"
-            names = ", ".join(sorted(plan_zone_names(plan))) or "only trip.timezone"
+            names = ", ".join(sorted(plan_zone_names(plan)))
+            if not _filled(_trip(plan).get("origin_timezone")):
+                names += "; trip.origin_timezone is not set, so where the traveller leaves from is unknown"
             problems.append(
                 f"{where} ({label}) needs {' and '.join(missing)}: this plan names more than one time "
-                f"zone ({names}; a missing trip.origin_timezone counts as unknown), so neither end of a "
+                f"zone ({names}), or cannot tell, so neither end of a "
                 f"leg can be assumed -- a one-way leg inside the trip is written the same way as the "
                 f"flight from home. Write each end's IANA zone.")
             continue

@@ -391,6 +391,25 @@ def cli_cases() -> None:
         card = json.loads(zh.read_text(encoding="utf-8"))["booking_options"]["flights"][0]
         check("a Chinese plan gets Chinese card text", card["connection_summary"] == "往返均为直飞", card["connection_summary"])
 
+        zoned = plan_file(tmp, timezone="Europe/London", origin_timezone="Europe/Amsterdam")
+        code, out, _ = run(ARGS + ["--into", str(zoned)], results=[{"itineraries": [DIRECT]}])
+        card = json.loads(zoned.read_text(encoding="utf-8"))["booking_options"]["flights"][0]
+        check("kiwi_zones_from_plan: the round trip's zones come from the plan",
+              code == 0 and card["outbound_itinerary"].get("departure_timezone") == "Europe/Amsterdam"
+              and card["outbound_itinerary"].get("arrival_timezone") == "Europe/London"
+              and card["return_itinerary"].get("departure_timezone") == "Europe/London"
+              and card["return_itinerary"].get("arrival_timezone") == "Europe/Amsterdam",
+              (out[-300:], card.get("outbound_itinerary"), card.get("return_itinerary")))
+        import trip_zones  # noqa: PLC0415
+        check("kiwi_zones_from_plan: the stamped zones agree with Kiwi's durations",
+              not trip_zones.zone_problems(json.loads(zoned.read_text(encoding="utf-8"))),
+              trip_zones.zone_problems(json.loads(zoned.read_text(encoding="utf-8"))))
+        bare = plan_file(tmp)
+        code, out, _ = run(ARGS + ["--into", str(bare)], results=[{"itineraries": [DIRECT]}])
+        card = json.loads(bare.read_text(encoding="utf-8"))["booking_options"]["flights"][0]
+        check("kiwi_zones_from_plan: a plan without zones gets none invented",
+              "departure_timezone" not in card["outbound_itinerary"], card["outbound_itinerary"])
+
         path = plan_file(tmp)
         code, out, stub = run(ARGS + ["--into", str(path), "--accept-self-transfer"])
         check("self-transfer without the traveller's words is refused", code == 1 and not stub.calls
