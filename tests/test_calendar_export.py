@@ -172,7 +172,7 @@ def decision_and_zone_cases(report) -> None:
     body, _, _ = CAL.build_with_summary(zh)
     out = [e for e in by_summary(body, "Azuma") if e.get("DTSTART") == "20261017T070000Z"]
     check("zh_descriptions: local time and booking line in Chinese",
-          out and "当地时间" in out[0].get("DESCRIPTION", "") and "已订：LNER website，2026-10-10" in out[0].get("DESCRIPTION", "")
+          out and "当地时间：08:00 Europe/London" in out[0].get("DESCRIPTION", "") and "已订：LNER website，2026-10-10" in out[0].get("DESCRIPTION", "")
           and "Booked via" not in out[0].get("DESCRIPTION", ""), out)
 
     # The floating fallback: no zones, so floating and said so.

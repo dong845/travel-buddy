@@ -53,7 +53,7 @@ start_intake_workflow.py
 | `validate_trip_html.py` | 校验页面本身 —— 必需区块、真正的导航链接、非英文页面上不许留英文 |
 | `plan_flags.py` | 从方案推导页面检查项，于是没有一项能被悄悄关掉 |
 | `save_trip_deliverables.py` | 把上面全跑一遍再保存；说不清需求是怎么收集的，就不给存 |
-| `plan_to_calendar.py` | 把行程变成 `.ics`，这是这里唯一能进你手机的东西 |
+| `plan_to_calendar.py` | 把行程变成 `.ics`（只放已选/已订的交通，按计划的时区写 UTC），这是这里唯一能进你手机的东西 |
 | `new_verification_report.py` | 从方案生成核验报告脚手架，每条结论都留成 `TODO:` |
 | `verification_sections.py` | 按段给已核验的方案做指纹，之后哪段改了就只复核哪段 |
 | `plan_slice.py` | 给每个核验方一份方案的**投影**，而不是整份文件 |

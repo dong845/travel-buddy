@@ -597,3 +597,8 @@ Google Calendar does not support it. So the plan names its zones and the calenda
 - `check_time_zones` refuses an unknown zone name, a multi-zone leg missing a zone, and a leg whose
   zones put departure and arrival more than 30 minutes away from its `duration_minutes`.
 - A plan without zones still saves; its calendar is floating and the page says so.
+- Only transport the traveller decided enters (`bookings` records, see
+  [replanning.md#bookings](replanning.md#bookings)); undecided groups are counted on the page and
+  in the save output, never exported as candidates. A booked ticket gets no on-sale reminder.
+- Meal reminders follow each dining card's `reservation_need`; a plan without it falls back to the
+  queue note's wording, negation first ("not accepted", 「无需」).

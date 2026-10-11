@@ -103,9 +103,9 @@ def _plus_minutes(stamp: str, minutes: float) -> str:
 
 
 WORDS = {
-    "en": {"local": "Local time", "booked": "Booked via {via} on {on}", "chosen": "Chosen — not booked yet",
+    "en": {"local": "Local time: ", "booked": "Booked via {via} on {on}", "chosen": "Chosen — not booked yet",
            "pickup": "Pick up car — {provider}", "dropoff": "Return car — {provider}"},
-    "zh": {"local": "当地时间", "booked": "已订：{via}，{on}", "chosen": "已选，尚未预订",
+    "zh": {"local": "当地时间：", "booked": "已订：{via}，{on}", "chosen": "已选，尚未预订",
            "pickup": "取车 — {provider}", "dropoff": "还车 — {provider}"},
 }
 TRANSPORT_KINDS = ("flights", "ground_transport", "rental_cars")
@@ -268,7 +268,7 @@ def build_with_summary(plan: dict) -> tuple[str, dict[str, int], dict]:
         return _floating(moment)
 
     def local_line(text: str, zone_name: str | None) -> str:
-        return f"{words['local']}: {text} {zone_name}" if zone_name else ""
+        return f"{words['local']}{text} {zone_name}" if zone_name else ""
 
     index = bookings.option_index(plan)
     decided = {oid: r for oid, r in bookings.record_by_option(plan).items()
@@ -299,7 +299,7 @@ def build_with_summary(plan: dict) -> tuple[str, dict[str, int], dict]:
                     departure_zone, arrival_zone = tz.itinerary_zones(plan, itin)
                     start, end = _utc(start_utc), _utc(end_utc)
                     arrives = end_utc.astimezone(tz.zone(arrival_zone)).strftime("%H:%M")
-                    local = f"{words['local']}: {start_local:%H:%M} {departure_zone} → {arrives} {arrival_zone}"
+                    local = f"{words['local']}{start_local:%H:%M} {departure_zone} → {arrives} {arrival_zone}"
                 else:
                     # Floating, as before zones existed -- including the date-line patch: RFC 5545
                     # forbids DTEND before DTSTART, so start + duration gives the right length.

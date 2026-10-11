@@ -53,7 +53,7 @@ You never run these yourself — the skill does. They are listed because the gua
 | `validate_trip_html.py` | The page itself — required regions, real directions links, and no English left on a non-English page |
 | `plan_flags.py` | Derives the page checks from the plan, so none of them can be left switched off |
 | `save_trip_deliverables.py` | Runs all of it, then saves — and refuses a plan that will not say how its requirements were collected |
-| `plan_to_calendar.py` | The trip as an `.ics` file, which is the only thing here that reaches your phone |
+| `plan_to_calendar.py` | The trip as an `.ics` file — decided transport only, UTC from the plan's zones — the only thing here that reaches your phone |
 | `new_verification_report.py` | Starts the verification report from the plan, with every conclusion left as a `TODO:` |
 | `verification_sections.py` | Fingerprints a verified plan by section, so an edit afterwards is rechecked where it happened |
 | `plan_slice.py` | Hands each verifier a projection of the plan instead of the whole file |

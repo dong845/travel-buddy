@@ -71,7 +71,7 @@ Plain files, saved to a folder you own — the first two are the deliverables a 
 | --- | --- |
 | `plans/<date>-<title>.json` | The full plan as structured data — every option, price basis, source URL and assumption |
 | `html/<date>-<title>.html` | A single self-contained page: timed days, segment-by-segment maps, booking cards, budget table, source register |
-| `plans/<date>-<title>.ics` | The same trip as a calendar file, so it reaches your phone with reminders attached |
+| `plans/<date>-<title>.ics` | The same trip as a calendar file — the transport you chose or booked, your stays, meals and timed stops, at the right local hour in any calendar app, with reminders |
 
 **What is on the page.** Every day as a timeline with real times and walking minutes; each leg with a working directions link routed to the provider that actually works there; booking cards that open a search you complete yourself; a per-person budget where every row names its basis and the date it was checked; inline figures for walking load, budget composition and how spread out each day is; freely-licensed photographs of the actual places, embedded so the page works offline; a panel answering the first hour on the ground (can I pay, can I get online, who do I call, am I insured); and a source register listing what was checked, when, and what still needs a recheck before you buy.
 

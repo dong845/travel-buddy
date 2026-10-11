@@ -479,8 +479,10 @@ def main() -> int:
     # wants it on a second device should not have to re-open a 466 KB page to get it.
     calendar_path = plan_path.with_suffix(".ics")
     try:
-        from plan_to_calendar import build as _build_calendar
-        _body, _counts = _build_calendar(plan)
+        from plan_to_calendar import build_with_summary as _build_calendar, summary_notes as _calendar_notes
+        _body, _counts, _summary = _build_calendar(plan)
+        for _note in _calendar_notes(_summary):
+            print(f"note: {_note}", file=sys.stderr)
         calendar_path.write_bytes(_body.encode("utf-8"))
         calendar_events = sum(_counts.values())
     except Exception as exc:  # noqa: BLE001 - reported, never swallowed
