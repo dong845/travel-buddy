@@ -581,3 +581,19 @@ Include these regions:
 Build the data against `templates/final-trip-plan.json`, which is the field-by-field contract for the six sections above — including the option arrays `new_plan_skeleton.py` leaves empty (`booking_options.attraction_tickets`, `booking_options.rental_cars`) and the one it omits (`booking_options.ground_transport`). Then render that data: `python scripts/render_final_trip_html.py <plan.json> <final.html>`, and validate the output. There is no HTML skeleton to copy — the renderer owns the page's structure, and a page assembled by hand passes through none of the gates while looking identical. Do not leave template tokens, TODOs, placeholder URLs, or generic booking buttons in the final file.
 
 Keep each rendered source-register row machine-checkable: use `class="source-item"` with `data-source-type`, `data-accessed-at`, and an HTTPS `data-source-url`. Keep rendered booking links as `class="booking-link"` and their `data-booking-type`, `data-provider`, and `data-verified-at` attributes. Keep each route link as `class="map-link"` with `data-map-provider`, `data-map-kind="directions"`, `data-map-scope="multi_stop|primary_leg"`, and `data-verified-at`; keep each restaurant/venue button as `class="dining-link"` with its provider and check time. These attributes make the final safety and completeness check possible without exposing private data.
+
+<a id="calendar"></a>
+## The calendar file
+
+`save_trip_deliverables.py` writes `<plan-stem>.ics` and the page embeds the same file. Only Apple
+Calendar shows a time with no zone as written; Outlook converts it to the phone's zone at import and
+Google Calendar does not support it. So the plan names its zones and the calendar writes UTC:
+
+- `trip.timezone` (destination) and `trip.origin_timezone` (where the traveller leaves from), IANA
+  names such as `Europe/London`; `days[].timezone` for a day on a trip that crosses zones.
+- On a plan that names more than one zone, every flight and rail itinerary carries
+  `departure_timezone` and `arrival_timezone`: a one-way leg inside the trip is written the same way
+  as the flight from home, so neither end can be assumed. A single-zone trip needs neither.
+- `check_time_zones` refuses an unknown zone name, a multi-zone leg missing a zone, and a leg whose
+  zones put departure and arrival more than 30 minutes away from its `duration_minutes`.
+- A plan without zones still saves; its calendar is floating and the page says so.

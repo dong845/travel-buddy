@@ -68,6 +68,7 @@ You never run these yourself — the skill does. They are listed because the gua
 | `kiwi_flights.py` | Round-trip flight cards from Kiwi.com's public flight search — protected connections only, no account needed |
 | `record_booking.py` | Records what the traveller chose or booked — one decision per group, never a booking reference |
 | `bookings.py` | The booking-record rules every other script asks (groups, valid records) |
+| `trip_zones.py` | The time-zone rules the gate and the calendar share (which zone, UTC, duration cross-check) |
 | `trip_timer.py` | Real wall-clock for a run, split into compute and the time you spent waiting |
 
 ## The four gates

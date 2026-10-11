@@ -68,6 +68,7 @@ start_intake_workflow.py
 | `kiwi_flights.py` | 用 Kiwi.com 的公开航班搜索生成往返机票卡片 —— 默认只给受保护的衔接，不需要账号 |
 | `record_booking.py` | 记录旅行者选定或已订的选项 —— 每组一个决定，从不存订单号 |
 | `bookings.py` | 预订记录的规则（分组、合法记录），其他脚本都来问它 |
+| `trip_zones.py` | 闸门和日历共用的时区规则（属于哪个时区、换算 UTC、时长交叉核对） |
 | `trip_timer.py` | 记录一次规划真实花掉的时间，并拆成「机器算」和「你在等」 |
 
 ## 四道闸门

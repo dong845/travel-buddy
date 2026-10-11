@@ -736,6 +736,8 @@ def main() -> int:
         "trip": {
             "title": f"{TODO}trip title", "language": language, "currency": currency,
             "origin": origin, "destination": destination, "destination_type": "city",
+            "timezone": f"{TODO}IANA time zone of the destination, e.g. Europe/London",
+            "origin_timezone": f"{TODO}IANA time zone the traveller leaves from, e.g. Europe/Amsterdam",
             # Declared once so every map endpoint can be checked absolutely: a lat/lon pair
             # written in the wrong order keeps its partner the right distance away while
             # pointing at another continent, which no leg-length rule can see.

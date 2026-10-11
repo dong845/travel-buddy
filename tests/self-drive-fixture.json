@@ -16,7 +16,9 @@
     "language": "en",
     "currency": "GBP",
     "origin": "London",
+    "origin_timezone": "Europe/London",
     "destination": "Pitlochry and St Andrews, Scotland",
+    "timezone": "Europe/London",
     "destination_coords": [
       {
         "lat": 55.9521,

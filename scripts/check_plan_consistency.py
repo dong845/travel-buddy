@@ -64,6 +64,7 @@ from verification_sections import (  # noqa: E402
     section_of_pointer,
 )
 import bookings as booking_rules  # noqa: E402 - the booking-record rules (scripts/bookings.py)
+import trip_zones  # noqa: E402 - the time-zone rules (scripts/trip_zones.py)
 
 # Route totals are authored in round numbers; allow a little slack before failing.
 DURATION_TOLERANCE_MIN = 5
@@ -472,6 +473,7 @@ CHECK_REFERENCES: dict[str, str] = {
     "check_self_transfer_consent": "booking-html-output.md#self-transfer",
     # The traveller's recorded decisions: one per group, real options, honest dates.
     "check_bookings": "replanning.md#bookings",
+    "check_time_zones": "booking-html-output.md#calendar",
     # Settling the entry answer is the entry domain's job, stated with the verification domains.
     "check_verified_plan_entry_answer": "verification.md#verify-domains",
     "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
@@ -5370,6 +5372,17 @@ def check_bookings(plan: dict, errors: list[str], notes: list[str]) -> None:
     errors.extend(booking_rules.stale_stay_mentions(plan))
 
 
+@cites
+def check_time_zones(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """Every zone the plan names is a real IANA zone, every leg of a multi-zone trip names both its
+    zones, and every leg's zones agree with its duration_minutes.
+
+    The rules live in scripts/trip_zones.py so plan_to_calendar.py writes UTC from the same answers.
+    """
+    errors.extend(trip_zones.zone_problems(plan))
+    notes.extend(trip_zones.zone_notes(plan))
+
+
 PLAN_CHECKS = (
     check_entry_covers_every_jurisdiction,
     check_verified_plan_entry_answer,
@@ -5408,6 +5421,7 @@ PLAN_CHECKS = (
     check_ticket_sale_windows,
     check_self_transfer_consent,
     check_bookings,
+    check_time_zones,
 )
 
 
