@@ -470,6 +470,19 @@ one can be:
 - `source_type` rides on each booking card as `data-source-type` and is not printed; the card says
   the same thing in words — who provides the option and where it was compared.
 
+**The plan's text is never translated.** A non-English page is made by rendering English and then
+substituting the renderer's own strings and units; every value from the plan is fenced where it is
+escaped, set aside before any substitution runs, and put back exactly as written. Before
+2026-10-10 those substitutions also ran over the author's text, so "Provider recommends the early
+slot" printed as 「供应商 recommends the early slot」 and a quoted opening-hours line came out half
+translated. Links and data attributes are set aside too, so a provider name in `data-provider` still
+equals the button that names it. Two consequences: write prose in the trip language, because nothing
+will translate it for you; and when the gate has the plan (`save_trip_deliverables.py`,
+`validate_trip_html.py --plan`) it sets the plan's own prose aside before looking for renderer
+English, so an English quote on a Chinese page is not blamed on the renderer. A value that is
+word for word one of the renderer's own sentences — the default recheck line, copied — is still
+translated as the renderer's.
+
 Words such as "gate" or 「闸门」 are not checked: both occur in real travel text (a boarding gate, a
 dam's sluice gates). Keep the skill's own vocabulary out of page prose by writing for the traveller,
 as SKILL.md's section "Write the page like a person who went there" says.

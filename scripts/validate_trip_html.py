@@ -886,11 +886,44 @@ def page_h1(content: str) -> str | None:
     return html_module.unescape(re.sub(r"<[^>]+>", "", match.group(1))).strip()
 
 
-def untranslated_renderer_text(content: str) -> list[str]:
-    """Return renderer-owned English still present on a page declared non-English."""
+def author_passages(plan: object) -> list[str]:
+    """Prose the plan's author wrote -- every string value with a space and a letter -- longest first.
+
+    The renderer translates only its own words now (render_final_trip_html.shield): an author's
+    English sentence on a Chinese page stays as written, quotes from a venue's English page
+    included. This gate's string table and patterns know only what the renderer emits, so a quoted
+    "Opening hours: 09:30-17:30" or "allow 30 minutes" would read to them as renderer English left
+    untranslated. Single words are left in deliberately: an enum token is one word, and blanking
+    "lunch" out of the page would hide exactly the untranslated meal this gate exists to find.
+    """
+    found: set[str] = set()
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+        elif isinstance(node, str) and " " in node.strip() and any(c.isalpha() for c in node):
+            found.add(node)
+
+    walk(plan)
+    return sorted(found, key=len, reverse=True)
+
+
+def untranslated_renderer_text(content: str, plan: object = None) -> list[str]:
+    """Return renderer-owned English still present on a page declared non-English.
+
+    With the plan, the author's own prose is set aside first, so an English quote on a Chinese page
+    is not blamed on the renderer; without it (a bare page) there is no way to tell the two apart.
+    """
     language = re.search(r"<html[^>]*\blang=[\"']([^\"']+)[\"']", content, re.IGNORECASE)
     if not language or language.group(1).casefold().startswith("en"):
         return []
+    if plan is not None:
+        for passage in author_passages(plan):
+            content = content.replace(html_module.escape(passage, quote=True), " ")
     readable = visible_text(content)
     found: list[str] = []
     for pattern in RENDERER_ENGLISH_MARKUP:
@@ -1413,7 +1446,7 @@ def validate(
             "That is expected for a draft render; on a page presented as the finished plan it "
             "means the consistency and verification gates never ran on it.")
 
-    leaked = untranslated_renderer_text(content)
+    leaked = untranslated_renderer_text(content, plan)
     if leaked:
         errors.append(cite("html.closed_enums", 
             "Renderer-owned text is still English on a non-English page: "
