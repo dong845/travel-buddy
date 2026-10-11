@@ -247,6 +247,28 @@ def main() -> int:
     check("an unparseable generated_at still stamps the calendar",
           re.search(r"DTSTAMP:\d{8}T\d{6}Z", fallback), fallback[:200])
 
+    # A flight whose local arrival clock is earlier than its departure (Tokyo 19:05 → Honolulu
+    # 07:10 the same date, measured on Kiwi 2026-10-11) produced DTEND < DTSTART, which RFC 5545
+    # forbids. With duration_minutes the end is start + duration.
+    dateline = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    dateline["booking_options"]["flights"] = [{
+        "id": "fl-1", "provider": "ZIPAIR", "origin_airport": "NRT", "destination_airport": "HNL",
+        "outbound_itinerary": {"service_identifier": "ZG2", "departure_local": "2026-11-20 19:05",
+                               "arrival_local": "2026-11-20 07:10", "duration_minutes": 425},
+        "return_itinerary": {}}]
+    body, _ = CAL.build(dateline)
+    flight = [e for e in events(body) if "ZG2" in e.get("SUMMARY", "")]
+    check("a date-line flight ends after it starts",
+          flight and flight[0].get("DTSTART") == "20261120T190500" and flight[0].get("DTEND") == "20261121T021000",
+          str(flight))
+    check("the minutes helper", CAL._plus_minutes("20261120T190500", 425) == "20261121T021000")
+    no_duration = json.loads(json.dumps(dateline))
+    no_duration["booking_options"]["flights"][0]["outbound_itinerary"].pop("duration_minutes")
+    body, _ = CAL.build(no_duration)
+    flight = [e for e in events(body) if "ZG2" in e.get("SUMMARY", "")]
+    check("without a duration it is zero-length, never inverted",
+          flight and flight[0].get("DTEND", flight[0].get("DTSTART")) >= flight[0].get("DTSTART"), str(flight))
+
     if failures:
         print(f"CALENDAR EXPORT FAILED ({len(failures)}):", file=sys.stderr)
         for failure in failures:

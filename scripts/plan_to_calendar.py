@@ -88,6 +88,12 @@ def _stamp(value: object) -> str | None:
     return "{}{}{}T{}{}00".format(*match.groups())
 
 
+def _plus_minutes(stamp: str, minutes: float) -> str:
+    """A floating-time stamp moved forward by a duration."""
+    moment = dt.datetime.strptime(stamp, "%Y%m%dT%H%M%S") + dt.timedelta(minutes=minutes)
+    return moment.strftime("%Y%m%dT%H%M%S")
+
+
 def _date(value: object) -> str | None:
     match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", str(value or "").strip())
     return "".join(match.groups()) if match else None
@@ -189,6 +195,15 @@ def build(plan: dict) -> tuple[str, dict[str, int]]:
                 if not start:
                     continue
                 end = _stamp(itin.get("arrival_local")) or start
+                duration = itin.get("duration_minutes")
+                if end < start:
+                    # Local clocks across the date line: Tokyo 19:05 lands in Honolulu at 07:10 the
+                    # same date. Events here are floating local times, so start + duration gives a
+                    # valid event of the right length, not the arrival clock -- RFC 5545 forbids
+                    # DTEND before DTSTART, and calendars reject or mangle such an event.
+                    end = (_plus_minutes(start, duration)
+                           if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration > 0
+                           else start)
                 service = str(itin.get("service_identifier") or "")
                 where = " → ".join(x for x in (item.get("origin_airport") or item.get("origin_station"),
                                                item.get("destination_airport") or item.get("destination_station"))
