@@ -21,12 +21,15 @@ this client names itself and makes one search per flight query, two when self-tr
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import html
 import json
 import math
+import os
 import re
 import sys
+import tempfile
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -468,3 +471,149 @@ def attach_search_link(cards: list[dict], itinerary: dict, request: dict, lines:
     else:
         lines.append(f"LINK NOT VERIFIED {url} -- its title did not name both cities; find another "
                      f"dated comparison search for round_trip_search_url")
+
+
+def _is_filled_card(card: object) -> bool:
+    """A flight card someone answered: a real provider or a priced fare, not the skeleton's TODOs."""
+    if not isinstance(card, dict):
+        return False
+    provider = card.get("provider")
+    fare = card.get("fare_low")
+    return (isinstance(provider, str) and provider.strip() and not provider.strip().upper().startswith("TODO")) \
+        or (isinstance(fare, (int, float)) and not isinstance(fare, bool))
+
+
+def _refuse(message: str) -> int:
+    print(f"ERROR: {message}", file=sys.stderr)
+    return 1
+
+
+def main(argv: list[str] | None = None, client: KiwiClient | None = None,
+         opener=urllib.request.urlopen, today: dt.date | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--from", dest="origin", required=True, help="Origin airport or city code (IATA)")
+    parser.add_argument("--to", dest="destination", required=True, help="Destination airport or city code (IATA)")
+    parser.add_argument("--depart", required=True, help="Outbound date, YYYY-MM-DD")
+    parser.add_argument("--return", dest="ret", required=True, help="Return date, YYYY-MM-DD")
+    parser.add_argument("--adults", type=int, default=1)
+    parser.add_argument("--children", type=int, default=0, help="Aged 2-11")
+    parser.add_argument("--infants", type=int, default=0, help="Under 2")
+    parser.add_argument("--cabin", choices=sorted(CABINS), default=None, help="M economy, W premium, C business, F first")
+    parser.add_argument("--currency", default=None, help="Defaults to the plan's trip.currency, else EUR")
+    parser.add_argument("--language", choices=("en", "zh"), default=None, help="Card text language without --into")
+    parser.add_argument("--accept-self-transfer", action="store_true",
+                        help="Also allow separate-ticket connections; needs --into and the traveller's own words "
+                             "in trip.traveler_preferences.accepts_self_transfer")
+    parser.add_argument("--into", default=None, help="Plan JSON whose booking_options.flights to replace")
+    parser.add_argument("--replace", action="store_true", help="Replace flight cards that are already filled")
+    parser.add_argument("--today", default=None, help="Treat this date as today (YYYY-MM-DD)")
+    args = parser.parse_args(argv)
+
+    try:
+        now = dt.date.fromisoformat(args.today) if args.today else (today or dt.date.today())
+        depart = dt.date.fromisoformat(args.depart)
+        ret = dt.date.fromisoformat(args.ret)
+    except ValueError as exc:
+        return _refuse(f"dates are YYYY-MM-DD ({exc})")
+    if depart < now:
+        return _refuse(f"--depart {depart} is before today ({now})")
+    if ret < depart:
+        return _refuse(f"--return {ret} is before --depart {depart}")
+    if args.adults < 1 or args.children < 0 or args.infants < 0:
+        return _refuse("a search needs at least one adult and no negative counts")
+    if args.infants > args.adults:
+        return _refuse("each infant travels on an adult's lap: --infants cannot exceed --adults")
+    if args.accept_self_transfer and not args.into:
+        return _refuse("--accept-self-transfer needs --into, so the traveller's consent can be read from the plan")
+
+    plan = None
+    language = args.language or "en"
+    currency = args.currency or "EUR"
+    if args.into:
+        try:
+            plan = json.loads(Path(args.into).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return _refuse(f"cannot read {args.into}: {exc}")
+        trip = plan.get("trip") if isinstance(plan, dict) else None
+        if not isinstance(trip, dict):
+            return _refuse(f"{args.into} has no trip object")
+        party = args.adults + args.children + args.infants
+        if trip.get("traveler_count") != party:
+            return _refuse(f"the search is for {party} travellers but trip.traveler_count is "
+                           f"{trip.get('traveler_count')!r}; the cards must price the plan's own party")
+        plan_currency = trip.get("currency")
+        if args.currency and plan_currency and args.currency != plan_currency:
+            return _refuse(f"--currency {args.currency} differs from trip.currency {plan_currency}; "
+                           f"cards are priced in the plan's currency")
+        currency = plan_currency or currency
+        language = "zh" if str(trip.get("language") or "").casefold().startswith("zh") else "en"
+        consent = (trip.get("traveler_preferences") or {}).get("accepts_self_transfer")
+        if args.accept_self_transfer and not (isinstance(consent, str) and consent.strip()
+                                              and not consent.strip().upper().startswith("TODO")):
+            return _refuse("--accept-self-transfer needs the traveller's own words in "
+                           "trip.traveler_preferences.accepts_self_transfer")
+        existing = ((plan.get("booking_options") or {}).get("flights") or [])
+        if any(_is_filled_card(card) for card in existing) and not args.replace:
+            return _refuse(f"{args.into} already has filled flight cards; pass --replace to overwrite them")
+
+    request = {"origin": args.origin.upper(), "destination": args.destination.upper(),
+               "depart": depart.isoformat(), "return": ret.isoformat(), "adults": args.adults,
+               "children": args.children, "infants": args.infants, "cabin": args.cabin,
+               "currency": currency, "language": language}
+    client = client or KiwiClient()
+    lines: list[str] = []
+    try:
+        safe = usable_itineraries(client.search(search_arguments(request)), lines)
+        itineraries = safe
+        if args.accept_self_transfer:
+            permissive = usable_itineraries(client.search(search_arguments(request, permissive=True)), lines)
+            itineraries = mark_self_transfer(safe, permissive)
+    except KiwiUnavailable as exc:
+        print(f"KIWI UNAVAILABLE: {exc}. Research flights as before and say so in the hand-off.", file=sys.stderr)
+        return 2
+    for line in lines:
+        print(line)
+    candidates = pick_candidates(itineraries)
+    if not candidates:
+        print("KIWI NO RESULTS for these dates and this party. Research flights as before and say so.",
+              file=sys.stderr)
+        return 3
+    checked_at = now.isoformat()
+    cards = [itinerary_to_card(c, request, n, checked_at, single=len(candidates) == 1)
+             for n, c in enumerate(candidates)]
+    attach_search_link(cards, candidates[0], request, lines, opener=opener)
+    for line in lines[-1:]:
+        print(line)
+    for candidate, card in zip(candidates, cards):
+        flag = " (self-transfer)" if candidate.get("_self_transfer") else ""
+        print(f"CANDIDATE {card['id']}: {card['provider']} {card['fare_low']} {currency} per person{flag}")
+
+    if plan is None:
+        print(json.dumps(cards, ensure_ascii=False, indent=1))
+        print("NEXT: put these cards in booking_options.flights (or rerun with --into <plan.json>), "
+              "then fill every TODO: field.")
+        return 0
+
+    plan.setdefault("booking_options", {})["flights"] = cards
+    source_url = next((c["round_trip_search_url"] for c in cards
+                       if not str(c["round_trip_search_url"]).startswith("TODO")), "https://www.kiwi.com/")
+    sources = plan.setdefault("sources", [])
+    if not any(isinstance(s, dict) and s.get("name") == "Kiwi.com flight search" and s.get("url") == source_url
+               for s in sources):
+        sources.append({"name": "Kiwi.com flight search", "url": source_url, "source_type": "comparison_platform",
+                        "accessed_at": checked_at,
+                        "claim_or_decision_supported": "flight prices, flight numbers, times and baggage",
+                        "confidence": "researched"})
+    target = Path(args.into)
+    fd, temp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(plan, handle, ensure_ascii=False, indent=2)
+    os.replace(temp, target)
+    print(f"WROTE {len(cards)} flight card(s) into {target}")
+    print(f"NEXT: fill the TODO: fields on the new flight cards (review_url, material_conditions, "
+          f"airport_transfer_note, direct_*), then python scripts/check_plan_contract.py {target}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

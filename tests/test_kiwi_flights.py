@@ -57,6 +57,11 @@ class StubTransport:
             return "", {}
         if self.raw is not None:
             return self.raw, {}
+        if not self.results:
+            # A search nobody recorded a result for: the code under test searched when it should
+            # have refused. Raised as a network error so it surfaces as a named failed case
+            # (KIWI UNAVAILABLE, exit 2) rather than as a crash inside the stub.
+            raise OSError("the stub has no recorded result for this search")
         result = self.results.pop(0)
         return "data: " + json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}) + "\n\n", {}
 
@@ -275,10 +280,116 @@ def link_cases() -> None:
           "travellers" not in cards[0]["round_trip_prefilled_fields"], cards[0]["round_trip_prefilled_fields"])
 
 
+import contextlib
+import io
+import tempfile
+
+
+def run(argv, results=None, titles=None, today="2026-10-11"):
+    stub = StubTransport([{"structuredContent": r} for r in (results or [])])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        code = kf.main(argv + ["--today", today], client=kf.KiwiClient(transport=stub),
+                       opener=opener_with(titles or {}, []))
+    return code, out.getvalue(), stub
+
+
+ARGS = ["--from", "AMS", "--to", "EDI", "--depart", "2026-11-20", "--return", "2026-11-24",
+        "--adults", "2", "--children", "2", "--currency", "EUR"]
+
+
+def plan_file(tmp: str, **trip) -> Path:
+    plan = json.loads((ROOT / "tests" / "booking-ready-fixture.json").read_text(encoding="utf-8"))
+    plan["trip"].update({"traveler_count": 4, "currency": "EUR", "language": "en"}, **trip)
+    path = Path(tmp) / "plan.json"
+    path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def cli_cases() -> None:
+    code, out, _ = run(ARGS, results=[{"itineraries": [DIRECT, KLM]}],
+                       titles={"edinburgh-united-kingdom": "Amsterdam – Edinburgh trips"})
+    check("a search prints cards and exits 0", code == 0 and '"fl-kiwi-1"' in out and "NEXT:" in out, out[-500:])
+
+    code, out, stub = run(ARGS, results=[{"itineraries": []}])
+    check("no results is exit 3", code == 3 and "KIWI NO RESULTS" in out, out[-300:])
+
+    stub = StubTransport(fail=OSError("down"))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        code = kf.main(ARGS + ["--today", "2026-10-11"], client=kf.KiwiClient(transport=stub), opener=opener_with({}, []))
+    check("unavailable is exit 2", code == 2 and "KIWI UNAVAILABLE" in buf.getvalue(), buf.getvalue()[-300:])
+
+    for label, bad in (("depart before today", ["--depart", "2026-10-01"]),
+                       ("return before depart", ["--return", "2026-11-19"]),
+                       ("not a date", ["--depart", "20/11/2026"]),
+                       ("more infants than adults", ["--adults", "1", "--children", "0", "--infants", "2"])):
+        argv = list(ARGS)
+        for i in range(0, len(bad), 2):
+            if bad[i] in argv:
+                argv[argv.index(bad[i]) + 1] = bad[i + 1]
+            else:
+                argv += bad[i:i + 2]
+        code, out, stub = run(argv)
+        check(f"bad_dates_refused: {label}", code == 1 and "ERROR:" in out and not stub.calls, out[-300:])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = plan_file(tmp, traveler_count=3)
+        before = path.read_text(encoding="utf-8")
+        code, out, stub = run(ARGS + ["--into", str(path)])
+        check("mismatch_refused_before_network: party", code == 1 and not stub.calls
+              and path.read_text(encoding="utf-8") == before, out[-300:])
+        path = plan_file(tmp, currency="GBP")
+        code, out, stub = run(ARGS + ["--into", str(path)])
+        check("mismatch_refused_before_network: currency", code == 1 and not stub.calls, out[-300:])
+
+        path = plan_file(tmp)
+        before_plan = json.loads(path.read_text(encoding="utf-8"))
+        code, out, _ = run(ARGS + ["--into", str(path)], results=[{"itineraries": [DIRECT, KLM]}],
+                           titles={"edinburgh-united-kingdom": "Amsterdam – Edinburgh trips"})
+        written = json.loads(path.read_text(encoding="utf-8"))
+        check("--into writes the flight cards", code == 0 and len(written["booking_options"]["flights"]) == 2, out[-400:])
+        check("and a source record", any(s.get("name") == "Kiwi.com flight search" for s in written["sources"]))
+        check("and nothing else in the plan moved",
+              {k: v for k, v in written.items() if k not in ("booking_options", "sources")} ==
+              {k: v for k, v in before_plan.items() if k not in ("booking_options", "sources")})
+        check("other booking options are untouched",
+              {k: v for k, v in written["booking_options"].items() if k != "flights"} ==
+              {k: v for k, v in before_plan["booking_options"].items() if k != "flights"})
+
+        path.write_text(json.dumps(written), encoding="utf-8")
+        code, out, stub = run(ARGS + ["--into", str(path)], results=[{"itineraries": [DIRECT]}])
+        check("filled cards are not overwritten without --replace", code == 1 and "--replace" in out, out[-300:])
+
+        zh = plan_file(tmp, language="zh-CN")
+        code, out, _ = run(ARGS + ["--into", str(zh)], results=[{"itineraries": [DIRECT, KLM]}])
+        card = json.loads(zh.read_text(encoding="utf-8"))["booking_options"]["flights"][0]
+        check("a Chinese plan gets Chinese card text", card["outbound_itinerary"]["connection_or_terminal_note"].startswith("直飞"))
+
+        path = plan_file(tmp)
+        code, out, stub = run(ARGS + ["--into", str(path), "--accept-self-transfer"])
+        check("self-transfer without the traveller's words is refused", code == 1 and not stub.calls
+              and "accepts_self_transfer" in out, out[-300:])
+        path = plan_file(tmp)
+        plan = json.loads(path.read_text(encoding="utf-8"))
+        plan["trip"]["traveler_preferences"]["accepts_self_transfer"] = "Cheapest is fine, we travel light and can re-check bags."
+        path.write_text(json.dumps(plan), encoding="utf-8")
+        code, out, stub = run(ARGS + ["--into", str(path), "--accept-self-transfer"],
+                              results=[{"itineraries": [DIRECT, KLM]}, {"itineraries": [SELF_TRANSFER, DIRECT, KLM]}])
+        flights = json.loads(path.read_text(encoding="utf-8"))["booking_options"]["flights"]
+        searches = [c for c in stub.calls if c["body"].get("method") == "tools/call"]
+        check("with consent, two searches", len(searches) == 2, len(searches))
+        check("and the self-transfer card is marked", flights[0]["outbound_itinerary"].get("self_transfer") is True,
+              flights[0]["outbound_itinerary"])
+    code, out, _ = run(ARGS + ["--accept-self-transfer"])
+    check("--accept-self-transfer needs --into", code == 1 and "--into" in out, out[-300:])
+
+
 def main() -> int:
     client_cases()
     mapping_cases()
     link_cases()
+    cli_cases()
     if failures:
         print(f"FAILED {len(failures)} case(s):\n", file=sys.stderr)
         for failure in failures:
