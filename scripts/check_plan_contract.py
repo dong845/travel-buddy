@@ -214,6 +214,7 @@ def _vocabularies() -> tuple[dict, str]:
         "sources[].confidence": set(renderer.SOURCE_CONFIDENCE_LEVELS),
         "days[].day_type": set(renderer.DAY_TYPES),
         "days[].dining[].meal": set(renderer.MEAL_TYPES),
+        "days[].dining[].reservation_need": set(renderer.RESERVATION_NEEDS),
         "days[].route.route_map_scope": set(renderer.ROUTE_MAP_SCOPES),
         "regional_service_context.google_services_access": {"available", "unavailable", "unknown"},
         "regional_service_context.booking_access_checks[].category":
@@ -256,7 +257,9 @@ def enum_issues(plan: object, table: dict, path: str = "") -> list[dict]:
             # including the twenty other things it had already found. An unhashable value is not in
             # any vocabulary by definition, so it is a finding like any other.
             try:
-                outside = allowed is not None and value is not None and value not in allowed
+                # A `TODO:` marker is the placeholder gate's finding, not a wrong value.
+                placeholder = isinstance(value, str) and value.startswith("TODO")
+                outside = allowed is not None and value is not None and not placeholder and value not in allowed
             except TypeError:
                 outside = allowed is not None
             if outside:

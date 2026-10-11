@@ -280,6 +280,7 @@ def dining_card(meal: str, anchor: str) -> dict:
         "price_per_person_high": 0,
         "currency": f"{TODO}currency",
         "reservation_or_queue_note": f"{TODO}queue or reservation note",
+        "reservation_need": f"{TODO}required | recommended | walk_in | not_accepted",
         "venue_url": URL,
         "map_provider": f"{TODO}map provider (must own venue_url)",
         "checked_at": DATE,
