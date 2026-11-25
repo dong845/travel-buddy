@@ -893,5 +893,11 @@
     }
   ],
   "assumptions": [],
-  "recheck_before_purchase": []
+  "recheck_before_purchase": [],
+  "place_check": {
+    "tool": "check_places.py",
+    "checked_at": null,
+    "inputs": [],
+    "findings": []
+  }
 }

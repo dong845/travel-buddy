@@ -476,6 +476,8 @@ CHECK_REFERENCES: dict[str, str] = {
     "check_time_zones": "booking-html-output.md#calendar",
     # Settling the entry answer is the entry domain's job, stated with the verification domains.
     "check_verified_plan_entry_answer": "verification.md#verify-domains",
+    # Pins, venues and walks checked against map data rather than the plan's own numbers.
+    "check_place_check": "verification.md#place-check",
     "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
     # A card for fewer guests than the trip is what a party change leaves behind when it is typed
     # into trip.traveler_count and traced no further.
@@ -1508,6 +1510,49 @@ def check_verified_plan_entry_answer(plan: dict, errors: list[str], notes: list[
 
 
 @cites
+def check_place_check(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A verified plan carries a place_check from check_places.py that covers its current places.
+
+    Every walking check in this file reads the plan's own pins and minutes. A verified Alicante
+    plan put its "hotel" pin on City Hall, 1.4 km from the booked hotel, so its walks passed here
+    while the real walk to the museum was 38 minutes against a 30-minute limit. check_places.py
+    measures those against OpenStreetMap; this check only makes sure it ran on these places and
+    that what it found was dealt with.
+    """
+    if str(plan.get("verification_status") or "") != "verified":
+        return
+    import check_places  # here, not at the top: check_places imports this module
+    current = check_places.input_keys(plan)
+    if not current:
+        return
+    block = _obj(plan.get("place_check"))
+    if not block:
+        errors.append(
+            "this plan is saved as verified but carries no place_check. Run `python "
+            "scripts/check_places.py <plan.json> --into`: it checks every pin, venue and walk "
+            "against OpenStreetMap, which the plan's own numbers cannot do.")
+        return
+    covered = {str(k) for k in _seq(block.get("inputs"))}
+    missing = sorted(current - covered)
+    if missing:
+        shown = "; ".join(m.split("|")[1] for m in missing[:4])
+        errors.append(
+            f"place_check does not cover {len(missing)} of the plan's current place facts "
+            f"({shown}{' ...' if len(missing) > 4 else ''}): a pin, venue or walk changed after "
+            f"it ran, or the network did not answer for it. Run check_places.py --into again; it "
+            f"keeps the resolutions already written.")
+    for finding in _seq(block.get("findings")):
+        finding = _obj(finding)
+        if finding.get("verdict") in ("wrong", "misleading") and not (
+                finding.get("resolved") is True and str(finding.get("resolution") or "").strip()):
+            errors.append(
+                f"place_check finding at {finding.get('pointer')} is {finding.get('verdict')} and "
+                f"unresolved: {_short(finding.get('correction'), 160)} Fix the plan and run "
+                f"check_places.py again, or set resolved: true with a resolution saying why the "
+                f"map data is wrong here.")
+
+
+@cites
 def check_rooms_hold_the_party(plan: dict, errors: list[str], notes: list[str]) -> None:
     """A hotel card is booked for the whole party: its guest_count is the trip's traveler_count.
 
@@ -2448,6 +2493,9 @@ def _walk_strings(node: object, path: str = "") -> list[tuple[str, str]]:
     return found
 
 
+VERIFICATION_MODES = frozenset({"independent_agents", "separate_processes"})
+
+
 def check_verification(report: dict, errors: list[str], notes: list[str],
                        plan: dict | None = None, plan_path: str | None = None,
                        report_path: str | None = None, receipt_from: str | None = None,
@@ -2477,6 +2525,24 @@ def check_verification(report: dict, errors: list[str], notes: list[str],
             "unfilled one is worse than none: the page renders without its banner and the "
             "traveller reads an authority that nobody earned. Fill each entry with what was "
             "actually checked, or delete the block and let the tier gate report the gap.")
+
+    # Who checked. The Alicante plan was verified by the conversation that wrote it, one domain
+    # after another, and passed with a restaurant no source could find, a "hotel" pin on City Hall
+    # and a museum called Tuesday-only against its own cited hours; fresh checkers found all three
+    # in twenty minutes. Self-reported, like everything here -- but a run now has to say it.
+    mode = str(report.get("verification_mode") or "").strip()
+    if mode == "same_session":
+        errors.append(
+            "verification_mode is same_session: the conversation that wrote the plan checked it. "
+            "That is the author re-reading their own beliefs, and it is how a verified plan shipped "
+            "a restaurant nobody could find. Run the domains as fresh subagents or one claude -p / "
+            "codex exec process each, or save with --unverified so the page says it was not "
+            "fact-checked.")
+    elif mode not in VERIFICATION_MODES:
+        errors.append(
+            f"verification report needs verification_mode: {' or '.join(sorted(VERIFICATION_MODES))}"
+            + (f" (got {mode!r})" if mode else "") + ". It says whether the checkers had fresh eyes; "
+            "same_session, the conversation that wrote the plan, cannot verify it.")
 
     checked_at = str(report.get("checked_at") or "")
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", checked_at[:10]) or len(checked_at) < 10:
@@ -5386,6 +5452,7 @@ def check_time_zones(plan: dict, errors: list[str], notes: list[str]) -> None:
 PLAN_CHECKS = (
     check_entry_covers_every_jurisdiction,
     check_verified_plan_entry_answer,
+    check_place_check,
     check_stay_groups_do_not_overlap,
     check_rooms_hold_the_party,
     check_verification_tier_is_stated,

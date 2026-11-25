@@ -32,6 +32,7 @@ start_intake_workflow.py
                                               ↓
                                 save_trip_deliverables.py   (runs all of it, then saves)
                                               ↓
+                                check_places.py             (needs the network; before verification)
                                 check_link_targets.py       (needs the network; run it yourself)
 ```
 
@@ -59,6 +60,8 @@ You never run these yourself — the skill does. They are listed because the gua
 | `plan_slice.py` | Hands each verifier a projection of the plan instead of the whole file |
 | `fetch_plan_imagery.py` | Verified, freely-licensed photographs of the actual places — or nothing at all |
 | `plan_visuals.py` | Four inline SVG figures drawn from numbers the plan already carries |
+| `check_places.py` | Checks every pin, venue and walk against OpenStreetMap, and writes `place_check` into the plan; a verified save needs it (needs the network) |
+| `refresh_plan.py` | Before booking from a saved plan: how old each section's checks are, and whether its flights are still on sale and at what price (needs the network for flights) |
 | `check_link_targets.py` | Follows every outbound button and reports where it actually lands (needs the network) |
 | `check_shortlist_consistency.py` | Discovery's gate: are these candidates actually comparable, and is the outcome honest? |
 | `save_discovery_deliverables.py` | The door that gate never had — runs it, stamps it, writes the shortlist beside your other files |
