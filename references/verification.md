@@ -217,8 +217,7 @@ two auditors go in a sibling `audits` array — `{"audit": "consistency"|"comple
 "claims_checked": [...], "findings": [...]}` — with exactly those two names, both required, and
 findings in the same shape as a domain's. They are a separate array rather than two more domains
 because the five check the plan against the outside world and these two check it against itself;
-they are *required* because the schema used to accept five while this reference told you to run
-seven, so the cheapest way past the gate was to delete the two highest-yield agents in the pass.
+they are required because they are the two highest-yield blocks in the pass.
 `verdict` is `confirmed`, `wrong`, `misleading`, or `unverifiable`. `severity` is `critical`,
 `major`, or `minor`. `resolved` is required on `wrong` and `misleading`, and it closes a finding
 only as the JSON literal `true` beside a `resolution` that says what changed in the plan, or that
@@ -298,11 +297,10 @@ after scaffolding changes the digest, and the scaffold has to be run again.
 
 A save that replaces a delivered copy with `--overwrite` compares against that copy's receipt when
 the plan it is given carries none. The receipt is written into the workspace copy, never into the
-file you keep editing, so re-saving your working file over the verified copy used to arrive with no
-receipt and re-stamp the edit as verified.
+file you keep editing, which is why the save compares against the copy it replaces.
 
-Why by section and not by file: until 2026-09-24 the report bound a plan by file name and date only,
-so a day moved from 13:30 to 14:00 after verification re-saved as verified with no banner. A
+Why by section and not by file: a report bound to a plan by file name and date only lets a
+day moved from 13:30 to 14:00 after verification re-save as verified with no banner. A
 whole-file fingerprint would have closed that by making every edit cost the full seven-block pass
 again — the price of swapping one dinner. Per section, only the part that moved is rechecked and
 every other part keeps its verification. A receipt stamped against a different report date binds

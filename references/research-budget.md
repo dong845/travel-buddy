@@ -250,9 +250,8 @@ is an instruction to cut the pass that catches trip-breaking defects. Six resear
 roughly 37k each in the measured run — **≈220k** — and verification measured **≈700k**, so the
 honest figure is **900k–1.1M**.
 
-Two corrections to those numbers, both measured after they were written. They were taken before
-coordinates, ratings and dated property-scoped links became mandatory; re-measured on a rebuilt
-eight-day plan, the added research was **20–40k**, roughly 2–4% of a run, because each of those
+Two adjustments to those numbers. Coordinates, ratings and dated property-scoped links add
+little: on a rebuilt eight-day plan, the added research was **20–40k**, roughly 2–4% of a run, because each of those
 fields rides along on a page the design stage was already opening. And the **≈700k** is the *full*
 verification tier. A plan that qualifies for the light tier — the conditions are in SKILL.md's
 work-mode section, and `check_plan_consistency.py` decides it from the plan's own fields rather than

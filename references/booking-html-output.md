@@ -168,11 +168,8 @@ working the moment there are two stops:
   enum as the flat answer. The records were required and covered for three releases and printed
   nowhere, so the traveller saw one country's answer on a three-country trip. `validate_trip_html.py
   --plan` now refuses a page missing any jurisdiction's row.
-- **The service market is per stop, so the map rule is per day.** It used to be one page-wide flag.
-  Measured: turn the last two days of a Shenzhen trip into a Hong Kong leg with Google Maps links --
-  the correct provider there, since Amap is not the tool for Hong Kong transit -- and the gate
-  produced eighteen findings telling those Hong Kong days to use Amap. The traveller's only ways
-  out were wrong links for half the trip or no delivered page at all. A day now takes the
+- **The service market is per stop, so the map rule is per day.** A Shenzhen trip with a Hong Kong leg needs Google
+  Maps links on the Hong Kong days, since Amap is not the tool for Hong Kong transit. A day takes the
   jurisdiction of the stay it sleeps at and falls back to the trip's own market, which is what
   keeps every single-market plan unchanged. `google_services_access` is relaxed for a non-mainland
   day only when the trip's own market is the mainland, so a plan marked unavailable for some other
@@ -267,8 +264,8 @@ a process nobody can watch; this is its mechanical shadow, and it exists because
 shipped a hotel that was sold out on exactly those dates with its availability left unknown.
 
 **Two options that open the same page are one option shown twice** — whichever `stay_group_id`
-they are filed under. The rule used to be keyed on that label, which the same author writes, so
-relabelling two hotels into separate groups was enough to let them share one link. The same check refuses a
+they are filed under. The group label is the author's own, so relabelling two hotels into separate
+groups does not let them share one link. The same check refuses a
 `review_url` or `round_trip_search_url` shared between candidates in any category. This is not
 tidiness: it shipped on flights as well as hotels, and a comparison whose two buttons land in the
 same place compares nothing.
@@ -472,10 +469,7 @@ one can be:
 
 **The plan's text is never translated.** A non-English page is made by rendering English and then
 substituting the renderer's own strings and units; every value from the plan is fenced where it is
-escaped, set aside before any substitution runs, and put back exactly as written. Before
-2026-10-10 those substitutions also ran over the author's text, so "Provider recommends the early
-slot" printed as 「供应商 recommends the early slot」 and a quoted opening-hours line came out half
-translated. Links and data attributes are set aside too, so a provider name in `data-provider` still
+escaped, set aside before any substitution runs, and put back exactly as written. Links and data attributes are set aside too, so a provider name in `data-provider` still
 equals the button that names it. Two consequences: write prose in the trip language, because nothing
 will translate it for you; and when the gate has the plan (`save_trip_deliverables.py`,
 `validate_trip_html.py --plan`) it sets the plan's own prose aside before looking for renderer
@@ -522,8 +516,8 @@ drifts from it**: an airport transfer corrected everywhere else to 20–35 minut
 25 minutes" in this section, because the paragraph predated the correction and nothing tied them
 together. `check_plan_consistency.py` now refuses both.
 
-For the same reason the map button names the leg it opens. It used to read "transport overview"
-and open the airport transfer; a button may be a route overview, but it has to say which route.
+For the same reason the map button names the leg it opens. A button may be a route overview, but it has
+to say which route.
 
 <a id="list-typed-fields"></a>
 ### A field the contract calls a list is a list, even when it holds one thing
@@ -553,8 +547,8 @@ A field that is required, researched, and never displayed is work the traveller 
 - `budget.unverified_categories`, so the per-person total does not silently read as all-inclusive;
 - `plan.assumptions` and `regional_service_context.booking_platform_selection_note`;
 - each scheduled ticket's `sale_opens_at` — when it goes on sale, at what hour in which zone, and the
-  sentence saying where that came from — on the ticket's own card. Until 2026-10-09 it reached only the
-  calendar file embedded in the page, so a traveller who never imported the calendar was never told;
+  sentence saying where that came from — on the ticket's own card. The calendar file alone is not enough:
+  a traveller who never imports the calendar would never be told;
 - `budget.note`, the sentence that says how to read the headline figure, and each segment's
   `detour_reason`, the reason the gate accepted for a leg far longer than the straight line;
 - every dining card's **rating** — value, count and source, or an explicit "no public rating" with
