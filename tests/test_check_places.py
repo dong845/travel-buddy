@@ -324,3 +324,31 @@ def test_driver_card_shows_the_local_address_in_the_trip_language() -> None:
     assert "Show the driver" not in zh
     assert "Show the driver" in driver_card_panel(plan, labels_for("en"))
     assert driver_card_panel({}, labels_for("en")) == "", "no addresses, no card"
+
+
+def test_a_hotel_match_must_be_the_property_and_nearby_for_the_taxi_card() -> None:
+    """Measured on a Milan plan: 'LE COLONNE MILANO' matched the restaurant 'Todos a Cuba' 190 m
+    away and 'Nuvola B&B' matched 'La Nuvola' in Poland, and both went onto the taxi card."""
+    assert not CP.names_property({"name": "Todos a Cuba"}, "LE COLONNE MILANO", "Milano")
+    assert CP.names_property({"name": "Hotel AC Alicante"}, "AC Hotel by Marriott Alicante", "Alicante")
+
+    plan = {"trip": {"destination": "Milano", "destination_coords": {"lat": 45.4642, "lon": 9.1916}},
+            "booking_options": {"accommodations": [{"id": "acc-1", "property_name": "Nuvola B&B"},
+                                                   {"id": "acc-2", "property_name": "LE COLONNE MILANO"}]},
+            "days": []}
+
+    def fetch(url):
+        parsed = urlparse(url)
+        query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        if parsed.path.endswith("/reverse"):
+            return {"address": {"city": "Milano"}}
+        if query["q"].startswith("Nuvola"):
+            return [place("La Nuvola", (52.159319, 20.79972))]          # Pruszków, Poland
+        if "COLONNE" in query["q"].upper():
+            return [place("Todos a Cuba", (45.457845, 9.180508))]
+        return []
+    addresses: list = []
+    findings, _, _ = CP.run(plan, CP.Net(delay=0, fetch=fetch), addresses)
+    assert addresses == [], "neither match is the property near the destination"
+    colonne = by_pointer(findings)[("hotel", "booking_options.accommodations[1].property_name")]
+    assert colonne["verdict"] == "unverifiable"

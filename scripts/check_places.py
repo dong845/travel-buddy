@@ -54,7 +54,11 @@ ADDRESSES
 ---------
 Each hotel found is recorded with its name and address as the map writes them, in the local
 language, under `place_check.addresses`. The page prints them as a card to show a taxi driver,
-which works when the phone is offline.
+which works when the phone is offline. A match counts only when its name carries the property's
+own words (`names_property`) and it lies near the destination; otherwise the hotel is looked up by
+its `address_or_location_reference`, because OSM often has the building but not a small hotel's
+name. On a Milan plan the unguarded lookup matched a restaurant 190 m away for one hotel and a
+place in Poland for another.
 """
 
 from __future__ import annotations
@@ -67,6 +71,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -296,6 +301,36 @@ def hotel_queries(name: str) -> list[str]:
     return [q for q in out if q]
 
 
+ADDRESS_KM = 50             # a hotel matched further than this from the destination gets no taxi card
+
+
+_FILLER = {"hotel", "hotels", "hostel", "inn", "suites", "suite", "rooms", "apartments", "apartment", "the",
+           "and", "by", "de", "del", "la", "le", "il", "el", "di", "b&b", "bnb"}
+
+
+def _words(text: str) -> set[str]:
+    plain = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    return {w for w in re.findall(r"[a-z0-9]+", plain.casefold()) if len(w) >= 2 and w not in _FILLER}
+
+
+def names_property(match: dict, name: str, city: str) -> bool:
+    """Is this map result the property, not merely something a query variant found? For one of
+    the name variants the lookup itself tries, the result's name must carry at least half of that
+    variant's own words, the city left out (or share four CJK characters with it). Measured:
+    'LE COLONNE MILANO' matched a restaurant called 'Todos a Cuba' 190 m away, and 'Nuvola B&B'
+    matched 'La Nuvola' in Poland; both would have printed that address on the taxi card."""
+    found = str(match.get("name") or str(match.get("display_name") or "").split(",")[0])
+    have = _words(found)
+    town = _words(city)
+    for variant in hotel_queries(name):
+        want = _words(variant) - town
+        if want and len(want & have) * 2 >= len(want):
+            return True
+    cjk_name = "".join(CJK.findall(name))
+    cjk_found = "".join(CJK.findall(found))
+    return bool(cjk_name) and any(cjk_name[i:i + 4] in cjk_found for i in range(max(1, len(cjk_name) - 3)))
+
+
 def city_name(net: Net, centre: tuple[float, float]) -> str:
     """The destination's own name for itself, for queries like 'Mercado Central de Alicante'."""
     url = f"{NOMINATIM}/reverse?" + urllib.parse.urlencode(
@@ -357,7 +392,8 @@ def place_inputs(plan: dict) -> list[dict]:
         name = str(_obj(acc).get("property_name") or "").strip()
         if name:
             pointer = f"booking_options.accommodations[{j}].property_name"
-            out.append({"kind": "hotel", "pointer": pointer, "label": name, "key": f"hotel|{pointer}|{name}"})
+            out.append({"kind": "hotel", "pointer": pointer, "label": name, "key": f"hotel|{pointer}|{name}",
+                        "address": str(_obj(acc).get("address_or_location_reference") or "").strip()})
     for i, day in enumerate(_seq(plan.get("days"))):
         day = _obj(day)
         for k, card in enumerate(_seq(day.get("dining"))):
@@ -445,14 +481,29 @@ def run(plan: dict, net: Net, addresses: list | None = None) -> tuple[list[dict]
             unanswered.add(j)
             continue
         checked.append(item["key"])
+        named = [r for r in result if names_property(r, item["label"], city)]
+        result = [r for r in named if _great_circle_km(centre, _point(r)) <= ADDRESS_KM]
+        by_address = False
+        if not result and re.search(r"\d", item["address"]) and re.search(r"[A-Za-z]", item["address"]):
+            # OSM often lacks a small hotel's name but has its building: 'Via Urbano III 3, 20123
+            # Milano' is a house node even where 'LE COLONNE MILANO' finds nothing.
+            found = geocode(net, item["address"], centre, bounded=True)
+            result = [dict(r, name=item["label"]) for r in (found or [])
+                      if r.get("category") in ("building", "place") or r.get("type") in ("house", "building")
+                      or _obj(r.get("address")).get("house_number")]
+            by_address = bool(result)
+        near = bool(result)
+        result = result or named        # a departure-city hotel is far on purpose: no taxi card
         if result:
             hotels[j] = _point(result[0])
-            if addresses is not None:
+            if addresses is not None and near:
                 addresses.append({"pointer": item["pointer"], "property_name": item["label"],
                                   "local_name": str(result[0].get("name") or item["label"]),
                                   "address": _address_text(result[0]),
                                   "lat": round(hotels[j][0], 6), "lon": round(hotels[j][1], 6),
                                   "source": "Amap" if result[0].get("source") == "amap" else "OpenStreetMap"})
+            if by_address:
+                notes.append(f"{item['pointer']}: no map place by that name; located by its address instead")
         else:
             findings.append({
                 "kind": "hotel", "pointer": item["pointer"], "label": item["label"], "verdict": "unverifiable", "severity": "minor",
