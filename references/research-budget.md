@@ -45,7 +45,9 @@ Do **not** put feasibility, design, and adversarial challenge in one fan-out.
    weather.** These are keyed to a weekday that is not yet final.
 2. **Checkpoint with the traveller.** Show the feasibility result and get the shape confirmed:
    final dates, final routing, final ticket structure. Surface any conflict here rather than
-   engineering around it.
+   engineering around it. Show it as the draft page (`render_draft.py`, SKILL.md research rule 2):
+   real fares, nightly prices for one or two areas, an all-in range the script adds up, a rough
+   outline, and the questions in one list.
 3. **Design** — anchors, opening hours, seasonality, service routing. Only now are the weekdays
    real.
 

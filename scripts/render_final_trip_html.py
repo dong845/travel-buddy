@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
 
-from plan_flags import is_mainland_market, stay_sequence
+from plan_flags import is_mainland_market, is_search_url, stay_sequence
 from plan_to_calendar import build_with_summary as build_calendar
 from fetch_plan_imagery import ImagerySidecarError, resolve_plan_imagery
 from travel_workspace import find_sensitive_values
@@ -400,6 +400,10 @@ def labels_for(language: object, custom_labels: object = None) -> dict[str, str]
             "next_place_pin": "{name}：地图按钮的位置与地名对不上，使用前核对",
             "next_place_walk": "{name}：按真实路线步行约 {now} 分钟，计划写的是 {planned} 分钟",
             "next_more": "完整的购买前复核清单",
+            "review_search": "在 {provider} 搜索，需要在结果里自己找到这一项",
+            "exact_stay": "在 {provider} 打开这家住宿的页面",
+            "driver_heading": "给司机看的地址",
+            "driver_note": "名称和地址按当地地图（{source}）的写法，请和预订确认邮件里的地址对一下；这一页存在手机上，离线也能打开。",
             "kind_flights": "机票", "kind_accommodations": "住宿", "kind_ground_transport": "铁路/巴士/渡轮",
             "kind_rental_cars": "租车",
             "constraints_severity": "过敏严重程度：",
@@ -668,6 +672,8 @@ OPTIONAL_UI_LABEL_KEYS = frozenset({
     "next_heading", "next_all_in", "next_book", "next_sale", "next_reserve", "next_place_venue",
     "next_place_hotel", "next_place_pin", "next_place_walk", "next_more", "kind_flights",
     "kind_accommodations", "kind_ground_transport", "kind_rental_cars",
+    # The taxi card (2026-11-26).
+    "driver_heading", "driver_note", "review_search", "exact_stay",
     "anchor_serves_label",
     "fig_walking_caption",
     "fig_map_caption",
@@ -1508,6 +1514,16 @@ def _apply_replacements(page: str, replacements: dict[str, str], labels: dict[st
     page = re.sub(
         r'(data-booking-purpose="(?:review-option|rental-search)"[^>]*>)Review option in ([^<]+)(</a>)',
         lambda match: f"{match.group(1)}{labels['review_option_provider'].replace('{provider}', match.group(2))}{match.group(3)}",
+        page,
+    )
+    page = re.sub(
+        r'(data-booking-purpose="review-option"[^>]*>)Search ([^<]+) and pick this option from the results(</a>)',
+        lambda match: f"{match.group(1)}{labels.get('review_search', 'Search {provider} and pick this option from the results').replace('{provider}', match.group(2))}{match.group(3)}",
+        page,
+    )
+    page = re.sub(
+        r'(data-booking-purpose="exact-option"[^>]*>)Open this exact property on ([^<]+)(</a>)',
+        lambda match: f"{match.group(1)}{labels.get('exact_stay', 'Open this exact property on {provider}').replace('{provider}', match.group(2))}{match.group(3)}",
         page,
     )
     page = re.sub(
@@ -2466,6 +2482,8 @@ NEXT_STEP_DEFAULTS = {
     "next_place_pin": "{name}: the map button's point does not match the place; check it before use",
     "next_place_walk": "{name}: about {now} minutes on the real walking route; the plan says {planned}",
     "next_more": "Full recheck list",
+    "driver_heading": "Show the driver",
+    "driver_note": "Names and addresses as the local map ({source}) writes them; compare with your booking confirmation. Saved on the phone, this page opens offline.",
     "kind_flights": "a flight", "kind_accommodations": "a place to stay",
     "kind_ground_transport": "rail, coach or ferry", "kind_rental_cars": "a rental car",
 }
@@ -2532,6 +2550,34 @@ def next_steps_panel(plan: dict, labels: dict[str, str]) -> str:
     items = f"<ol>{''.join(rows)}</ol>" if rows else ""
     return (f'<section id="next-steps" class="panel"><h2>{t("next_heading")}</h2>{total}{items}'
             f'<p class="meta"><a href="#source-register">{t("next_more")}</a></p></section>')
+
+
+def driver_card_panel(plan: dict, labels: dict[str, str]) -> str:
+    """Each hotel's name and address in the local language, large enough to show a driver.
+
+    The plan's own `address_or_location_reference` is often a description ("1.1 km from the
+    centre") and is written in the traveller's language, which the driver may not read. These come
+    from the map match `check_places.py` recorded, so they are the map's words, not ours.
+    """
+    place_check = plan.get("place_check") if isinstance(plan.get("place_check"), dict) else {}
+    entries = [a for a in as_list(place_check.get("addresses")) if isinstance(a, dict) and a.get("address")]
+    if not entries:
+        return ""
+    def t(key: str, **values) -> str:
+        return esc(html.unescape(labels.get(key) or NEXT_STEP_DEFAULTS[key]).format(**values))
+    cards = []
+    for entry in entries:
+        local = str(entry.get("local_name") or entry.get("property_name") or "")
+        own = str(entry.get("property_name") or "")
+        cards.append(
+            f'<article class="fact driver-card" data-pointer="{attr(entry.get("pointer"))}">'
+            f'<p style="font-size:1.7rem;font-weight:800;line-height:1.2;margin:0">{esc(local)}</p>'
+            f'<p style="font-size:1.3rem;line-height:1.35;margin:8px 0 0">{esc(entry.get("address"))}</p>'
+            + (f'<p class="meta">{esc(own)}</p>' if own and own.casefold() != local.casefold() else "")
+            + "</article>")
+    sources = ", ".join(dict.fromkeys(str(e.get("source") or "OpenStreetMap") for e in entries))
+    return (f'<section id="driver-card" class="panel"><h2>{t("driver_heading")}</h2>'
+            f'<div class="grid">{"".join(cards)}</div><p class="meta">{t("driver_note", source=sources)}</p></section>')
 
 
 def _obj_get(node: object, *keys: str) -> object:
@@ -2725,7 +2771,18 @@ def option_card(kind: str, item: dict, record: dict | None = None) -> str:
     stay_total = ""
     if kind == "hotel":
         stay_total = f'<p class="meta"><strong>Trip total for stay: </strong>{markup(money(item.get("trip_cost_low"), item.get("trip_cost_high"), item.get("currency")))}</p>'
-    actions = [booking_link(kind, provider, checked_at, url, f"Review option in {provider_shown}", "review-option")]
+    # A results list is labelled as one: "Review option" on a name search sent a traveller to a
+    # list whose first hotel was not the one on the card.
+    review_label = (f"Search {provider_shown} and pick this option from the results" if is_search_url(url)
+                    else f"Review option in {provider_shown}")
+    actions = [booking_link(kind, provider, checked_at, url, review_label, "review-option")]
+    # The property's own page, when the plan found one: the search below may list it anywhere.
+    exact_url = item.get("exact_booking_url")
+    if exact_url and kind == "hotel":
+        exact_provider = printed(item.get("exact_booking_provider"), "Provider")
+        actions.insert(0, booking_link(kind, as_text(item.get("exact_booking_provider"), "Provider"),
+                                       item.get("price_checked_at") or checked_at, exact_url,
+                                       f"Open this exact property on {exact_provider}", "exact-option"))
     direct_url = item.get("direct_review_url")
     if direct_url and direct_url != url:
         direct_provider = as_text(item.get("direct_provider"), "Direct provider")
@@ -3799,6 +3856,8 @@ def validate_plan(plan: dict) -> list[str]:
                 errors.append(cite("booking.option_contract", f"Every compared {kind} option.comparison_checked_at must be an ISO date or date-time."))
             if item.get("direct_review_url") and not is_https(item.get("direct_review_url")):
                 errors.append(cite("booking.option_contract", f"Every direct {kind} cross-check URL must be HTTPS."))
+            if item.get("exact_booking_url") and (not is_https(item.get("exact_booking_url")) or not item.get("exact_booking_provider")):
+                errors.append(cite("booking.option_contract", f"A {kind} exact_booking_url must be HTTPS and name its exact_booking_provider."))
             if kind == "ground":
                 # Held to the flight standard on purpose. A category with looser evidence rules
                 # becomes the place authors put the thing they did not research, and this is the
@@ -4627,6 +4686,7 @@ def render_unlocalized(plan: dict) -> str:
     # field only tells whoever opens the JSON; the person who reads the page and books from it
     # has to see it too, so the gap stays visible where the decision actually gets made.
     next_steps = next_steps_panel(plan, labels_for(trip["language"], plan.get("ui_labels")))
+    next_steps += driver_card_panel(plan, labels_for(trip["language"], plan.get("ui_labels")))
     unverified_banner = (
         '<section id="verification-notice" class="panel"><p class="warning">'
         '<strong>Not fact-checked</strong> — No verification pass is recorded for this plan. '

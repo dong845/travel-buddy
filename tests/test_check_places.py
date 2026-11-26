@@ -214,3 +214,113 @@ def test_next_steps_panel_leads_with_the_all_in_cost() -> None:
     zh = next_steps_panel(plan, labels_for("zh-CN"))
     assert "下单前要做的事" in zh and "人均全部花费 EUR 846–975" in zh
     assert "Before you book" not in zh and "per person" not in zh
+
+
+# ---------------------------------------------------------------- mainland China and the taxi card
+
+BJ_HOTEL_WGS = (39.93539, 116.43724)      # 北京东直门智选假日酒店 as OSM places it
+
+
+def amap_url(a, b):
+    """An Amap navigation link, written the way Amap writes it: lon,lat in GCJ-02."""
+    ga, gb = CP.wgs_to_gcj(a), CP.wgs_to_gcj(b)
+    return (f"https://uri.amap.com/navigation?from={ga[1]:.6f},{ga[0]:.6f},A"
+            f"&to={gb[1]:.6f},{gb[0]:.6f},B&mode=walk")
+
+
+def test_gcj_round_trip_and_known_offset() -> None:
+    wgs = (39.9087, 116.3975)                      # Tiananmen
+    gcj = CP.wgs_to_gcj(wgs)
+    assert abs(gcj[0] - 39.91010) < 2e-4 and abs(gcj[1] - 116.40374) < 2e-4
+    back = CP.gcj_to_wgs(gcj)
+    assert abs(back[0] - wgs[0]) < 1e-6 and abs(back[1] - wgs[1]) < 1e-6
+    assert CP.gcj_to_wgs((38.3452, -0.4815)) == (38.3452, -0.4815), "no offset outside China"
+
+
+def _beijing_plan(pin_wgs):
+    return {
+        "trip": {"destination": "北京", "destination_coords": {"lat": 39.93, "lon": 116.43}},
+        "booking_options": {"accommodations": [{"id": "acc-1", "property_name": "北京东直门智选假日酒店"}]},
+        "days": [{"accommodation_option_id": "acc-1", "dining": [{"venue_name": "四季民福烤鸭店"}],
+                  "route": {"segments": [{"from": "北京朝阳站", "to": "北京东直门智选假日酒店", "mode": "公交",
+                                          "duration_minutes": 30,
+                                          "verified_map_url": amap_url((39.94, 116.48), pin_wgs)}]}}]}
+
+
+def _china_fetch(amap_answers):
+    def fetch(url):
+        parsed = urlparse(url)
+        query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        if url.startswith(CP.AMAP_PLACE):
+            return {"status": "1", "pois": amap_answers.get(query["keywords"], [])}
+        if parsed.path.endswith("/reverse"):
+            return {"display_name": "左家庄桥, 朝阳区, 北京市", "address": {"city": "北京市"}}
+        if parsed.path.endswith("/search"):
+            if query["q"].startswith("北京东直门智选假日酒店"):
+                return [dict(place("北京东直门智选假日酒店", BJ_HOTEL_WGS),
+                             address={"road": "春秀路", "house_number": "1号", "city": "北京市"})]
+            return []
+        raise AssertionError(f"unexpected request {url}")
+    return fetch
+
+
+def test_amap_pins_are_converted_and_checked() -> None:
+    """Before the conversion, all 30 Amap pins of a Beijing plan were skipped unchecked."""
+    right = _beijing_plan(BJ_HOTEL_WGS)
+    findings, checked, notes = run(right, fetch=_china_fetch({}))
+    assert set(checked) == CP.input_keys(right)
+    assert not [f for f in findings if f["kind"] == "pin"], "a correct GCJ-02 pin is not 500 m off"
+    assert any("AMAP_KEY" in n for n in notes)
+
+    wrong = _beijing_plan((39.94963, 116.44079))   # the real plan's pin: 1.6 km north, at 左家庄桥
+    findings, _, _ = run(wrong, fetch=_china_fetch({}))
+    pin = by_pointer(findings)[("pin", "days[0].route.segments[0].to")]
+    assert pin["verdict"] == "wrong" and "1,6" in pin["correction"]
+
+
+def test_amap_key_looks_names_up_on_amap_and_records_the_address() -> None:
+    gcj = CP.wgs_to_gcj(BJ_HOTEL_WGS)
+    answers = {
+        "北京东直门智选假日酒店": [{"id": "B0", "name": "智选假日酒店(北京东直门店)", "cityname": "北京市",
+                              "adname": "东城区", "address": "春秀路1号", "location": f"{gcj[1]},{gcj[0]}"}],
+        "四季民福烤鸭店": [{"id": "B1", "name": "四季民福烤鸭店(东四十条店)", "cityname": "北京市",
+                       "adname": "东城区", "address": "东四十条", "location": f"{gcj[1]},{gcj[0]}"}],
+    }
+    plan = _beijing_plan(BJ_HOTEL_WGS)
+    addresses: list = []
+    findings, checked, _ = CP.run(plan, CP.Net(delay=0, fetch=_china_fetch(answers), amap_key="k"), addresses)
+    assert set(checked) == CP.input_keys(plan)
+    assert not findings, findings
+    assert addresses == [{"pointer": "booking_options.accommodations[0].property_name",
+                          "property_name": "北京东直门智选假日酒店", "local_name": "智选假日酒店(北京东直门店)",
+                          "address": "北京市 东城区 春秀路1号", "lat": addresses[0]["lat"],
+                          "lon": addresses[0]["lon"], "source": "Amap"}]
+    assert abs(addresses[0]["lat"] - BJ_HOTEL_WGS[0]) < 1e-5, "stored in WGS-84, not GCJ-02"
+
+
+def test_osm_address_is_recorded_in_the_local_language() -> None:
+    def fetch(url):
+        data = fake_fetch(url)
+        if isinstance(data, list):
+            for item in data:
+                item["address"] = {"road": "Avenida de Elche", "house_number": "3", "postcode": "03008",
+                                   "city": "Alacant / Alicante"}
+        return data
+    addresses: list = []
+    CP.run(PLAN, CP.Net(delay=0, fetch=fetch), addresses)
+    assert addresses[0]["local_name"] == "Hotel AC Alicante"
+    assert addresses[0]["address"] == "Avenida de Elche 3, 03008 Alacant / Alicante"
+    assert addresses[0]["source"] == "OpenStreetMap"
+
+
+def test_driver_card_shows_the_local_address_in_the_trip_language() -> None:
+    from render_final_trip_html import driver_card_panel, labels_for  # noqa: PLC0415
+    plan = {"place_check": {"addresses": [{"pointer": "p", "property_name": "AC Hotel by Marriott Alicante",
+                                           "local_name": "Hotel AC Alicante",
+                                           "address": "Avenida de Elche 3, 03008 Alacant / Alicante",
+                                           "source": "OpenStreetMap"}]}}
+    zh = driver_card_panel(plan, labels_for("zh-CN"))
+    assert "给司机看的地址" in zh and "Avenida de Elche 3" in zh and "AC Hotel by Marriott Alicante" in zh
+    assert "Show the driver" not in zh
+    assert "Show the driver" in driver_card_panel(plan, labels_for("en"))
+    assert driver_card_panel({}, labels_for("en")) == "", "no addresses, no card"

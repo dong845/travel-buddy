@@ -97,6 +97,11 @@ plan, and a verified save is refused until that block covers the plan's current 
   `booking_and_lodging` to confirm from a real listing, then write the resolution. OSM misses many
   small restaurants, so this is a question, not an accusation. Until it is answered the page lists
   it as an unconfirmed place.
+- Mainland China: Amap pins are converted from GCJ-02 and checked like the rest. OSM lists few
+  hotels and restaurants there, so set `AMAP_KEY` (a free Amap Web Service key) to look names up on
+  Amap; without it the run says so and most venues come back `unverifiable`.
+- Each hotel it finds is recorded under `place_check.addresses` in the map's own language, and the
+  page prints those as a card to show a taxi driver.
 - Editing a pin, venue or walk leaves it uncovered, so the save asks for a rerun, which keeps the
   resolutions already written.
 

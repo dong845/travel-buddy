@@ -38,7 +38,23 @@ Sends place names and coordinates (never anything about the traveller) to
 nominatim.openstreetmap.org and routing.openstreetmap.de, at most one request per second to
 Nominatim as its usage policy asks. An input the network could not answer is left out of
 `inputs`, so the gate still asks for a rerun rather than treating it as checked.
-Amap (mainland China) pins use the GCJ-02 offset and are skipped with a note.
+
+MAINLAND CHINA
+--------------
+Amap pins are written in GCJ-02, China's offset datum, which sits a few hundred metres from the
+WGS-84 that OpenStreetMap uses. They are converted before any comparison. Before that conversion
+existed, the 30 Amap pins and walks of a Beijing plan were skipped outright. OpenStreetMap lists
+few hotels and restaurants in mainland China: none of the four hotels in a Shenzhen plan were
+found. So with `AMAP_KEY` set to an Amap Web Service key (free from lbs.amap.com), hotels,
+venues and pin labels inside mainland China are looked up on Amap's place search, which also
+sends their names to Amap. Without the key they go to OSM as before and a note says why so
+many come back unverifiable.
+
+ADDRESSES
+---------
+Each hotel found is recorded with its name and address as the map writes them, in the local
+language, under `place_check.addresses`. The page prints them as a card to show a taxi driver,
+which works when the phone is offline.
 """
 
 from __future__ import annotations
@@ -46,6 +62,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
+import os
 import re
 import sys
 import time
@@ -61,6 +79,7 @@ from check_plan_consistency import (  # noqa: E402
 UA = "travel-buddy-skill (place check; https://github.com/dong845/travel-buddy)"
 NOMINATIM = "https://nominatim.openstreetmap.org"
 FOOT_ROUTER = "https://routing.openstreetmap.de/routed-foot/route/v1/foot"
+AMAP_PLACE = "https://restapi.amap.com/v3/place/text"
 # A dining "venue" that is really an area ("the arcade near the station, pick on the day") has
 # nothing to look up; searching it only produces a false "not found".
 AREA_WORDS = re.compile(r"一带|周边|沿线|附近|择店|自选|\barea\b|nearby|on the day|various", re.IGNORECASE)
@@ -76,8 +95,9 @@ class Net:
     """The two services, with Nominatim's one-request-per-second policy and a per-run cache.
     `fetch` is replaceable so the tests run offline."""
 
-    def __init__(self, delay: float = 1.1, fetch=None):
+    def __init__(self, delay: float = 1.1, fetch=None, amap_key: str | None = None):
         self.delay = delay
+        self.amap_key = amap_key
         self.fetch = fetch or self._fetch
         self._last = 0.0
         self._cache: dict[str, object] = {}
@@ -112,7 +132,7 @@ def geocode(net: Net, query: str, centre: tuple[float, float] | None,
             bounded: bool = True) -> list[dict] | None:
     """Matches near the destination (or, unbounded, anywhere but preferring it), or None when the
     service did not answer."""
-    params = {"q": query, "format": "jsonv2", "limit": 5}
+    params = {"q": query, "format": "jsonv2", "limit": 5, "addressdetails": 1}
     if centre is not None:
         params.update(viewbox=_viewbox(centre), bounded=1 if bounded else 0)
     url = f"{NOMINATIM}/search?" + urllib.parse.urlencode(params)
@@ -139,6 +159,87 @@ def walk_minutes(net: Net, a: tuple[float, float], b: tuple[float, float]) -> tu
         return None
     route = data["routes"][0]
     return route["duration"] / 60, route["distance"] / 1000
+
+
+# ---------------------------------------------------------------- mainland China (GCJ-02)
+
+_A, _EE = 6378245.0, 0.00669342162296594323
+
+
+def in_mainland(point: tuple[float, float]) -> bool:
+    """Inside the box where GCJ-02 applies. Hong Kong and Macau fall inside it too, and Amap
+    offsets them as well, so treating them alike is correct for Amap pins."""
+    lat, lon = point
+    return 73.66 < lon < 135.05 and 3.86 < lat < 53.55
+
+
+def _offset(lat: float, lon: float) -> tuple[float, float]:
+    x, y = lon - 105.0, lat - 35.0
+    common = (20 * math.sin(6 * x * math.pi) + 20 * math.sin(2 * x * math.pi)) * 2 / 3
+    dlat = (-100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x)) + common
+            + (20 * math.sin(y * math.pi) + 40 * math.sin(y / 3 * math.pi)) * 2 / 3
+            + (160 * math.sin(y / 12 * math.pi) + 320 * math.sin(y * math.pi / 30)) * 2 / 3)
+    dlon = (300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x)) + common
+            + (20 * math.sin(x * math.pi) + 40 * math.sin(x / 3 * math.pi)) * 2 / 3
+            + (150 * math.sin(x / 12 * math.pi) + 300 * math.sin(x / 30 * math.pi)) * 2 / 3)
+    rad = lat / 180 * math.pi
+    magic = 1 - _EE * math.sin(rad) ** 2
+    dlat = dlat * 180 / ((_A * (1 - _EE)) / (magic * math.sqrt(magic)) * math.pi)
+    dlon = dlon * 180 / (_A / math.sqrt(magic) * math.cos(rad) * math.pi)
+    return dlat, dlon
+
+
+def wgs_to_gcj(point: tuple[float, float]) -> tuple[float, float]:
+    if not in_mainland(point):
+        return point
+    dlat, dlon = _offset(*point)
+    return point[0] + dlat, point[1] + dlon
+
+
+def gcj_to_wgs(point: tuple[float, float]) -> tuple[float, float]:
+    """Inverse by fixed-point iteration; converges to well under a metre in a few steps."""
+    if not in_mainland(point):
+        return point
+    lat, lon = point
+    for _ in range(6):
+        g = wgs_to_gcj((lat, lon))
+        lat, lon = lat - (g[0] - point[0]), lon - (g[1] - point[1])
+    return lat, lon
+
+
+def amap_search(net: Net, query: str, city: str) -> list[dict] | None:
+    """Amap place search, answered in the same shape as a Nominatim match (WGS-84). None when
+    the service did not answer or refused the key."""
+    params = {"keywords": query, "city": city, "offset": 5, "key": net.amap_key, "output": "json"}
+    data = net.get(f"{AMAP_PLACE}?" + urllib.parse.urlencode(params))
+    if not isinstance(data, dict) or "_error" in data or str(data.get("status")) != "1":
+        return None
+    out = []
+    for poi in _seq(data.get("pois")):
+        loc = str(_obj(poi).get("location") or "")
+        if "," not in loc:
+            continue
+        lon, lat = (float(v) for v in loc.split(",")[:2])
+        lat, lon = gcj_to_wgs((lat, lon))
+        address = " ".join(str(poi.get(k) or "") for k in ("cityname", "adname", "address")
+                           if isinstance(poi.get(k), str)).strip()
+        out.append({"name": poi.get("name"), "display_name": f"{poi.get('name')}, {address}",
+                    "lat": lat, "lon": lon, "address_text": address, "source": "amap",
+                    "osm_type": "amap", "osm_id": poi.get("id")})
+    return out
+
+
+def _address_text(item: dict) -> str:
+    """The address a driver needs, as the map writes it: street and number, then the town."""
+    if item.get("address_text"):
+        return str(item["address_text"])
+    a = _obj(item.get("address"))
+    street = " ".join(str(a[k]) for k in ("road", "house_number") if a.get(k))
+    town = " ".join(str(a[k]) for k in ("postcode",) if a.get(k))
+    town = " ".join(filter(None, [town, str(a.get("city") or a.get("town") or a.get("village") or "")]))
+    if street:
+        return ", ".join(filter(None, [street, str(a.get("suburb") or ""), town]))
+    return ", ".join(str(item.get("display_name") or "").split(", ")[1:5])
 
 
 def _point(item: dict) -> tuple[float, float]:
@@ -209,7 +310,15 @@ def find(net: Net, queries: list[str], centre, city: str, near=None,
          bounded: bool = True) -> list[dict] | None:
     """Try each query alone, then with the city name. With `near`, only a match within NEAR_KM
     of it counts: a market of the same name in the next town is not this market.
-    None means the service did not answer."""
+    None means the service did not answer. Inside mainland China with an Amap key, Amap answers
+    instead."""
+    if net.amap_key and centre is not None and in_mainland(centre):
+        result = amap_search(net, queries[0], city) if queries and queries[0] else []
+        if result is None:
+            return None
+        anchor = near or centre
+        limit = NEAR_KM if near is not None else (None if not bounded else 50)
+        return [r for r in result if limit is None or _great_circle_km(anchor, _point(r)) <= limit]
     variants = []
     for q in queries:
         if q.endswith(" airport") and IATA.match(q.split()[0]) and city:
@@ -265,17 +374,19 @@ def place_inputs(plan: dict) -> list[dict]:
             lon_first = _lon_first(url)
             a = _endpoint_coords(ends[0][1], lon_first)
             b = _endpoint_coords(ends[-1][1], lon_first)
+            if lon_first:   # Amap writes GCJ-02; everything below compares in WGS-84
+                a, b = (gcj_to_wgs(p) if p else p for p in (a, b))
             pointer = f"days[{i}].route.segments[{k}]"
             for side, point, label in (("from", a, seg.get("from")), ("to", b, seg.get("to"))):
                 if point is None or not label:
                     continue
                 out.append({"kind": "pin", "pointer": f"{pointer}.{side}", "label": str(label),
-                            "point": point, "day": i, "amap": lon_first,
+                            "point": point, "day": i,
                             "key": f"pin|{pointer}.{side}|{point[0]:.5f},{point[1]:.5f}|{label}"})
             if _is_walk(seg) and a and b:
                 minutes = _num(seg.get("duration_minutes")) or _num(seg.get("walking_minutes"))
                 out.append({"kind": "walk", "pointer": pointer, "label": f"{seg.get('from')} → {seg.get('to')}",
-                            "a": a, "b": b, "minutes": minutes, "day": i, "amap": lon_first,
+                            "a": a, "b": b, "minutes": minutes, "day": i,
                             "from": str(seg.get("from") or ""), "to": str(seg.get("to") or ""),
                             "key": f"walk|{pointer}|{a[0]:.5f},{a[1]:.5f}|{b[0]:.5f},{b[1]:.5f}|{minutes:g}"})
     return out
@@ -288,8 +399,9 @@ def input_keys(plan: dict) -> set[str]:
 # ---------------------------------------------------------------- checking
 
 
-def run(plan: dict, net: Net) -> tuple[list[dict], list[str], list[str]]:
-    """Returns (findings, keys that were actually checked, notes)."""
+def run(plan: dict, net: Net, addresses: list | None = None) -> tuple[list[dict], list[str], list[str]]:
+    """Returns (findings, keys that were actually checked, notes). Each hotel found is appended
+    to `addresses` when a list is given."""
     inputs = place_inputs(plan)
     findings: list[dict] = []
     checked: list[str] = []
@@ -303,7 +415,7 @@ def run(plan: dict, net: Net) -> tuple[list[dict], list[str], list[str]]:
     elif isinstance(coords, (list, tuple)) and len(coords) == 2:
         centre = (float(coords[0]), float(coords[1]))
     if centre is None:
-        centre = next((x["point"] for x in inputs if x["kind"] == "pin" and not x["amap"]), None)
+        centre = next((x["point"] for x in inputs if x["kind"] == "pin"), None)
     if centre is None and trip.get("destination"):
         found = geocode(net, label_query(str(trip["destination"])), None)
         if found:
@@ -312,8 +424,15 @@ def run(plan: dict, net: Net) -> tuple[list[dict], list[str], list[str]]:
         return findings, checked, ["no destination_coords, no usable pin, and the destination name "
                                    "did not geocode: nothing to check against"]
 
-    city = city_name(net, centre)
-    amap_skipped = 0
+    china = in_mainland(centre)
+    if china and net.amap_key:
+        city = re.sub(r"[（(][^）)]*[）)]", "", str(trip.get("destination") or "")).split("，")[0].split(",")[0].strip()
+    else:
+        city = city_name(net, centre)
+    if china and not net.amap_key:
+        notes.append("mainland China: OpenStreetMap lists few hotels and restaurants here, so expect "
+                     "many 'unverifiable' findings. Set AMAP_KEY (a free Amap Web Service key from "
+                     "lbs.amap.com) to look them up on Amap instead")
     hotels: dict[int, tuple[float, float]] = {}
     unanswered: set[int] = set()   # hotels the geocoder never answered for: their pins wait too
     hotel_items = [x for x in inputs if x["kind"] == "hotel"]
@@ -328,6 +447,12 @@ def run(plan: dict, net: Net) -> tuple[list[dict], list[str], list[str]]:
         checked.append(item["key"])
         if result:
             hotels[j] = _point(result[0])
+            if addresses is not None:
+                addresses.append({"pointer": item["pointer"], "property_name": item["label"],
+                                  "local_name": str(result[0].get("name") or item["label"]),
+                                  "address": _address_text(result[0]),
+                                  "lat": round(hotels[j][0], 6), "lon": round(hotels[j][1], 6),
+                                  "source": "Amap" if result[0].get("source") == "amap" else "OpenStreetMap"})
         else:
             findings.append({
                 "kind": "hotel", "pointer": item["pointer"], "label": item["label"], "verdict": "unverifiable", "severity": "minor",
@@ -355,10 +480,6 @@ def run(plan: dict, net: Net) -> tuple[list[dict], list[str], list[str]]:
                     "evidence_url": f"{NOMINATIM}/ui/search.html?q={urllib.parse.quote(label_query(item['label']))}"})
 
         elif item["kind"] == "pin":
-            if item["amap"]:
-                checked.append(item["key"])  # examined and deliberately skipped: see the note
-                amap_skipped += 1
-                continue
             point = item["point"]
             if HOTEL_WORDS.search(item["label"]):
                 j = _day_hotel_index(plan, item["day"])
@@ -409,10 +530,6 @@ def run(plan: dict, net: Net) -> tuple[list[dict], list[str], list[str]]:
                     "evidence_url": _osm_url(best)})
 
         elif item["kind"] == "walk":
-            if item["amap"]:
-                checked.append(item["key"])
-                amap_skipped += 1
-                continue
             a, b = item["a"], item["b"]
             j = _day_hotel_index(plan, item["day"])
             moved = []
@@ -444,9 +561,6 @@ def run(plan: dict, net: Net) -> tuple[list[dict], list[str], list[str]]:
                               + (f", over the traveller's {cap:g}-minute walking limit" if over_cap else "")
                               + ". Re-route this leg (transit, taxi, or a closer stop) or fix its endpoints.",
                 "evidence_url": _directions_url(a, b)})
-    if amap_skipped:
-        notes.append(f"{amap_skipped} Amap pins and walks skipped: Amap uses the GCJ-02 offset, so "
-                     f"comparing them with OSM would report every pin as ~500 m off")
     return findings, checked, notes
 
 
@@ -471,12 +585,14 @@ def main() -> int:
 
     path = Path(args.plan)
     plan = json.loads(path.read_text(encoding="utf-8"))
-    findings, checked, notes = run(plan, Net(delay=args.delay))
+    addresses: list[dict] = []
+    findings, checked, notes = run(plan, Net(delay=args.delay, amap_key=os.environ.get("AMAP_KEY") or None),
+                                   addresses)
     total = len(place_inputs(plan))
     old = _seq(_obj(plan.get("place_check")).get("findings"))
     findings = merge_resolutions(findings, old)
     block = {"tool": "check_places.py", "checked_at": dt.date.today().isoformat(),
-             "inputs": sorted(checked), "findings": findings}
+             "inputs": sorted(checked), "findings": findings, "addresses": addresses}
 
     for f in findings:
         mark = " (resolved)" if f.get("resolution") else ""

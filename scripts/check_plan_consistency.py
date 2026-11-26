@@ -44,6 +44,7 @@ import hashlib
 import json
 import math
 import traceback
+import unicodedata
 import urllib.parse
 import re
 import sys
@@ -65,6 +66,7 @@ from verification_sections import (  # noqa: E402
 )
 import bookings as booking_rules  # noqa: E402 - the booking-record rules (scripts/bookings.py)
 import trip_zones  # noqa: E402 - the time-zone rules (scripts/trip_zones.py)
+from plan_flags import is_search_url, search_text  # noqa: E402
 
 # Route totals are authored in round numbers; allow a little slack before failing.
 DURATION_TOLERANCE_MIN = 5
@@ -478,6 +480,7 @@ CHECK_REFERENCES: dict[str, str] = {
     "check_verified_plan_entry_answer": "verification.md#verify-domains",
     # Pins, venues and walks checked against map data rather than the plan's own numbers.
     "check_place_check": "verification.md#place-check",
+    "check_hotel_search_names_the_hotel": "booking-html-output.md#exact-links",
     "check_stay_groups_do_not_overlap": "booking-html-output.md#multi-stop-trips",
     # A card for fewer guests than the trip is what a party change leaves behind when it is typed
     # into trip.traveler_count and traced no further.
@@ -1507,6 +1510,57 @@ def check_verified_plan_entry_answer(plan: dict, errors: list[str], notes: list[
     open_answers = unverified_entry_answers(plan)
     if open_answers:
         errors.append(_unverified_entry_message(open_answers))
+
+
+_NAME_FILLER = {"hotel", "hotels", "the", "and", "by", "de", "del", "la", "le", "el", "inn", "suites",
+                "apartments", "apartment", "hostel", "resort", "residence", "&"}
+
+
+def _search_names(text: str, name: str) -> bool:
+    """Does a search for `text` name the property `name`? At least half of the name's own words
+    (an area word alone, 'Ningyocho', is not the hotel), or a run of four CJK characters in
+    common; a name of only filler words matches anything."""
+    def fold(value: str) -> str:
+        plain = "".join(c for c in unicodedata.normalize("NFKD", value) if not unicodedata.combining(c))
+        return re.sub(r"[^\w\s]", " ", plain).casefold()
+    words = {w for w in fold(name).split() if len(w) >= 3 and w not in _NAME_FILLER}
+    if words and len(words & set(fold(text).split())) * 2 >= len(words):
+        return True
+    cjk_name = "".join(re.findall(r"[\u3040-\u9fff]+", name))
+    cjk_text = "".join(re.findall(r"[\u3040-\u9fff]+", text))
+    if cjk_name and any(cjk_name[i:i + 4] in cjk_text for i in range(max(1, len(cjk_name) - 3))):
+        return True
+    return not words and not cjk_name
+
+
+@cites
+def check_hotel_search_names_the_hotel(plan: dict, errors: list[str], notes: list[str]) -> None:
+    """A hotel card's search button must search for that hotel, and its exact link must be one.
+
+    The Tokyo plan's two airport hotels, 新启航酒店 and 宾朋天下酒店, both opened a Booking.com
+    search for "Harbin Taiping Airport": a list of every hotel near the airport, in which neither
+    card's hotel need come first. A name search at least names it; an area search books whatever
+    the traveller taps.
+    """
+    accs = _seq(_obj(plan.get("booking_options")).get("accommodations"))
+    for j, acc in enumerate(accs):
+        acc = _obj(acc)
+        name = str(acc.get("property_name") or "").strip()
+        for field in ("review_url", "direct_review_url"):
+            url = acc.get(field)
+            text = search_text(url) if is_search_url(url) else None
+            if name and text and not _search_names(text, name):
+                errors.append(
+                    f"booking_options.accommodations[{j}].{field} searches {text!r}, not the property "
+                    f"{name!r}: the list it opens need not show this hotel first, and the traveller books "
+                    f"whatever they tap. Search for the property's own name, and put its own page (its "
+                    f"site, or the platform's page for it) in exact_booking_url.")
+        exact = str(acc.get("exact_booking_url") or "")
+        if exact and (is_search_url(exact) or not urllib.parse.urlparse(exact).path.strip("/")):
+            errors.append(
+                f"booking_options.accommodations[{j}].exact_booking_url is {exact!r}, a search or a "
+                f"home page, but its button reads 'open this exact property'. Point it at the "
+                f"property's own page or drop the field.")
 
 
 @cites
@@ -5453,6 +5507,7 @@ PLAN_CHECKS = (
     check_entry_covers_every_jurisdiction,
     check_verified_plan_entry_answer,
     check_place_check,
+    check_hotel_search_names_the_hotel,
     check_stay_groups_do_not_overlap,
     check_rooms_hold_the_party,
     check_verification_tier_is_stated,
